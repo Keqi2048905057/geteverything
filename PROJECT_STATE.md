@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M5 剩余项待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M5/M6/M7 剩余项待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M5 剩余 ⬜ → M6 🔄**
-- 更新日期：2026-10-02（P0-7 幂等键与重试退避 + §16 Windows CI 轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M5/M6/M7 剩余 ⬜**
+- 更新日期：2026-10-02（M7 SQLite 并发测试轮）
 
 ---
 
@@ -140,6 +140,17 @@
   + `fail-fast: false`，两平台都跑 `ruff` + `pytest`，`mypy` 只在 ubuntu 跑
 - 测试：+24 → **739 passed / 2 skipped**（含旧库缺列的增量迁移用例）
 
+**M7 SQLite 并发测试（本轮，方案第 15 节「duplicate execution」）**
+- 新增 `tests/unit/test_db_concurrency.py`（13 例），**只加测试、零产品代码改动**
+- 覆盖：新库连接确为 WAL + `busy_timeout`（且 WAL 跨连接保持）；8 线程并发建任务 /
+  写审计不撞锁；读写混合不读半截事务；**8 个 worker 抢 24 个任务不重不漏**；
+  同一任务只有一条 `job.started`；无任务时并发认领都返回 `None`；
+  **同一幂等键 8 线程并发只建 1 个任务**（`reused=True` 7 次）；锁被持有时写者是
+  「等」而不是立刻 `database is locked`（另有反证用例：无 `busy_timeout` 的裸连接必须抛错）
+- 关键实现点：`threading` 会把线程内异常打到 stderr 后悄悄结束线程，直接 `join()`
+  会把失败读成绿色 —— 本文件用 `_run_threads()` 收集并重抛线程内异常
+- 测试：+13 → **752 passed / 2 skipped**
+
 **流程与沉淀**
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
 - 给 Codex 的独立核查文档在桌面：`geteverything_项目汇总_给Codex检查.md`
@@ -186,9 +197,9 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（738 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（752 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
-- [ ] SQLite 并发测试
+- [x] SQLite 并发测试（本轮：`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
 - [ ] 本地 fixture HTTP 测试
 - [x] **mypy 通过**（本轮：34 errors → 0，未改 mypy 配置）
 - [ ] 一份测试报告
@@ -218,7 +229,7 @@
 | 1 | ~~`mypy` 报 34 个错误~~ **本轮已清零** | 曾分布于 `agent/action.py`(20)、`modules/base.py`(5)、`jobs/executor.py`(2)、`api/scan.py`(2)、`modules/httpx.py`(2)、`config.py`(1)、`core/jobs.py`(1)、`modules/shuffledns.py`(1) | 已全部修掉，**未改 mypy 配置**；详见 CHANGELOG「M7」一节 |
 | 2 | ~~`/api/export` 返回服务器文件路径~~ **本轮已修** | `api/results.py` + `core/exports.py` | 现在只返回 `export_id` / `filename` / `download_url`；有契约测试锁定 |
 | 3 | `/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports` 匿名可读 | `api/tools.py`、`api/results.py` | 未授权即可读到扫描结果与库元信息；**按 DECISIONS-D 故意保持**，已用 `test_api_auth_contract.py` 锁定现状 |
-| 4 | 旧库并发写 `database is locked` | `storage.py` | **已缓解**：连接级 `busy_timeout=5000`；仍无 WAL（WAL 属迁移范畴，未动） |
+| 4 | 旧库并发写 `database is locked` | `storage.py` | **已缓解**：连接级 `busy_timeout=5000`；仍无 WAL（WAL 属迁移范畴，未动）。新库 `core/db.py` 的 WAL + `busy_timeout` + `BEGIN IMMEDIATE` **本轮已用 8 线程真机验证**（`tests/unit/test_db_concurrency.py`） |
 | 5 | ~~`FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径~~ **已修** | `config.py` | 改为仓库相对路径 + `FEROXBUSTER_WORDLIST` 覆盖，路径统一按项目根解析；字典缺失时 `error_code=config_error`（**仍不分发字典**，需自行下载或指环境变量） |
 | 6 | `HTTPX_CONFIG.path` 默认 `"http-x"` | `config.py` | 本机靠 `E:\GoWorkspace\bin\http-x.cmd` 包装脚本指向 `httpx.exe` 才能跑；裸环境会 `tool_not_found` |
 | 7 | ~~`python -m pytest` 有 2 条 warning~~ **本轮已清零** | — | 见下节「已修的两条 warning」 |
@@ -306,17 +317,17 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（P0-7 幂等键与重试退避 + §16 Windows CI 轮）
+验证时间：2026-10-02（M7 SQLite 并发测试轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 739 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+pytest: 752 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
 mypy:   Success: no issues found in 59 source files        ← M7 验收命令，仍为 0
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → **P0-7 幂等/退避 `739`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → **M7 SQLite 并发 `752`**
 
 ---
 
@@ -372,7 +383,7 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
    - ~~修 `config.py` 里 `FEROXBUSTER_CONFIG.wordlist` 的开发机绝对路径~~ —— **已修（M5，
      连同「字典缺失不再静默空结果」一起）**；
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
-   - M7 剩两项：SQLite 并发测试、本地 fixture HTTP 测试，以及一份测试报告。
+   - M7 剩一项：本地 fixture HTTP 测试（SQLite 并发测试**本轮已完成**），以及一份测试报告。
 4. **改完代码记得**：刷新 `docs/CODEBASE_MAP.md` 对应章节与 `last-mapped`，更新 `CHANGELOG.md`，
    并回来更新本文件的「最近一次验证 / 最近一次 commit」。
 
@@ -383,7 +394,7 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 739 passed, 2 skipped
+python -m pytest                                      # 期望 752 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
 ```
 

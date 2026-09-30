@@ -380,11 +380,40 @@ retry count / max attempts / backoff」——其中 `max attempts` 已在 M3 落
 `"idempotency_key" not in job_columns` —— 该断言写于 P0-7 授权之前，
 本轮改为断言「两列存在且可空」，并保留「既有列 `attempt` 一个都不能少」。
 
+### M7 补充 — SQLite 并发测试（本轮，方案第 15 节）
+
+来源：`GetEverything_DSH执行方案_Flask版.md` 第 15 节「Worker：restart / stale lease /
+retry / cancel / **duplicate execution**」与第 7 节的队列要求。此前 `core/db.py` 的
+「WAL + `busy_timeout` + `BEGIN IMMEDIATE`」只有**单线程**的间接验证
+（`test_storage_connection.py` 只断言 `PRAGMA busy_timeout` 的值），并发风险
+（任务被领两次 / 被读成半截事务）一直只是代码阅读结论。
+
+授权：落在 `docs/DECISIONS.md` 第 2 节白名单「补充与更新测试」内 —— **只新增测试文件，
+不改任何产品代码**。
+
+新增 `get_everything_framework/tests/unit/test_db_concurrency.py`（+13，739 → 752）：
+
+- 连接参数：`core.db.connect()` 的 `journal_mode=wal` 与 `busy_timeout == BUSY_TIMEOUT_MS`；
+  WAL 跨连接保持（读路径不会把库退回 `delete`）；旧库 `storage.py` 的连接也带 `busy_timeout`。
+- 并发写：8 线程各建 4 个任务全部落库且 id 互不重复；并发 `audit.record` 一条不丢；
+  读写混合下读者拿到的每一行都能被 `get_job` 读到（不读半截事务）。
+- 并发认领：8 个 worker 抢 24 个任务**不重不漏**（`duplicate execution` 的正解）；
+  同一任务只有一条 `job.started`；没有任务时并发认领都干净地拿到 `None`。
+- 幂等键：8 线程用同一把键并发创建 → 只建 1 个任务、7 次 `reused=True`、
+  `job.created` 只有 1 条；不同键互不顶掉。
+- 锁等待的正反两面：持锁时写者应「等」而不是立刻 `database is locked`（确定性构造，
+  带耗时断言防假通过）；**反证**用例确认 `timeout=0` 的裸连接在同一场景下必须抛
+  `sqlite3.OperationalError`，避免前一条退化成永远通过。
+
+实现上的一个关键点：`threading` 默认把线程内异常打到 stderr 后**悄悄结束线程**，
+直接 `join()` 会把「8 个线程挂了 3 个」读成绿色。本文件用 `_run_threads()` 收集并
+重抛线程内异常，同时断言无线程在 60 秒后仍存活（死锁要表现为失败而不是挂住）。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 739 passed, 2 skipped, 0 failures
+$ python -m pytest           # 752 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 ```
 

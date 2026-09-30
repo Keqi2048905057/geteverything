@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + M7 SQLite 并发测试（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -784,12 +784,12 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 739 passed, 2 skipped, 0 failures
+$ python -m pytest           # 752 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → **P0-7 幂等键/退避 + §16 Windows CI `739`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → **M7 SQLite 并发测试 `752`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -811,6 +811,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/unit/test_policy.py` | **P0-2**：统一 Policy 四个入口（缺失 400 / 越界 403 / 整体拒绝 / 解析后地址校验，注入 resolver 不查真实 DNS） |
 | `tests/unit/test_agent_boundary.py` | **P0-3**：Agent 拒绝任意 `file_path`、只收 `upload_id`、planner 不再下发 `file_path`；**M7**：httpx 步骤的 `items` 必须是元数据字典（回归 `'str' object has no attribute 'get'`） |
 | `tests/unit/test_storage_connection.py` | **DECISIONS-I**：旧库连接必关（含异常路径）、`busy_timeout`、表结构未变、`-W error::ResourceWarning` 复现 |
+| `tests/unit/test_db_concurrency.py` | **M7**：SQLite 并发（方案第 15 节 Worker「duplicate execution」）——新库连接确为 WAL + `busy_timeout`、WAL 跨连接保持、**8 线程并发建任务/写审计不撞锁**、读写混合不读半截事务、**8 个 worker 抢 24 个任务不重不漏**（`duplicate execution`）、同一任务只有一条 `job.started`、无任务时并发认领都拿到 `None`、**同一幂等键并发只建 1 个任务**、锁被持有时写者是「等」而不是立刻 `database is locked`（含一条反证用例：无 `busy_timeout` 的裸连接必须失败） |
 | `tests/unit/test_canonical.py` | **P1 §9**：七种类型的归一化规则、方案验收的三个 URL 折叠成一个 key、`guess_type` 不猜错 |
 | `tests/unit/test_assets.py` | **P1 §8/§10**：两层模型（一行资产 + N 条观测）、`first_seen` 不被覆盖、scope 参与唯一性、`%`/`_` 转义、状态迁移不删数据、Diff 验收（A B C → A C D）、取消 unchanged 明细后计数仍准、category→type 映射、落库失败不改任务结果 |
 | `tests/unit/test_migrate_legacy.py` | **P1 §12**：dry-run 与 `--apply` 前后旧库 sha256 不变、重跑幂等（确定性观测 ID）、`web`→`url` 翻译、`...Z`→`+00:00` 归一、跨表同资产合并成一行、单条失败不中断、CLI 三个退出码 |
@@ -1481,5 +1482,59 @@ $ python -m mypy app.py core api jobs storage.py modules  # Success: no issues f
 $ node --check web/static/app.js       # 通过
 $ git diff --check                     # 退出码 0
 ```
+
+---
+
+### 9.16 M7：SQLite 并发测试（方案第 15 节「Worker → duplicate execution」）
+
+#### 9.16.1 为什么单开一个测试文件
+
+`AGENTS.md` 的高频坑 #5 与 `PROJECT_STATE.md` 的 Known Failure 都记着同一件事：
+「SQLite 并发 —— 旧库无 WAL、无 `busy_timeout`，并发写会 `database is locked`」。
+到 M7 为止，这条只被**单线程**间接验证过（`test_storage_connection.py` 只断言
+`PRAGMA busy_timeout` 的值），而新库 `core/db.py` 的 WAL + `BEGIN IMMEDIATE`
+**从来没有在真实并发下跑过一遍**。
+
+风险不对称：这个设计一旦在并发下失效，症状是**用户看不到任何报错** ——
+任务被两个 worker 各跑一遍（重复观测量、重复资产来源），或任务凭空消失。
+所以它值得一个专门的、只做这一件事的测试文件。
+
+文件：`tests/unit/test_db_concurrency.py`（13 例）。线程数固定为 `THREADS = 8`，
+与 `scripts/run_local.ps1` / waitress 的默认线程数对齐 —— 小于它测不出真实争抢，
+大于它只会拖慢用例而不增加判别力。
+
+#### 9.16.2 并发用例最容易犯的错：把失败读成成功
+
+`threading` 默认会把线程内的异常打到 stderr 然后**悄悄结束线程**。若直接
+`start()` + `join()`，那么「8 个线程里挂了 3 个」看起来仍然是绿的。
+本文件的 `_run_threads()` 因此显式做了三件事：
+
+1. 用锁收集线程内异常（连 `SystemExit` 一起接），`join` 之后重抛第一个；
+2. 断言没有线程在 60 秒后仍存活（死锁会表现为「测试永远不返回」而不是失败）；
+3. 返回值按 slot 归位，避免「少跑了几个线程」被当成通过。
+
+#### 9.16.3 四组断言
+
+| 组 | 断言的行为 |
+|---|---|
+| 连接参数 | `core.db.connect()` 的 `journal_mode=wal`、`busy_timeout == BUSY_TIMEOUT_MS`；WAL 跨连接保持；旧库 `storage.py` 的连接也带 `busy_timeout` |
+| 并发写 | 8 线程各建 4 个任务全部落库且 id 互不重复；并发 `audit.record` 一条不丢；读写混合下读者拿到的每一行都能被 `get_job` 读到（不读半截事务） |
+| 并发认领 | 8 个 worker 抢 24 个任务：**不重不漏**（这是 `duplicate execution` 的正解）；同一任务只有一条 `job.started`；没有任务时并发认领都干净地拿到 `None` |
+| 幂等键 | 8 线程用**同一把键**并发创建 → 只建 1 个任务、7 次 `reused=True`、`job.created` 只有 1 条；不同键互不顶掉 |
+
+#### 9.16.4 锁等待的正反两面
+
+`test_writer_waits_for_lock_instead_of_failing` 用「Event 置位 + 0.3 秒后断言
+写线程仍存活」构造**确定**的锁竞争（不靠 `sleep` 猜时机），再断言写线程最终成功
+且耗时 ≥ 0.25 秒 —— 后者排除「它其实根本没撞上锁」这种假通过。
+
+`test_locked_db_without_busy_timeout_would_fail` 是它的**反证**：同一竞争场景下，
+`timeout=0` 的裸连接必须抛 `sqlite3.OperationalError`。没有这条反证，上面那条
+用例在「SQLite 某天改成默认无限等锁」时会静默退化成永远通过。
+
+> 顺带确认了一处**代码阅读结论**：`core.db.query()` 走的是 `connect()` 出来的
+> 普通连接，`PRAGMA journal_mode=WAL` 是**库文件级**设置，因此「只读接口」也不会
+> 把库退回 `delete` 模式（`test_wal_mode_survives_reopening` 钉住这点）。
+> 另外，本文件**不覆盖** `mark_stale_assets()` / 资产过期那条线（属 M5 剩余项）。
 
 
