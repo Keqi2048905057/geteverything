@@ -175,7 +175,10 @@
   `/api/observations`（全部需管理员）。
 - `api/jobs.py`：`GET /api/jobs/<before>/diff/<after>`（Diff 端点）。
 - `web/templates/assets.html` + `web/static/assets.js`：**资产列表页**（无框架、无 CDN），
-  支持按范围/类型/状态/关键字筛选、分页、点开观测时间线。
+  支持按范围/类型/状态/关键字筛选、分页、点开观测时间线；页面下方为**两次任务对比**表单
+  （选基线与对比任务 + 可选限定范围 + 「含未变」开关），结果按
+  新增 / 消失 / 变更 / 未变 四段渲染，`changed` 直接显示
+  `status_code: 200 → 403` 这类属性差异。任务下拉默认选中最近两次。
 - `app.py`：`GET /assets` 页面路由；首页顶栏加入口。
 - `core/migrate.py` + `scripts/migrate_legacy_results.py`：**旧库 → 新库的只读迁移**。
   旧库以 `mode=ro` 打开，一个字节都不改；观测 ID 由旧库行身份哈希而来（**确定性**，
@@ -199,12 +202,16 @@
   「查不到又插不进」。改为唯一索引 `(canonical_key, IFNULL(scope_id,''))`
   （`IFNULL` 是因为 SQLite 的 `UNIQUE` 允许多个 `NULL`，裸两列索引会漏掉无 Scope 的行）。
 - `core/assets.py` 引入的 10 条 mypy 报错（缺类型标注）已补回，**mypy 仍为 34**（M7 存量，无新债）。
+- `core/assets.py:diff_jobs()`：`include_unchanged=False` 原先会把 `counts["unchanged"]`
+  一起抹成 0，导致「这次扫到了但没变化（未变 3）」与「这次什么都没扫到（未变 0）」
+  完全不可区分 —— 而这恰是 diff 最有用的一条信息。改为**只影响明细下发、不影响计数**，
+  并由 `test_diff_can_omit_unchanged_details` 与 API 侧用例双向锁定。
 
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 697 passed, 2 skipped, 0 failures
+$ python -m pytest           # 701 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待修，P1 未新增）
 ```
 
@@ -219,7 +226,7 @@ $ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待�
 - `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 `docs/DECISIONS.md` §3 待授权）。
 - Agent 尚未改走 Job Service（P0-6 未完成部分）。
 - **P1 遗留**：旧的 `/api/run` 同步扫描链路**不产生** `assets` 观测（只有 Job 链会），
-  两套模型尚未合流（方案第 11 节，改的是调用链，属架构级改动）；
+  两套模型尚未合流（方案第 11 节，改的是调用链，属架构级改动，已登记 `docs/DECISIONS.md` §3）；
   旧库历史数据已有迁移脚本但**未执行真实迁移**（DECISIONS-F：等用户手动 `--apply`；
   且本机旧库当前 17 张表全为 0 行）；`mark_stale_assets()` 已就绪但**还没有任何计划任务调用它**；
-  Diff 端点可用但页面上还没有「对比」按钮。
+  对比结果目前只按四类清单展示，点条目还不能跳到对应资产详情。

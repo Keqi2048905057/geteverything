@@ -647,7 +647,9 @@ def diff_jobs(
         before_job_id: 基线任务。
         after_job_id: 对比任务。
         scope_id: 只比较该范围下的资产（``None`` = 不按范围过滤）。
-        include_unchanged: 是否返回 ``unchanged`` 明细（默认返回数量与明细）。
+        include_unchanged: 是否返回 ``unchanged`` **明细**（默认返回）。
+            注意它只控制明细下发：``counts["unchanged"]`` 无论开关都反映
+            真实数量 —— 「未变 3 条」与「未变 0 条」是两件不同的事。
 
     Returns:
         dict: ``{"before_job_id", "after_job_id", "added", "removed",
@@ -682,6 +684,11 @@ def diff_jobs(
     removed: list[dict] = []
     changed: list[dict] = []
     unchanged: list[dict] = []
+    # ``include_unchanged=False`` 只是**不下发明细**，计数仍然要准：
+    # 「未变 3 条」与「未变 0 条」是两件完全不同的事 —— 前者说明这次
+    # 真的扫到了、只是没变化，后者可能是这次什么都没扫到。把计数一起
+    # 抹成 0 会让两者不可区分，正好毁掉 diff 最有用的一条信息。
+    unchanged_count = 0
 
     for asset_id in sorted(after.keys() - before.keys()):
         added.append(_diff_item(assets.get(asset_id), after[asset_id]))
@@ -695,8 +702,10 @@ def diff_jobs(
         if differences:
             item["changes"] = differences
             changed.append(item)
-        elif include_unchanged:
-            unchanged.append(item)
+        else:
+            unchanged_count += 1
+            if include_unchanged:
+                unchanged.append(item)
 
     result: dict[str, Any] = {
         "before_job_id": before_job_id,
@@ -706,7 +715,12 @@ def diff_jobs(
         "changed": changed,
         "unchanged": unchanged,
     }
-    result["counts"] = {key: len(result[key]) for key in ("added", "removed", "changed", "unchanged")}
+    result["counts"] = {
+        "added": len(added),
+        "removed": len(removed),
+        "changed": len(changed),
+        "unchanged": unchanged_count,
+    }
     return result
 
 

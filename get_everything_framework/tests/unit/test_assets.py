@@ -254,12 +254,22 @@ def test_diff_ignores_volatile_attributes(scope_id):
 
 
 def test_diff_can_omit_unchanged_details(scope_id):
+    """关掉明细只影响**下发**，不影响**计数**。
+
+    「未变 1 条」与「未变 0 条」必须能区分：前者说明这次真的扫到了、
+    只是没变化；后者可能是这次什么都没扫到。把计数一起抹成 0，
+    恰好毁掉 diff 最有用的一条信息。
+    """
     _scan("job_b3", scope_id, ["n.example.test"])
     _scan("job_a3", scope_id, ["n.example.test"])
 
     result = assets.diff_jobs("job_b3", "job_a3", include_unchanged=False)
-    assert result["unchanged"] == []
-    assert result["counts"]["unchanged"] == 0
+    assert result["unchanged"] == [], "关掉明细后不应下发 unchanged 列表"
+    assert result["counts"]["unchanged"] == 1, "计数仍应反映真实未变数量"
+
+    # 带明细时两者一致。
+    full = assets.diff_jobs("job_b3", "job_a3", include_unchanged=True)
+    assert len(full["unchanged"]) == full["counts"]["unchanged"] == 1
 
 
 def test_diff_treats_canonical_equivalents_as_unchanged(scope_id):

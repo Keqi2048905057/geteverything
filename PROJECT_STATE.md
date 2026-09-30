@@ -14,8 +14,8 @@
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §12 迁移脚本）→ M5 剩余 ⬜ → M6 🔄 → M7 ⬜**
-- 更新日期：2026-10-02（P1 §12 旧库迁移脚本轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + §12 迁移脚本）→ M5 剩余 ⬜ → M6 🔄 → M7 ⬜**
+- 更新日期：2026-10-02（P1 §10 Diff 前端露出轮）
 
 ---
 
@@ -135,7 +135,7 @@
 - [ ] **旧库真实迁移未执行**（DECISIONS-F 只授权写脚本；且本机旧库 17 张表当前确为 0 行，迁了也是空结果）
 - [ ] 旧的 `/api/run` 同步扫描链路也产资产（目前**只有 Job 链**产；方案第 11 节统一执行链）
 - [ ] 资产过期自动化（`mark_stale_assets()` 已就绪但无人调用）
-- [ ] Diff 在前端露出（「对比两次任务」按钮）
+- [x] Diff 在前端露出（`/assets` 页底部的「两次任务对比」表单，四类分段渲染 + 属性差异）
 - [ ] 观测的 `data_json` 按字段拆列展示（现在只渲染原样 JSON）
 
 **M6 — 导出、健康检查和本机运行脚本**
@@ -147,7 +147,7 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（697 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（701 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [ ] SQLite 并发测试
 - [ ] 本地 fixture HTTP 测试
@@ -259,15 +259,16 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（P1 §12 旧库迁移脚本轮）
+验证时间：2026-10-02（P1 §10 Diff 前端露出轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 697 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+pytest: 701 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
 mypy:   Found 34 errors in 8 files (checked 59 source files)     ← M7 待修，本轮未增减
+node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 `697`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 `701`**
 
 ---
 

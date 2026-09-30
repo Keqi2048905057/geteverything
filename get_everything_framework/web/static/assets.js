@@ -4,7 +4,8 @@
  *   1. 调 /api/assets 渲染资产表（类型 / 值 / 状态 / first_seen / last_seen / 置信度）；
  *   2. 点「详情」调 /api/assets/<id> 展开观测时间线 ——
  *      回答「谁发现的（source_tool/job_id）/ 何时发现（observed_at）/ 当时的属性（data）」；
- *   3. 分页与筛选（scope_id / type / status / search）。
+ *   3. 分页与筛选（scope_id / type / status / search）；
+ *   4. 两次任务对比：调 /api/jobs/<a>/diff/<b> 渲染 added / removed / changed / unchanged。
  *
  * 约定：不使用任何前端框架、不打包、不引入 CDN 资源；
  * 所有请求都限定在本机同源。响应里没有服务器路径，本文件也不拼接任何路径。
@@ -272,6 +273,154 @@
       });
   }
 
+  // ── 两次任务对比（方案第 10 节 Diff Engine） ─────────────
+
+  //: diff 四类的显示顺序与文案。数组顺序即渲染顺序 ——
+  //: 「新增 / 消失」比「未变」重要，所以未变永远排在最后。
+  var DIFF_SECTIONS = [
+    ["added", "新增", "上次没有、这次有"],
+    ["removed", "消失", "上次有、这次没有"],
+    ["changed", "变更", "两次都有，但可变属性不一样"],
+    ["unchanged", "未变", "两次都有且属性一致"],
+  ];
+
+  function fillJobOptions(jobs) {
+    var selects = ["diff-before", "diff-after"];
+    selects.forEach(function (id) {
+      var select = document.getElementById(id);
+      if (!select) return;
+      // 保留第一项「（选一个）」占位。
+      while (select.options.length > 1) select.remove(1);
+      jobs.forEach(function (job) {
+        var option = document.createElement("option");
+        option.value = job.id;
+        option.textContent = job.id + " · " + (job.status || "") + " · " + (job.created_at || "");
+        select.appendChild(option);
+      });
+    });
+
+    // 默认选中「最近两次」，让用户不必先手动挑。
+    var before = document.getElementById("diff-before");
+    var after = document.getElementById("diff-after");
+    if (before && after && jobs.length >= 2) {
+      before.value = jobs[1].id;
+      after.value = jobs[0].id;
+    }
+  }
+
+  function loadJobOptions() {
+    var before = document.getElementById("diff-before");
+    if (!before) return;
+    fetch("/api/jobs?limit=50", { headers: { Accept: "application/json" } })
+      .then(function (resp) {
+        if (resp.status === 401) return null;
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return resp.json();
+      })
+      .then(function (data) {
+        var summary = document.getElementById("diff-summary");
+        if (!data) {
+          if (summary) summary.textContent = "未登录：任务列表仅本地管理员可见，登录后才能对比。";
+          return;
+        }
+        fillJobOptions(data.jobs || []);
+      })
+      .catch(function (err) {
+        var summary = document.getElementById("diff-summary");
+        if (summary) summary.textContent = "任务列表读取失败: " + err.message;
+      });
+  }
+
+  function diffItemLine(item) {
+    var text = typeLabel(item.type) + " " + item.value;
+    if (item.changes && Object.keys(item.changes).length) {
+      var parts = Object.keys(item.changes).map(function (attribute) {
+        var change = item.changes[attribute] || {};
+        return attribute + ": " + JSON.stringify(change.from) + " → " + JSON.stringify(change.to);
+      });
+      text += "（" + parts.join("；") + "）";
+    }
+    return text;
+  }
+
+  function renderDiff(data) {
+    var body = document.getElementById("diff-body");
+    var summary = document.getElementById("diff-summary");
+    if (!body) return;
+
+    body.textContent = "";
+    var counts = data.counts || {};
+
+    if (summary) {
+      summary.textContent =
+        "基线 " + data.before_job_id + " → 对比 " + data.after_job_id +
+        "：新增 " + (counts.added || 0) +
+        " · 消失 " + (counts.removed || 0) +
+        " · 变更 " + (counts.changed || 0) +
+        " · 未变 " + (counts.unchanged || 0);
+    }
+
+    DIFF_SECTIONS.forEach(function (section) {
+      var key = section[0];
+      var items = data[key] || [];
+      body.appendChild(el("h3", null, section[1] + "（" + items.length + "）— " + section[2]));
+
+      if (!items.length) {
+        // 服务端在 include_unchanged=0 时只给计数、不给明细：
+        // 说清这是「没要」而不是「没有」，否则用户会以为两次任务完全一致。
+        body.appendChild(
+          el("p", "hint", (counts[key] || 0) > 0 ? "（按设置未取明细，共 " + counts[key] + " 条）" : "无。")
+        );
+        return;
+      }
+      var list = el("ul", "diff-list");
+      items.forEach(function (item) {
+        var node = el("li", "mono", diffItemLine(item));
+        node.setAttribute("data-asset-id", item.asset_id || "");
+        list.appendChild(node);
+      });
+      body.appendChild(list);
+    });
+  }
+
+  function runDiff() {
+    var before = filterValue("diff-before");
+    var after = filterValue("diff-after");
+    var summary = document.getElementById("diff-summary");
+
+    if (!before || !after) {
+      if (summary) summary.textContent = "请先各选一个任务。";
+      return;
+    }
+    if (before === after) {
+      if (summary) summary.textContent = "基线与对比是同一个任务，换一个再比。";
+      return;
+    }
+
+    var params = [];
+    var scopeId = filterValue("diff-scope");
+    if (scopeId) params.push("scope_id=" + encodeURIComponent(scopeId));
+    var includeUnchanged = document.getElementById("diff-include-unchanged");
+    if (includeUnchanged && !includeUnchanged.checked) params.push("include_unchanged=0");
+    var query = params.length ? "?" + params.join("&") : "";
+
+    if (summary) summary.textContent = "对比中…";
+    fetch(
+      "/api/jobs/" + encodeURIComponent(before) + "/diff/" + encodeURIComponent(after) + query,
+      { headers: { Accept: "application/json" } }
+    )
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return resp.json();
+      })
+      .then(function (data) {
+        renderDiff(data);
+      })
+      .catch(function (err) {
+        if (summary) summary.textContent = "对比失败: " + err.message;
+      });
+  }
+
   function bind() {
     var form = document.getElementById("assets-filter");
     if (form) {
@@ -279,6 +428,14 @@
         event.preventDefault();
         offset = 0;
         loadAssets();
+      });
+    }
+
+    var diffForm = document.getElementById("diff-form");
+    if (diffForm) {
+      diffForm.addEventListener("submit", function (event) {
+        event.preventDefault();
+        runDiff();
       });
     }
 
@@ -311,5 +468,6 @@
   document.addEventListener("DOMContentLoaded", function () {
     bind();
     loadAssets();
+    loadJobOptions();
   });
 })();

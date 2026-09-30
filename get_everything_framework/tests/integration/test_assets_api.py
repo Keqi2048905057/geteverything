@@ -170,10 +170,15 @@ def test_diff_endpoint_unknown_job_is_404(admin_client, scope_id):
 
 
 def test_diff_endpoint_can_omit_unchanged(admin_client, scope_id):
+    """``include_unchanged=0`` 只影响明细下发，不影响计数。"""
     job = _run_job(scope_id, ["f.example.test"])
     resp = admin_client.get(f"/api/jobs/{job['id']}/diff/{job['id']}?include_unchanged=0")
     assert resp.status_code == 200
-    assert resp.get_json()["unchanged"] == []
+    body = resp.get_json()
+    assert body["unchanged"] == []
+
+    full = admin_client.get(f"/api/jobs/{job['id']}/diff/{job['id']}").get_json()
+    assert body["counts"] == full["counts"], "关掉明细不该改变任何计数"
 
 
 def test_diff_endpoint_marks_changed_attributes(admin_client, scope_id):
@@ -263,3 +268,36 @@ def test_assets_page_offers_all_types_and_statuses(admin_client):
 def test_index_links_to_assets_page(client):
     """首页要有入口，否则资产页只能靠手输 URL 才能找到。"""
     assert "/assets" in client.get("/").get_data(as_text=True)
+
+
+# ── 两次任务对比的页面入口（P1 §10 前端露出） ─────────────
+
+
+def test_assets_page_exposes_diff_form(client):
+    """Diff 端点可用但页面上没入口，等于没人会用 —— 锁住骨架。"""
+    body = client.get("/assets").get_data(as_text=True)
+    assert 'id="diff-form"' in body
+    assert 'id="diff-before"' in body
+    assert 'id="diff-after"' in body
+    assert 'id="diff-body"' in body
+    assert 'id="diff-include-unchanged"' in body
+
+
+def test_assets_page_diff_form_disabled_when_anonymous(client):
+    """未登录时对比按钮必须是 disabled，而不是「点了才报 401」。"""
+    body = client.get("/assets").get_data(as_text=True)
+    # 「筛选」与「对比」两个按钮都要 disabled，所以至少出现两次。
+    assert body.count("disabled") >= 2
+    assert "diff-summary" in body
+
+
+def test_assets_page_diff_scope_select_is_empty_when_anonymous(client):
+    """匿名时不能下发 Scope 名称（与列表页同一口径）。"""
+    body = client.get("/assets").get_data(as_text=True)
+    assert "（scope_" not in body
+
+
+def test_assets_page_diff_scope_select_lists_scopes_when_authenticated(admin_client, scope_id):
+    body = admin_client.get("/assets").get_data(as_text=True)
+    assert 'id="diff-scope"' in body
+    assert scope_id in body

@@ -99,6 +99,51 @@
         要读内容请到任务详情页（证据接口不下发服务器路径）。
       </p>
     </section>
+
+    <section class="panel" id="diff-panel">
+      <h2>两次任务对比</h2>
+      <p class="hint">
+        选两次任务，看它们各自「看到」的资产差在哪。
+        <strong>只比较这两次任务自己的观测</strong>，不看资产历史上被谁见过 ——
+        否则「上次扫出 A B C、这次扫出 A C D」这种最常见的场景反而给不出
+        <code>新增 D / 消失 B</code>。
+      </p>
+
+      <form class="form form-inline" id="diff-form" autocomplete="off">
+        <label for="diff-before">基线任务</label>
+        <select id="diff-before" name="before">
+          <option value="">（选一个）</option>
+        </select>
+
+        <label for="diff-after">对比任务</label>
+        <select id="diff-after" name="after">
+          <option value="">（选一个）</option>
+        </select>
+
+        <label for="diff-scope">限定范围</label>
+        <select id="diff-scope" name="scope_id">
+          <option value="">不按范围过滤</option>
+          {% for scope in scopes %}
+            <option value="{{ scope.id }}">{{ scope.name }}（{{ scope.id }}）</option>
+          {% endfor %}
+        </select>
+
+        <label class="check-inline" for="diff-include-unchanged">
+          <input type="checkbox" id="diff-include-unchanged" name="include_unchanged" checked>
+          含「未变」
+        </label>
+
+        <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>对比</button>
+      </form>
+
+      <p class="hint" id="diff-summary">还没有对比结果。</p>
+      <div id="diff-body"></div>
+
+      <p class="hint">
+        <strong>「未变」不是废话</strong>：把 <code>unchanged</code> 关掉能只看变化，
+        但留着它才能确认「这次真的扫了、只是没变化」，而不是「这次什么都没扫到」。
+      </p>
+    </section>
   </main>
 
   <script src="{{ url_for('static', filename='assets.js') }}"></script>

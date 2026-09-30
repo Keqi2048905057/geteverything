@@ -401,3 +401,35 @@ ul.artifacts li {
   font-size: 13px;
   color: var(--text-dim);
 }
+
+/* ── 两次任务对比（P1，方案第 10 节） ─────────────────── */
+
+#diff-panel h3 {
+  margin: 14px 0 4px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.diff-list {
+  margin: 0 0 6px;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.diff-list li {
+  font-size: 12px;
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+/* 「含未变」是复选项，不需要 .form-inline 里 select/input 的最小宽度。 */
+.form-inline .check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.form-inline .check-inline input { min-width: 0; }

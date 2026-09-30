@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移）（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -449,7 +449,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ---
 
-## 6. BUG 定位索引表（共 23 条症状；第 23 条为 P1 新增）
+## 6. BUG 定位索引表（共 24 条症状；第 23～24 条为 P1 新增）
 
 | # | 典型症状 | 最可能的 3 个排查位置 | 该处典型失败模式 |
 |---|---|---|---|
@@ -476,6 +476,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 21 | `/api/tools`、`/api/databases` 返回的记录数不对/很慢 | ① `api/tools.py:list_tools`（`:80-88` 每个工具都 `build_runner` 实例化）② `api/tools.py:_build_tool_payload`（`:35`）③ `storage.py:get_tool_databases`（`:527-541`，**不返回任何 count**） | 接口 docstring（`api/tools.py:52-66`）宣称返回 `record_count`，实现只返回 `tool_name/table/result_column/category`；真正的计数方法 `get_tool_database_overview`（`storage.py:543`）**在 API 层从未被调用**。另外 `build_runner` 会执行 `DnsxRunner/HttpxRunner/AlterxRunner/ShufflednsRunner` 的 `__init__`（各建一个 `ScanResultStore()`，触发建表） |
 | 22 | 子域爆破类工具（shuffledns/alterx/dnsx）总是零结果 | ① `config.py:SHUFFLEDNS_CONFIG`（`:145` wordlist=`SecLists/subdomains-top1million-5000.txt`）② `modules/shuffledns.py:_bruteforce_with_dnsx`（`:63` 文件不存在只 print 一句）③ `config.py:FEROXBUSTER_CONFIG`（`:200` wordlist 是硬编码绝对路径 `D:/c4/v2/backend/framework-main/SecLists/...`） | `SecLists/` 里**实际只有 `raft-small-directories.txt`**（实测），配置引用的两个字典文件都不存在：shuffledns 静默返回空、feroxbuster 会把不存在的路径当 `-w` 参数传给子进程而失败。`alterx`/`dnsx`/`httpx` 的候选来自 `store.get_results_by_domain()`，subfinder 没先跑过就永远是空 |
 | 23 | 任务跑完了，资产页却「一条都没有」/ 少了几条 | ① `jobs/executor.py:execute_job` 里的 `ingest_step_observations` 调用 ② `core/assets.py:CATEGORY_TO_TYPE`（`web`/`alive`/`dns` 的映射）③ 任务详情里的 `step.assets_ingested` 事件（含 `skipped` 与 `reasons`） | **先看事件，不要先看代码**：`step.assets_ingested` 的 `written`/`skipped`/`reasons` 直接说明这批观测落了几条、为什么跳过。三种常见原因：① 工具的 `Observation.category` 不在 `CATEGORY_TO_TYPE` 里（返回 `None` → 整条跳过，不猜类型）；② 步骤只有字符串结果且工具是 `httpx`/`naabu`/`nmap`（形态不确定 → 故意不落，见 §9.12.3）；③ `canonical.normalize()` 判定值非法（如把本地路径当 URL）。**注意落观测是派生产物**：它失败不会让任务变 failed，所以「任务 succeeded 但没资产」是合法状态，必须靠事件区分 |
+| 24 | 对比两次任务时「未变」总是 0，看起来像两次扫描毫无交集 | ① `core/assets.py:diff_jobs` 里 `counts["unchanged"]` 与 `unchanged` 明细的关系 ② 页面「含未变」复选框（`#diff-include-unchanged`）③ `web/static/assets.js:renderDiff` 对空明细的措辞 | `include_unchanged=False`（勾掉「含未变」）**只应影响明细、不应影响计数**。曾经两者一起清零，于是「扫到了但没变化」与「什么都没扫到」变得不可区分。先看 `counts.unchanged`：**它非 0 而明细为空，说明是这次没要明细，不是两次没有交集**（前端会显示「按设置未取明细，共 N 条」）。真正的 0 才是「两次任务的资产集合完全不相交」 |
 
 ---
 
@@ -772,12 +773,12 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 697 passed, 2 skipped, 0 failures
+$ python -m pytest           # 701 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 存量，P1 未新增）
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 资产/观测/Diff/迁移 `697`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 资产/观测/Diff/迁移 `701`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34 —— **34 是 M7 的历史存量，不是 P1 的新债**。
@@ -797,7 +798,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/unit/test_agent_boundary.py` | **P0-3**：Agent 拒绝任意 `file_path`、只收 `upload_id`、planner 不再下发 `file_path` |
 | `tests/unit/test_storage_connection.py` | **DECISIONS-I**：旧库连接必关（含异常路径）、`busy_timeout`、表结构未变、`-W error::ResourceWarning` 复现 |
 | `tests/unit/test_canonical.py` | **P1 §9**：七种类型的归一化规则、方案验收的三个 URL 折叠成一个 key、`guess_type` 不猜错 |
-| `tests/unit/test_assets.py` | **P1 §8/§10**：两层模型（一行资产 + N 条观测）、`first_seen` 不被覆盖、scope 参与唯一性、`%`/`_` 转义、状态迁移不删数据、Diff 验收（A B C → A C D）、category→type 映射、落库失败不改任务结果 |
+| `tests/unit/test_assets.py` | **P1 §8/§10**：两层模型（一行资产 + N 条观测）、`first_seen` 不被覆盖、scope 参与唯一性、`%`/`_` 转义、状态迁移不删数据、Diff 验收（A B C → A C D）、取消 unchanged 明细后计数仍准、category→type 映射、落库失败不改任务结果 |
 | `tests/unit/test_migrate_legacy.py` | **P1 §12**：dry-run 与 `--apply` 前后旧库 sha256 不变、重跑幂等（确定性观测 ID）、`web`→`url` 翻译、`...Z`→`+00:00` 归一、跨表同资产合并成一行、单条失败不中断、CLI 三个退出码 |
 | `tests/integration/test_web_baseline.py` | 首页可渲染、登录/登出（M1） |
 | `tests/integration/test_m2_security.py` | 认证、受控上传、file_path 拒绝、审计（M2） |
@@ -1135,6 +1136,18 @@ status_code / title / server / technology / url
 而不是把范围外资产误报成 `removed`（`test_diff_respects_scope_filter` /
 `test_diff_without_scope_filter_sees_both_assets` 一对用例把两个方向都钉住）。
 
+`include_unchanged` 的口径 —— **只控制明细下发，不控制计数**：
+
+```text
+include_unchanged=True    → unchanged 明细 + counts.unchanged = 真实数量
+include_unchanged=False   → unchanged=[] + counts.unchanged = 真实数量  ← 关键
+```
+
+> ⚠️ 初版把两者一起清零，等于让「这次真的扫到了、只是没变化（未变 3 条）」
+> 与「这次什么都没扫到（未变 0 条）」变成同一个输出 —— 而这正是 diff
+> 最需要回答的问题。**计数与明细必须分开处理**，由
+> `test_diff_can_omit_unchanged_details` 与 API 侧同名用例双向锁定。
+
 #### 9.12.5 资产 API 与页面（DECISIONS-G）
 
 新增 `api/assets.py`（全部**需管理员**）与 `web/templates/assets.html` +
@@ -1155,6 +1168,16 @@ status_code / title / server / technology / url
 ① 未登录时不下发 Scope 名称，只给提示；② 接口返回 401。
 资产是「整理后的情报」，比原始结果行更敏感，所以归在需要登录的一侧 ——
 与 `/api/results`（旧库、匿名只读）刻意区分开。
+
+页面底部还有 **「两次任务对比」表单**（P1 §10 的前端露出）：选基线任务与对比任务
+（下拉默认选中最近两次）、可选限定 Scope 与「含未变」开关，结果按
+新增 / 消失 / 变更 / 未变 四段渲染，`changed` 直接显示
+`status_code: 200 → 403` 这类属性差异。任务下拉由 `GET /api/jobs?limit=50` 填充 ——
+该接口**需管理员**，所以脚本显式判 `resp.status === 401` 并转成提示而不是抛错。
+
+> 「含未变」勾掉时服务端只给计数不给明细，前端据此显示
+> 「（按设置未取明细，共 N 条）」而不是「无」—— 否则用户会把
+> 「没要明细」读成「两次完全一致」。
 
 #### 9.12.6 旧库 → 新库的迁移（`core/migrate.py` + `scripts/migrate_legacy_results.py`）
 
@@ -1203,7 +1226,7 @@ python scripts/migrate_legacy_results.py --apply       # 真正写入
 |---|---|
 | §8 两层模型 | ✅ 表 + 数据层 + 执行链接线 + API + 页面 |
 | §9 资产规范化 | ✅ 七种类型 + 全部规则写成测试 |
-| §10 Diff | ✅ 四类输出 + 属性变化 + 两个端点 |
+| §10 Diff | ✅ 四类输出 + 属性变化 + 两个端点 + **前端对比表单** |
 | §11 统一旧执行链 | ⬜ 未做：`api/scan.py` 同步扫描与 Job 链仍并存（**改的是调用链，属架构级改动，需授权**） |
 | §12 旧库数据迁进新库 | 🔄 脚本 + 测试 + dry-run 已完成（DECISIONS-F 允许的部分）；**真实迁移等用户手动 `--apply`** |
 | §13 SQLAlchemy + Alembic | ⬜ 未做（新依赖 + ORM 层重写，本机联调版不引入） |
@@ -1212,5 +1235,5 @@ python scripts/migrate_legacy_results.py --apply       # 真正写入
 | §17 mypy | ⬜ 34 errors（M7 范围） |
 | §18 真实本地 E2E | ⬜ 未做（硬约束：不打真实外部目标） |
 | `assets.status` 自动转 `stale` | ⚠️ 函数已就绪（`mark_stale_assets`），**但还没有任何计划任务/接口调它** |
-| Diff 在前端露出 | ⬜ 未做：`/api/jobs/{a}/diff/{b}` 已可用，页面还没有「对比」按钮 |
+| Diff 条目可点进资产详情 | ⬜ 未做：清单已渲染 `data-asset-id`，但还没接点击跳转 |
 
