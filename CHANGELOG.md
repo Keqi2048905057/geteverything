@@ -201,18 +201,68 @@
 - `core/assets.py` 初版把 `canonical_key` 建成**全局唯一**，导致同一资产在两个 Scope 下
   「查不到又插不进」。改为唯一索引 `(canonical_key, IFNULL(scope_id,''))`
   （`IFNULL` 是因为 SQLite 的 `UNIQUE` 允许多个 `NULL`，裸两列索引会漏掉无 Scope 的行）。
-- `core/assets.py` 引入的 10 条 mypy 报错（缺类型标注）已补回，**mypy 仍为 34**（M7 存量，无新债）。
+- `core/assets.py` 引入的 10 条 mypy 报错（缺类型标注）已补回，当时仍为 34（M7 存量，无新债）。
+  **M7 已把这 34 条全部清掉，见下。**
 - `core/assets.py:diff_jobs()`：`include_unchanged=False` 原先会把 `counts["unchanged"]`
   一起抹成 0，导致「这次扫到了但没变化（未变 3）」与「这次什么都没扫到（未变 0）」
   完全不可区分 —— 而这恰是 diff 最有用的一条信息。改为**只影响明细下发、不影响计数**，
   并由 `test_diff_can_omit_unchanged_details` 与 API 侧用例双向锁定。
 
+### M7 — mypy 清零（本轮，方案第 17 节）
+
+方案第 17 节明确「**不能为了绿 CI 而在配置里排除所有问题**」。因此本轮
+**没有改 `pyproject.toml` 的 `[tool.mypy]`**（没加 `ignore_errors`、没缩 `exclude`、
+没放宽 `no_implicit_optional`），改的是代码本身：**34 → 0**。
+
+变更：
+
+- `config.py`、`modules/shuffledns.py`：空字面量补 `dict` 标注。
+- `modules/base.py`：基类**显式声明** `run_scan` 并抛 `NotImplementedError`
+  （原先基类根本没有这个方法，子类忘记实现时抛 `AttributeError`，
+  与「跑通但零结果」在调用方看来不可区分），由 `run()` 统一翻译成带 `error_code` 的失败结果；
+  `_kill_process_tree` 的 POSIX 分支改用 `getattr(os, "getpgid"/"killpg")` 取函数、
+  `getattr(signal, "SIGKILL", SIGTERM)` 取信号 —— Windows 存根里这三个名字并不存在，
+  顺带去掉了原来那层过宽的 `except AttributeError`。
+- `modules/httpx.py`、`modules/dnsx.py`：`_write_input_file` **补回基类的 `suffix` 参数**。
+  子类收窄签名会让「按基类类型调用子类实例」（runner 注册表就是这么用的）不成立。
+- `modules/httpx.py`：`run_scan` 显式收成 `List[str]`（原先 `List[Any | None]`，`None` 真可能混入）。
+- `core/jobs.py`：新增 `get_job_or_raise()`（读不到抛 `ValueError`）。写路径
+  （`create_job` / `cancel_job` / `finish_job`）刚写完就回读，`None` 属不可能状态，
+  不该把 `| None` 传染给调用方；`get_job()` 保持可空，读接口语义不变。
+- `api/scan.py`：`resolve_scoped_targets` 的返回标注由字符串 `"object"` 改为真实的 `core.scope.Scope`。
+- `agent/action.py`：
+  - `self.context` 补 `Dict[str, Any]` —— 字面量六个键全是 `None`，类型被推成
+    `dict[str, None]`，导致后面每处写字符串都报「给 None 赋值」（**一处根因消掉 9 条**）；
+  - `_handle_pending_plan` 把待处理计划取到局部变量并判空（消掉 5 条，
+    同时修掉一处真实的 `deepcopy(None)` 隐患）；
+  - `available_tools` 补 `Dict[str, Dict[str, Any]]`，`tool["handler"](args)` 不再是「object 不可调用」。
+
+修复：
+
+- **`agent/action.py:_tool_httpx` 的 `items` 取错了对象。** `run_scan` 返回的是 URL
+  **字符串**列表（旧签名兼容），元数据在 `runner.last_items`。原先 `items = rows`，
+  于是「存活探测 → 整理回复」会以 `AttributeError: 'str' object has no attribute 'get'`
+  收场 —— 而且**零结果时不炸**，只在真有存活结果时出现。已改为 `runner.last_items[:20]`，
+  并加回归用例（同时覆盖 `_summarize_httpx_items`）。见 `docs/CODEBASE_MAP.md` 第 6 节第 25 条。
+
+新增测试（+4，701 → 705）：
+
+- `test_base_runner_without_run_scan_fails_loudly`：基类未实现 `run_scan` 必须报失败。
+- `test_write_input_file_accepts_suffix_across_runners`：httpx / dnsx 的签名与基类一致。
+- `test_get_job_or_raise_distinguishes_missing_job`：两种语义都要有。
+- `test_agent_httpx_returns_metadata_items`：httpx 步骤的 `items` 必须是元数据字典。
+
+范围说明：`mypy` 命令里的 `app.py` 会顺着 import 把 `agent/action.py` 一起查。
+真正落在范围外的是 `agent/providers/*`（**当前无任何调用方**）：显式加 `agent` 参数
+会多出 7 条 openai 存根相关的报错。本轮**没有**为这 7 条去改 provider 层的组织方式
+（属改运行语义，且该层不可达）。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 701 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待修，P1 未新增）
+$ python -m pytest           # 705 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 ```
 
 ### 已知仍未处理（不属 M0～M4 范围）

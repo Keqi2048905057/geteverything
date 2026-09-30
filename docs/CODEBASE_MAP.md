@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零）（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -449,7 +449,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ---
 
-## 6. BUG 定位索引表（共 24 条症状；第 23～24 条为 P1 新增）
+## 6. BUG 定位索引表（共 25 条症状；第 23～25 条为 P1/M7 新增）
 
 | # | 典型症状 | 最可能的 3 个排查位置 | 该处典型失败模式 |
 |---|---|---|---|
@@ -477,6 +477,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 22 | 子域爆破类工具（shuffledns/alterx/dnsx）总是零结果 | ① `config.py:SHUFFLEDNS_CONFIG`（`:145` wordlist=`SecLists/subdomains-top1million-5000.txt`）② `modules/shuffledns.py:_bruteforce_with_dnsx`（`:63` 文件不存在只 print 一句）③ `config.py:FEROXBUSTER_CONFIG`（`:200` wordlist 是硬编码绝对路径 `D:/c4/v2/backend/framework-main/SecLists/...`） | `SecLists/` 里**实际只有 `raft-small-directories.txt`**（实测），配置引用的两个字典文件都不存在：shuffledns 静默返回空、feroxbuster 会把不存在的路径当 `-w` 参数传给子进程而失败。`alterx`/`dnsx`/`httpx` 的候选来自 `store.get_results_by_domain()`，subfinder 没先跑过就永远是空 |
 | 23 | 任务跑完了，资产页却「一条都没有」/ 少了几条 | ① `jobs/executor.py:execute_job` 里的 `ingest_step_observations` 调用 ② `core/assets.py:CATEGORY_TO_TYPE`（`web`/`alive`/`dns` 的映射）③ 任务详情里的 `step.assets_ingested` 事件（含 `skipped` 与 `reasons`） | **先看事件，不要先看代码**：`step.assets_ingested` 的 `written`/`skipped`/`reasons` 直接说明这批观测落了几条、为什么跳过。三种常见原因：① 工具的 `Observation.category` 不在 `CATEGORY_TO_TYPE` 里（返回 `None` → 整条跳过，不猜类型）；② 步骤只有字符串结果且工具是 `httpx`/`naabu`/`nmap`（形态不确定 → 故意不落，见 §9.12.3）；③ `canonical.normalize()` 判定值非法（如把本地路径当 URL）。**注意落观测是派生产物**：它失败不会让任务变 failed，所以「任务 succeeded 但没资产」是合法状态，必须靠事件区分 |
 | 24 | 对比两次任务时「未变」总是 0，看起来像两次扫描毫无交集 | ① `core/assets.py:diff_jobs` 里 `counts["unchanged"]` 与 `unchanged` 明细的关系 ② 页面「含未变」复选框（`#diff-include-unchanged`）③ `web/static/assets.js:renderDiff` 对空明细的措辞 | `include_unchanged=False`（勾掉「含未变」）**只应影响明细、不应影响计数**。曾经两者一起清零，于是「扫到了但没变化」与「什么都没扫到」变得不可区分。先看 `counts.unchanged`：**它非 0 而明细为空，说明是这次没要明细，不是两次没有交集**（前端会显示「按设置未取明细，共 N 条」）。真正的 0 才是「两次任务的资产集合完全不相交」 |
+| 25 | Agent 回复里出现 `AttributeError: 'str' object has no attribute 'get'`（只在**真有存活结果**时） | ① `agent/action.py:_tool_httpx` 的 `items` 字段 ② `agent/action.py:_summarize_httpx_items`（逐条 `item.get(...)`）③ `modules/httpx.py:run_scan` 的返回值语义 | 同一个 `rows` 变量在两条链上有两种形态：`run_scan` 返回 **URL 字符串列表**（旧签名，兼容用），而元数据在 `runner.last_items`（dict 列表）。`items` 错取了 `rows`，于是 `_summarize_httpx_items` 收到一堆 `str` 就炸。**零结果时不炸** —— 所以「本地跑不通、真机上必炸」是它的典型表现。`results` 里的 `total` 也就会与 `items` 长度对不上 |
 
 ---
 
@@ -773,29 +774,32 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 701 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 存量，P1 未新增）
+$ python -m pytest           # 705 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 资产/观测/Diff/迁移 `701`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → **M7 类型收口 `705`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
-> 补标注后回到 34 —— **34 是 M7 的历史存量，不是 P1 的新债**。
+> 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
+> 注意口径：`mypy` 只检查上面这条命令列出的范围，`agent/providers/` 不在其中
+> —— 那一层**没有任何调用方**（§7.6），且它在 Windows 的 openai 存根下会报 7 条
+> 与真实缺陷无关的类型错。要连它一起查得显式加 `agent` 参数。
 
 | 测试文件 | 覆盖 |
 |---|---|
 | `tests/unit/test_smoke.py`、`test_repo_layout.py` | 导入与仓库布局（M0） |
 | `tests/unit/test_scope.py` | Scope 匹配语义与全放行拒绝（M1） |
 | `tests/unit/test_security_baseline.py` | SECRET_KEY 弱值、受控上传、`.env` 原子写（M2） |
-| `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry、**跃迁表 + max attempts**（M3 / P0-7） |
+| `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry、**跃迁表 + max attempts**（M3 / P0-7）、**`get_job_or_raise` 与 `get_job` 的可空性差异**（M7） |
 | `tests/unit/test_jobs_executor.py` | mock/real 分流、进度、取消边界、**真实子进程 kill/重启**、**执行期 Scope 复检**（M3 / P0-2） |
 | `tests/unit/test_runner_result.py` | 命令预览脱敏、`RunnerResult` 组装、artifact 落盘/读取（M4） |
-| `tests/unit/test_runner_interface.py` | **真实子进程**：成功/零结果/未安装/非零/127/超时/SystemExit/残留文件清理（M4） |
+| `tests/unit/test_runner_interface.py` | **真实子进程**：成功/零结果/未安装/非零/127/超时/SystemExit/残留文件清理（M4）；**基类未实现 `run_scan` 必须报失败**、**子类 `_write_input_file` 保留 `suffix`**（M7） |
 | `tests/unit/test_runners_m4.py` | subfinder / httpx / dnsx 的 `build_command` + `parse_output`（M4） |
 | `tests/unit/test_runners_m4_rollout.py` | **其余 14 个 runner** 的接口覆盖 + 解析 + 横切自检（M4 铺开） |
 | `tests/unit/test_policy.py` | **P0-2**：统一 Policy 四个入口（缺失 400 / 越界 403 / 整体拒绝 / 解析后地址校验，注入 resolver 不查真实 DNS） |
-| `tests/unit/test_agent_boundary.py` | **P0-3**：Agent 拒绝任意 `file_path`、只收 `upload_id`、planner 不再下发 `file_path` |
+| `tests/unit/test_agent_boundary.py` | **P0-3**：Agent 拒绝任意 `file_path`、只收 `upload_id`、planner 不再下发 `file_path`；**M7**：httpx 步骤的 `items` 必须是元数据字典（回归 `'str' object has no attribute 'get'`） |
 | `tests/unit/test_storage_connection.py` | **DECISIONS-I**：旧库连接必关（含异常路径）、`busy_timeout`、表结构未变、`-W error::ResourceWarning` 复现 |
 | `tests/unit/test_canonical.py` | **P1 §9**：七种类型的归一化规则、方案验收的三个 URL 折叠成一个 key、`guess_type` 不猜错 |
 | `tests/unit/test_assets.py` | **P1 §8/§10**：两层模型（一行资产 + N 条观测）、`first_seen` 不被覆盖、scope 参与唯一性、`%`/`_` 转义、状态迁移不删数据、Diff 验收（A B C → A C D）、取消 unchanged 明细后计数仍准、category→type 映射、落库失败不改任务结果 |
@@ -1232,8 +1236,66 @@ python scripts/migrate_legacy_results.py --apply       # 真正写入
 | §13 SQLAlchemy + Alembic | ⬜ 未做（新依赖 + ORM 层重写，本机联调版不引入） |
 | §15 测试矩阵 | 🔄 API / 安全 / Worker / Runner 四组已有；平台双跑见 §16 |
 | §16 Windows + Linux CI | ⬜ 未做（当前 CI 只有 `ubuntu-latest`） |
-| §17 mypy | ⬜ 34 errors（M7 范围） |
+| §17 mypy | ✅ **0 errors**（M7 已完成，见 §9.13） |
 | §18 真实本地 E2E | ⬜ 未做（硬约束：不打真实外部目标） |
 | `assets.status` 自动转 `stale` | ⚠️ 函数已就绪（`mark_stale_assets`），**但还没有任何计划任务/接口调它** |
 | Diff 条目可点进资产详情 | ⬜ 未做：清单已渲染 `data-asset-id`，但还没接点击跳转 |
+
+### 9.13 M7：mypy 清零（方案第 17 节）
+
+方案第 17 节的要求是「**不能为了绿 CI 而在配置里排除所有问题**」。因此这一轮
+**没有动 `pyproject.toml` 的 `[tool.mypy]`**（没加 `ignore_errors`、没缩 `exclude`、
+没放宽 `no_implicit_optional`），改的是代码本身：34 → 0。
+
+修复顺序按方案给的优先级：`modules/base.py` → `jobs/executor.py` / `core/jobs.py`
+→ `api/*` → 最后 `agent/`。
+
+| 报错点 | 真实问题（不只是类型） | 处理 |
+|---|---|---|
+| `config.py:TARGET_CONFIG`、`modules/shuffledns.py:_WILDCARD_CACHE` | 空字面量推不出元素类型 | 补 `dict` 标注，不改值 |
+| `modules/base.py:BaseRunner.run` 里的 `self.run_scan` | **基类没有 `run_scan`** —— 子类忘记实现时抛的是 `AttributeError`，与「跑通但零结果」不可区分 | 基类显式声明 `run_scan` 并抛 `NotImplementedError`，由 `run()` 统一翻译成带 `error_code` 的失败结果 |
+| `modules/base.py:os.getpgid/killpg/signal.SIGKILL` | Windows 存根里没有这三个名字（跨平台代码的常态） | 改 `getattr(os, ...)` 取函数，`SIGKILL` 取不到时退回 `SIGTERM`；顺带去掉了原来那层过宽的 `except AttributeError` |
+| `modules/httpx.py`、`modules/dnsx.py` 的 `_write_input_file` | 子类**收窄了基类签名**（丢了 `suffix`）。runner 注册表按基类类型持有子类实例，收窄让「按基类方式调用」不成立 | 两个子类都补回 `suffix` 参数（httpx 的 `candidates` 语义不变），并加测试锁定 |
+| `modules/httpx.py:run_scan` 返回值 | `[r.get("url") for r in raw if r.get("url")]` 的类型是 `List[Any \| None]`，与声明的 `List[str]` 不符 —— `None` 真的可能混进结果 | 显式收成 `List[str]`，非字符串/空串一律丢弃 |
+| `core/jobs.py:create_job`、`jobs/executor.py` 的两处 `return get_job(...)` | 写路径刚写完就回读，`None` 属于不可能状态，却被类型逼着把 `\| None` 传染出去 | 新增 `jobs.get_job_or_raise()`：读不到直接抛 `ValueError`；写路径改用它。`get_job()` 仍可空（读接口语义不变） |
+| `api/scan.py:resolve_scoped_targets` 返回 `tuple[list[str], "object", str]` | 标注写成字符串 `"object"`，于是 `scope.id` 两处报「object 没有 id」 | 标注改为真实的 `core.scope.Scope` |
+| `agent/action.py` 的 20 条 | 见下 | 逐条处理 |
+
+`agent/action.py` 的两类：
+
+1. **`self.context` 没有注解**：字面量里六个键的值全是 `None`，类型被推成
+   `dict[str, None]`，于是后面每一处写字符串（`mode`/`target`/`org` …）都变成
+   「给 None 赋值」，`analyze_intent(context_state=...)` 也收到错类型。
+   补 `Dict[str, Any]` 后**同一处根因消掉 9 条**。
+2. **`self.pending_plan` 的可空性**：`_handle_pending_plan` 里反复
+   `deepcopy(self.pending_plan)`，类型上它是 `dict | None`。把待处理计划先取到
+   局部变量 `pending_plan` 并判空（顺带修掉一处真实的 `deepcopy(None)` 隐患），
+   消掉 5 条。
+
+另外两处顺带修的真实缺陷（不是纯类型问题）：
+
+* `_tool_httpx` 的 `items` 错取了 `run_scan` 的返回值。`run_scan` 返回的是 URL
+  **字符串**列表（旧签名兼容），元数据在 `runner.last_items`。于是
+  「存活探测 → 整理回复」这条路径会以 `AttributeError: 'str' object has no
+  attribute 'get'` 收场，而且**零结果时不炸**，本地很容易漏掉。已改为取
+  `runner.last_items[:20]`，并加回归用例（同时覆盖 `_summarize_httpx_items`）。
+  见第 6 节第 25 条。
+* `available_tools` 补 `Dict[str, Dict[str, Any]]` 标注，让
+  `tool["handler"](args)` 不再是「object 不可调用」。
+
+验证（本轮实测）：
+
+```text
+$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
+$ python -m ruff check .                                   # All checks passed!
+$ python -m pytest -q                                      # 705 passed, 2 skipped, 0 failures
+```
+
+> **为什么 `agent/` 不在 mypy 命令里却是 0**：`app.py` 会 `from agent import ...`，
+> mypy 顺着 import 把 `agent/action.py`、`agent/intent.py` 一起查了。
+> 真正落在范围外的是 `agent/providers/*`（无调用方，见 §7.6）：
+> 显式加上 `agent` 参数会多出 7 条 openai 存根相关的报错
+> （`Cannot assign to a type`、`Module has no attribute "api_base"` 等）。
+> 本轮**没有**为了让这 7 条变绿去改 provider 层的组织方式 —— 那属于「改运行语义」，
+> 且这一层当前不可达。`agent/providers/tests/test_*.py` 下的本地校验脚本同理。
 

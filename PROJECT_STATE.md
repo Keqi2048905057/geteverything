@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M5 剩余项待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 剩余项待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + §12 迁移脚本）→ M5 剩余 ⬜ → M6 🔄 → M7 ⬜**
-- 更新日期：2026-10-02（P1 §10 Diff 前端露出轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 剩余 ⬜ → M6 🔄**
+- 更新日期：2026-10-02（M7 mypy 清零轮）
 
 ---
 
@@ -102,6 +102,21 @@
   「A B C → A C D」与方案第 9 节验收「三个 URL 折叠成一个 key」）、
   `test_assets_api.py`（~22 例端到端）
 
+**M7 类型收口（本轮，方案第 17 节）**
+- `mypy app.py core api jobs storage.py modules`：**34 errors → Success: no issues found（59 files）**
+- **没有改 `pyproject.toml` 的 `[tool.mypy]`**（方案第 17 节：不能为了绿 CI 而排除问题），改的是代码
+- `modules/base.py`：基类显式声明 `run_scan` 并抛 `NotImplementedError`（原先基类没有这个方法，
+  「子类忘实现」与「跑通但零结果」不可区分）；POSIX 杀进程树改 `getattr(os, ...)` 取函数
+- `modules/httpx.py` / `modules/dnsx.py`：`_write_input_file` 补回基类的 `suffix` 参数
+- `core/jobs.py`：新增 `get_job_or_raise()`；写路径不再把 `| None` 传染给调用方
+- `api/scan.py`：`resolve_scoped_targets` 返回标注由 `"object"` 改为真实的 `Scope`
+- `agent/action.py`：`self.context` 补 `Dict[str, Any]`（一处根因消掉 9 条）、
+  `_handle_pending_plan` 取局部变量判空（消 5 条）、`available_tools` 补标注
+- **顺带修掉一个真机缺陷**：`_tool_httpx` 的 `items` 取成了 `run_scan` 的 URL 字符串列表，
+  导致「存活探测」在有结果时抛 `AttributeError: 'str' object has no attribute 'get'`
+  （零结果时反而不炸，本地极易漏掉）
+- 测试：+4 → **705 passed / 2 skipped**
+
 **流程与沉淀**
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
 - 给 Codex 的独立核查文档在桌面：`geteverything_项目汇总_给Codex检查.md`
@@ -116,8 +131,8 @@
 | **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库，**并已进资产页的观测时间线** | 资产页展示的是 `data_json` 原样 JSON，**没有按字段拆列**；任务详情页那一侧仍是原样 JSON |
 | **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
 | **M6 本机启动文档** | `CONTRIBUTING.md` 有环境搭建说明；`scripts/run_local.ps1` 可用 | 没有面向「新开发者 10 分钟启动」的完整文档；`scripts/check_env.py` 不存在 |
-| **M7 mypy** | 其余验收项（pytest / ruff）已达标 | **mypy 仍有 34 errors**，见下（P1 一度新增 10 条，已补标注清零新增债） |
-| **P1 Diff 的前端** | `GET /api/jobs/<a>/diff/<b>` 已可用且有测试 | 页面上**没有「对比」按钮**，只能直接调接口 |
+| **M7 mypy** | ✅ **已完成（本轮）**：`mypy app.py core api jobs storage.py modules` → `Success: no issues found in 59 source files` | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
+| **P1 Diff 的前端** | ✅ **已完成**：`/assets` 页底部有「两次任务对比」表单（基线与对比任务下拉、可选限定范围、「含未变」开关），四类分段渲染 + 属性差异（`status_code: 200 → 403`） | 结果条目还不能点进资产详情 |
 | **P1 资产过期** | `mark_stale_assets(scope_id, last_seen_before=...)` 已实现且有用例 | **没有任何计划任务/接口调用它**，所以 `stale` / `gone` 目前永远是空的 |
 
 ---
@@ -147,11 +162,11 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（701 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（705 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [ ] SQLite 并发测试
 - [ ] 本地 fixture HTTP 测试
-- [ ] **mypy 通过**（当前 34 errors）
+- [x] **mypy 通过**（本轮：34 errors → 0，未改 mypy 配置）
 - [ ] 一份测试报告
 
 **其他待办（不在里程碑内，但已知）**
@@ -170,11 +185,11 @@
 ## Known Existing Failures
 
 > 这些是**已知且当前存在**的问题，不是「待办想法」。审查时不要重复报为新发现。
-> **本轮已修掉 2 条**（原 #2、#7），保留编号以便对照历史报告。
+> **已修掉 3 条**（原 #1、#2、#7），保留编号以便对照历史报告。
 
 | # | 症状 | 位置 | 影响 |
 |---|---|---|---|
-| 1 | `mypy` 报 34 个错误 | 见下方分布 | M7 验收命令不通过；不影响运行 |
+| 1 | ~~`mypy` 报 34 个错误~~ **本轮已清零** | 曾分布于 `agent/action.py`(20)、`modules/base.py`(5)、`jobs/executor.py`(2)、`api/scan.py`(2)、`modules/httpx.py`(2)、`config.py`(1)、`core/jobs.py`(1)、`modules/shuffledns.py`(1) | 已全部修掉，**未改 mypy 配置**；详见 CHANGELOG「M7」一节 |
 | 2 | ~~`/api/export` 返回服务器文件路径~~ **本轮已修** | `api/results.py` + `core/exports.py` | 现在只返回 `export_id` / `filename` / `download_url`；有契约测试锁定 |
 | 3 | `/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports` 匿名可读 | `api/tools.py`、`api/results.py` | 未授权即可读到扫描结果与库元信息；**按 DECISIONS-D 故意保持**，已用 `test_api_auth_contract.py` 锁定现状 |
 | 4 | 旧库并发写 `database is locked` | `storage.py` | **已缓解**：连接级 `busy_timeout=5000`；仍无 WAL（WAL 属迁移范畴，未动） |
@@ -196,11 +211,13 @@
 回归测试：`tests/unit/test_storage_connection.py`（10 项，含异常路径不泄漏、`busy_timeout`、
 表结构未变、以及用 `warnings.simplefilter("error", ResourceWarning)` 复现原始症状）。
 
-**mypy 错误分布**（`mypy app.py core api jobs storage.py modules`，共 34 条 / 8 个文件 / 55 source files）：
+**mypy 错误分布（历史记录：本轮已全部清零）**
 
-| 文件 | 错误数 | 备注 |
+`mypy app.py core api jobs storage.py modules` 曾是 **34 条 / 8 个文件**：
+
+| 文件 | 错误数 | 当时的备注 |
 |---|---|---|
-| `agent/action.py` | **20** | **最大头**。虽然 M7 的命令没写 `agent`，但 `app.py:21` 有 `from agent import handle_agent_message`，mypy 会顺着 import 查进来 |
+| `agent/action.py` | **20** | 最大头。虽然 M7 的命令没写 `agent`，但 `app.py:21` 有 `from agent import handle_agent_message`，mypy 会顺着 import 查进来 |
 | `modules/base.py` | 5 | M4 改过的文件 |
 | `jobs/executor.py` | 2 | |
 | `api/scan.py` | 2 | |
@@ -208,13 +225,15 @@
 | `config.py` | 1 | |
 | `core/jobs.py` | 1 | |
 | `modules/shuffledns.py` | 1 | M4 改过的文件 |
-| **合计** | **34** | `checked 53 source files` |
+| **合计** | **34** | |
 
-> **把 `agent` 显式加进命令并不会让它变多很多**：`mypy ... modules agent` → **41 errors in 9 files**
-> （多出的是 `agent/providers/openai_compat.py` 的 7 条）。也就是说 34 条里**已有 20 条来自 agent**。
+> **本轮已全部清零**（`Success: no issues found in 59 source files`），且**没有改 mypy 配置**。
+> 修复顺序按方案第 17 节给的优先级：`modules/base.py` → `jobs/executor.py` / `core/jobs.py`
+> → `api/*` → 最后 `agent/`。逐条对应关系见 `CHANGELOG.md` 的「M7」一节。
 >
-> **想让它绿，得先啃 `agent/action.py`**——那是 20 条。若只图「M7 命令通过」，
-> 因为 `app.py` 会 import agent，绕不开。
+> **唯一仍在命令范围外的是 `agent/providers/*`**：显式 `mypy ... modules agent` 会多出
+> 7 条 openai 存根相关的报错，而这一层**没有任何调用方**（Known Failure #8）。
+> 为它改组织方式属于「改运行语义」，本轮没做。
 
 ---
 
@@ -252,23 +271,25 @@
 | H | 是否删除 `%TEMP%\gef_old_clone_full.bundle`（105.7 MB 历史备份） | 无风险，纯清理 |
 | I | 两条已知 warning 是否顺手修 | 无风险，纯清理 |
 
-> **只要 E 拍板，M5 就可以开工**；其余项可以并行推进或延后。
+> **E 已按 `docs/DECISIONS.md` 的预填答案落地**（「唯一资产 + 观测历史」双层，纯增量新增表），
+> P1/M5 首批据此完成。F/I 也已落地。**A 仍需你手动处理**（见下 BLOCKED-A）；
+> C / H 属需明确授权项，未执行，已登记在 `docs/DECISIONS.md` §3。
 
 ---
 
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（P1 §10 Diff 前端露出轮）
+验证时间：2026-10-02（M7 mypy 清零轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 701 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
-mypy:   Found 34 errors in 8 files (checked 59 source files)     ← M7 待修，本轮未增减
+pytest: 705 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+mypy:   Success: no issues found in 59 source files        ← M7 验收命令，本轮由 34 errors 清零
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 `701`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → **M7 `705`**
 
 ---
 
@@ -278,21 +299,28 @@ node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建
 > 下面给的是**最近一次不含本文件改动的提交**，并附上自检命令。以 `git log -1` 为准。
 
 ```text
-536fe49173e08aa2208c915f98cba2c4fc3273bc   ← 最近一次代码/其他文档提交
-536fe49  docs: SECURITY.md 移除已过期的「多数 runner 未接入统一接口」 (2026-10-01)
+26c72460b60ff60d3dd20972b6f3b3ffc632a182   ← 最近一次代码提交（M7 mypy 清零）
+26c7246  fix: M7 类型收口——mypy 34 errors 清零（未改 mypy 配置） (2026-10-02)
 ```
 
 自检：
 
 ```powershell
 git log -1 --format="%H %s"     # 以这条输出为准
-git status -sb                  # ## main...origin/main 且无改动 = 已同步
+git status -sb                  # ## main...origin/main [ahead N] = 本地已提交、尚未 push
 ```
 
-与 `origin/main` **同步**，工作区**干净**。累计 6 个提交：
+与 `origin/main` **不同步**：本地 **ahead 5**（M0～M4 之后的 5 个里程碑提交尚未 push；
+夜间无人值守期间不做 `git push`，等你确认后再推）。累计 11 个提交：
 
 | 提交 | 说明 |
 |---|---|
+| `26c7246` | fix: M7 类型收口——mypy 34 errors 清零（未改 mypy 配置） |
+| `fa8d1c7` | feat: P1 §10 Diff 前端露出 + 修正「未变」计数被明细开关清零 |
+| `63e630f` | feat: P1 §12 旧库 → 新库的只读迁移脚本（含幂等与时间归一） |
+| `e1025c5` | feat: P1 统一资产模型与 Diff（assets/observations、canonical_key、资产页） |
+| `da1b595` | feat: P0 产品化加固（统一 Policy/Scope、Agent 边界、导出脱路径、状态机收口） |
+| `364ea25` | docs: PROJECT_STATE.md 修正「最近一次 commit」的自指问题 |
 | `0ddbcd2` | docs: 新增 PROJECT_STATE.md 项目状态板（本文件首次入库） |
 | `536fe49` | docs: SECURITY.md 移除已过期的「多数 runner 未接入统一接口」 |
 | `ab575bc` | docs: 同步 M4 增量（代码地图 + CHANGELOG） |
@@ -306,13 +334,13 @@ git status -sb                  # ## main...origin/main 且无改动 = 已同步
 
 ## 下一步该做什么（给接手者）
 
-1. **先推进 C 之前的确认**：把上表 A～I 里你能定的定掉，**E 是关键路径**。
-2. **M5 第一步**（E 拍板后）：`core/db.py:init_schema` 加 `assets` / `observations` 表 → 写迁移 → 从
-   `RunnerResult.data[]` 落观测 → 再做 diff 与页面。
+1. **先推进 C 之前的确认**：把上表 A～I 里你能定的定掉，**E 是关键路径**（已按 DECISIONS-E 落地，可回看）。
+2. **M5 剩余**（§11 统一执行链需授权，见 `docs/DECISIONS.md` §3）：资产过期自动化、观测 `data_json` 按字段拆列、
+   Diff 条目点进资产详情、旧库真实迁移（等你手动 `--apply`）。
 3. **顺手可做（不需要决策）**：
-   - 修 `config.py:236` 的绝对路径 `wordlist`；
+   - 修 `config.py` 里 `FEROXBUSTER_CONFIG.wordlist` 的开发机绝对路径；
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
-   - 清 mypy 的 34 个错误（从 `modules/httpx.py` 和 `modules/base.py` 开始，共 15 条）。
+   - M7 剩两项：SQLite 并发测试、本地 fixture HTTP 测试，以及一份测试报告。
 4. **改完代码记得**：刷新 `docs/CODEBASE_MAP.md` 对应章节与 `last-mapped`，更新 `CHANGELOG.md`，
    并回来更新本文件的「最近一次验证 / 最近一次 commit」。
 
@@ -323,8 +351,8 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 405 passed, 2 skipped
-python -m mypy app.py core api jobs storage.py modules # 期望当前 34 errors（M7 待修）
+python -m pytest                                      # 期望 705 passed, 2 skipped
+python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
 ```
 
 **运行期产物隔离（重要）**：测试**从不**写仓库的 `results/`。`tests/conftest.py` 会 patch
