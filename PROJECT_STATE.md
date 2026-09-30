@@ -216,17 +216,27 @@ CI:     GitHub Actions 最近一次 success（提交 536fe49）
 
 ## 最近一次 commit
 
+> **本节的写法说明**：状态板自己也会被提交，所以「记录 HEAD」天然会差一个提交。
+> 下面给的是**最近一次不含本文件改动的提交**，并附上自检命令。以 `git log -1` 为准。
+
 ```text
-536fe49173e08aa2208c915f98cba2c4fc3273bc
-536fe49  docs: SECURITY.md 移除已过期的「多数 runner 未接入统一接口」
-         (2026-10-01)
+536fe49173e08aa2208c915f98cba2c4fc3273bc   ← 最近一次代码/其他文档提交
+536fe49  docs: SECURITY.md 移除已过期的「多数 runner 未接入统一接口」 (2026-10-01)
 ```
 
-与 `origin/main` **同步**，工作区**干净**。累计 5 个提交：
+自检：
+
+```powershell
+git log -1 --format="%H %s"     # 以这条输出为准
+git status -sb                  # ## main...origin/main 且无改动 = 已同步
+```
+
+与 `origin/main` **同步**，工作区**干净**。累计 6 个提交：
 
 | 提交 | 说明 |
 |---|---|
-| `536fe49` | docs: SECRET_KEY…（未接入统一接口那条已过期） |
+| `0ddbcd2` | docs: 新增 PROJECT_STATE.md 项目状态板（本文件首次入库） |
+| `536fe49` | docs: SECURITY.md 移除已过期的「多数 runner 未接入统一接口」 |
 | `ab575bc` | docs: 同步 M4 增量（代码地图 + CHANGELOG） |
 | `c5bae37` | feat: M4 铺开统一 runner 接口到其余 14 个 runner |
 | `a311388` | fix: POSIX 下杀进程树会连调用方一起 SIGKILL |
