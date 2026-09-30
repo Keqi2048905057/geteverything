@@ -55,6 +55,53 @@ class AlterxRunner(BaseRunner):
             return [domain]
         return candidates
 
+    def build_command(self, domain, options=None):
+        """
+        构建 Alterx 命令行：``alterx -l <input_file> -o <output_file>``
+
+        Args:
+            domain: 目标域名字符串。
+            options: 必须提供 ``input_file``（候选列表），可选 ``output_file``。
+
+        Returns:
+            命令行的参数列表。
+
+        Raises:
+            KeyError: 未提供 ``input_file``。Alterx 没有候选列表就无法工作，
+                调用方应当先用 :meth:`_load_candidates` 准备。
+        """
+        options = options or {}
+        output_file = options.get("output_file") or self._build_output_file(domain)
+        cmd = [
+            self.config["path"],
+            "-l",
+            options["input_file"],
+            "-o",
+            output_file,
+        ]
+        cmd.extend(self.config.get("extra_args", []))
+        return cmd
+
+    def parse_output(self, stdout, stderr, artifacts=None):
+        """
+        从输出文件（或 stdout）读取生成的子域名变体。
+
+        Args:
+            stdout: 子进程标准输出（兜底来源）。
+            stderr: 子进程标准错误（未使用）。
+            artifacts: 支持 ``output_file``。
+
+        Returns:
+            tuple[list[str], str | None]: ``(变体列表, 解析错误码)``。
+        """
+        artifacts = artifacts or {}
+        output_file = artifacts.get("output_file")
+        if output_file:
+            values = self._read_results(output_file)
+            if values:
+                return values, None
+        return [line.strip() for line in (stdout or "").splitlines() if line.strip()], None
+
     def run_scan(self, domain):
         """
         执行 Alterx 子域名变体生成。
@@ -66,18 +113,14 @@ class AlterxRunner(BaseRunner):
 
         Returns:
             生成的子域名变体列表，扫描失败时返回空列表
+
+        Note:
+            需要区分「失败」与「零结果」时请调用 :meth:`BaseRunner.run`。
         """
         candidates = self._load_candidates(domain)
         input_file = self._write_input_file(domain, candidates)
         output_file = self._build_output_file(domain)
-        cmd = [
-            self.config["path"],
-            "-l",
-            input_file,
-            "-o",
-            output_file,
-        ]
-        cmd.extend(self.config.get("extra_args", []))
+        cmd = self.build_command(domain, {"input_file": input_file, "output_file": output_file})
 
         try:
             if not self._execute(cmd, domain):

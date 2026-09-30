@@ -36,19 +36,19 @@ class NaabuRunner(BaseRunner):
         """初始化 Naabu 运行器，加载 NAABU_CONFIG 配置。"""
         super().__init__(NAABU_CONFIG, "naabu")
 
-    def run_scan(self, domain):
+    def build_command(self, domain, options=None):
         """
-        执行 Naabu 端口扫描。
-
-        构建命令行：naabu -host <domain> -o <output_file> [-silent] [extra_args]
+        构建 Naabu 命令行：``naabu -host <domain> -o <output_file> [-silent]``
 
         Args:
-            domain: 目标域名或 IP 地址
+            domain: 目标域名或 IP 地址。
+            options: 支持 ``output_file``。
 
         Returns:
-            扫描到的开放端口列表，格式为 "ip:port"，扫描失败时返回空列表
+            命令行的参数列表。
         """
-        output_file = self._build_output_file(domain)
+        options = options or {}
+        output_file = options.get("output_file") or self._build_output_file(domain)
         cmd = [
             self.config["path"],
             "-host",
@@ -59,6 +59,43 @@ class NaabuRunner(BaseRunner):
         if self.config.get("silent", True):
             cmd.append("-silent")
         cmd.extend(self.config.get("extra_args", []))
+        return cmd
+
+    def parse_output(self, stdout, stderr, artifacts=None):
+        """
+        读取开放端口列表（``ip:port``）。
+
+        Args:
+            stdout: 子进程标准输出（兜底用）。
+            stderr: 子进程标准错误（未使用）。
+            artifacts: 支持 ``output_file``。
+
+        Returns:
+            tuple[list[str], str | None]: ``(端口列表, 解析错误码)``。
+        """
+        artifacts = artifacts or {}
+        output_file = artifacts.get("output_file")
+        if output_file:
+            values = self._read_results(output_file)
+            if values:
+                return values, None
+        return [line.strip() for line in (stdout or "").splitlines() if line.strip()], None
+
+    def run_scan(self, domain):
+        """
+        执行 Naabu 端口扫描。
+
+        Args:
+            domain: 目标域名或 IP 地址
+
+        Returns:
+            扫描到的开放端口列表，格式为 "ip:port"，扫描失败时返回空列表
+
+        Note:
+            需要区分「失败」与「零结果」时请调用 :meth:`BaseRunner.run`。
+        """
+        output_file = self._build_output_file(domain)
+        cmd = self.build_command(domain, {"output_file": output_file})
 
         if not self._execute(cmd, domain):
             return []
@@ -87,25 +124,62 @@ class NmapRunner(BaseRunner):
         """初始化 Nmap 运行器，加载 NMAP_CONFIG 配置。"""
         super().__init__(NMAP_CONFIG, "nmap")
 
-    def run_scan(self, domain):
+    def build_command(self, domain, options=None):
         """
-        执行 Nmap 端口扫描。
-
-        构建命令行：nmap [-p <ports>] -oN <output_file> <domain> [extra_args]
+        构建 Nmap 命令行：``nmap [-p <ports>] -oN <output_file> <domain>``
 
         Args:
-            domain: 目标域名或 IP 地址
+            domain: 目标域名或 IP 地址。
+            options: 支持 ``output_file``。
 
         Returns:
-            Nmap 扫描结果文本行列表，扫描失败时返回空列表
+            命令行的参数列表。
         """
-        output_file = self._build_output_file(domain)
+        options = options or {}
+        output_file = options.get("output_file") or self._build_output_file(domain)
         cmd = [self.config["path"]]
         ports = self.config.get("ports")
         if ports:
             cmd.extend(["-p", str(ports)])
         cmd.extend(["-oN", output_file, domain])
         cmd.extend(self.config.get("extra_args", []))
+        return cmd
+
+    def parse_output(self, stdout, stderr, artifacts=None):
+        """
+        读取 Nmap 普通文本输出。
+
+        Args:
+            stdout: 子进程标准输出（兜底用）。
+            stderr: 子进程标准错误（未使用）。
+            artifacts: 支持 ``output_file``（``-oN`` 写出的文件）。
+
+        Returns:
+            tuple[list[str], str | None]: ``(输出行列表, 解析错误码)``。
+        """
+        artifacts = artifacts or {}
+        output_file = artifacts.get("output_file")
+        if output_file:
+            values = self._read_results(output_file)
+            if values:
+                return values, None
+        return [line.strip() for line in (stdout or "").splitlines() if line.strip()], None
+
+    def run_scan(self, domain):
+        """
+        执行 Nmap 端口扫描。
+
+        Args:
+            domain: 目标域名或 IP 地址
+
+        Returns:
+            Nmap 扫描结果文本行列表，扫描失败时返回空列表
+
+        Note:
+            需要区分「失败」与「零结果」时请调用 :meth:`BaseRunner.run`。
+        """
+        output_file = self._build_output_file(domain)
+        cmd = self.build_command(domain, {"output_file": output_file})
 
         if not self._execute(cmd, domain):
             return []

@@ -62,6 +62,49 @@ class AssetfinderRunner(BaseRunner):
                 seen.add(value)
         return normalized
 
+    def build_command(self, domain, options=None):
+        """
+        构建 Assetfinder 命令行：``assetfinder [--subs-only] <domain>``
+
+        Assetfinder 没有 ``-o`` 参数，结果只走 stdout，由
+        :meth:`BaseRunner._execute_stdout` 重定向落盘。
+
+        Args:
+            domain: 目标域名字符串。
+            options: 当前未使用的占位参数（与其他 runner 签名保持一致）。
+
+        Returns:
+            命令行的参数列表。
+        """
+        cmd = [self.config["path"]]
+        if self.config.get("subs_only", True):
+            cmd.append("--subs-only")
+        cmd.append(domain)
+        cmd.extend(self.config.get("extra_args", []))
+        return cmd
+
+    def parse_output(self, stdout, stderr, artifacts=None):
+        """
+        从输出文件（或 stdout）解析子域名并规范化。
+
+        Args:
+            stdout: 子进程标准输出（没有落盘文件时的兜底来源）。
+            stderr: 子进程标准错误（未使用）。
+            artifacts: 可选 dict，支持 ``output_file``；另可传 ``domain``。
+
+        Returns:
+            tuple[list[str], str | None]: ``(子域名列表, 解析错误码)``。
+        """
+        artifacts = artifacts or {}
+        domain = artifacts.get("domain") or ""
+        output_file = artifacts.get("output_file")
+        lines = self._read_results(output_file) if output_file else []
+        if not lines:
+            lines = [line.strip() for line in (stdout or "").splitlines() if line.strip()]
+        if not domain:
+            return lines, None
+        return self._normalize_results(lines, domain), None
+
     def run_scan(self, domain):
         """
         执行 Assetfinder 子域名扫描。
@@ -74,13 +117,12 @@ class AssetfinderRunner(BaseRunner):
 
         Returns:
             规范化后的去重子域名列表，扫描失败时返回空列表
+
+        Note:
+           需要区分「失败」与「零结果」时请调用 :meth:`BaseRunner.run`。
         """
         output_file = self._build_output_file(domain)
-        cmd = [self.config["path"]]
-        if self.config.get("subs_only", True):
-            cmd.append("--subs-only")
-        cmd.append(domain)
-        cmd.extend(self.config.get("extra_args", []))
+        cmd = self.build_command(domain)
 
         if not self._execute_stdout(cmd, domain, output_file):
             return []

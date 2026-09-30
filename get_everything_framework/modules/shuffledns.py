@@ -9,6 +9,11 @@
 
 依赖: dnsx (ProjectDiscovery)
 不依赖: massdns, shuffledns 二进制
+
+M4 起本 runner 也接入统一接口：真正执行的是 dnsx，因此
+``build_command`` / ``parse_output`` 描述的是「用 dnsx 解析一批候选」
+这一原子动作，``run_scan`` 仍是编排它的混合流程。与其它 runner 的区别是
+这里**没有** ``-o`` 输出文件（结果只走 stdout），落盘由本 runner 自己完成。
 """
 
 import json
@@ -19,6 +24,7 @@ import subprocess
 import tempfile
 
 from config import SHUFFLEDNS_CONFIG
+from core.errors import ErrorCode
 from storage import ScanResultStore
 
 from .base import BaseRunner
@@ -58,6 +64,26 @@ class ShufflednsRunner(BaseRunner):
         ))
 
     # ── 字典爆破 ───────────────────────────────────────
+    def _run_dnsx(self, input_file, *, json_mode=True, resp_only=False, timeout=None):
+        """执行一次 dnsx 并返回 ``(returncode, stdout, stderr)``。
+
+        统一走 :meth:`BaseRunner._run_subprocess`：它带真正的超时与进程树
+        清理。历史实现用裸 ``subprocess.run(timeout=...)``，Windows 上超时
+        只杀掉包装层，孤儿 dnsx 攥着管道会让整条调用永久卡住。
+
+        失败一律降级成 ``(None, "", "")``，由调用方当成「本轮 dnsx 没结果」，
+        不让一次 dnsx 故障把整个混合流程带崩。
+        """
+        cmd = self.build_command(
+            None,
+            {"input_file": input_file, "json": json_mode, "resp_only": resp_only},
+        )
+        try:
+            return self._run_subprocess(self._resolve_command(cmd), timeout or self._timeout_seconds())
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+            print(f"[!] dnsx 未完成: {exc}")
+            return None, "", ""
+
     def _bruteforce_with_dnsx(self, wordlist, domain):
         """读字典 → 拼出 <word>.<domain> 候选 → dnsx 解析"""
         if not os.path.exists(wordlist):
@@ -84,16 +110,14 @@ class ShufflednsRunner(BaseRunner):
             f.write("\n".join(candidates))
 
         try:
-            # dnsx 批量解析, -resp-only 只输出有响应的
-            r = subprocess.run(
-                ["dnsx", "-l", words_file, "-silent", "-resp-only"],
-                capture_output=True, text=True, timeout=300,
-            )
+            returncode, stdout, stderr = self._run_dnsx(words_file, json_mode=False, resp_only=True)
+            if returncode != 0:
+                return []
+            values, _error = self.parse_output(stdout, stderr, None)
+            return [v if isinstance(v, str) else v.get("value", "") for v in values if v]
         finally:
             if os.path.exists(words_file):
                 os.unlink(words_file)
-
-        return [line.strip() for line in r.stdout.splitlines() if line.strip()]
 
     # ── 已有候选验证 ───────────────────────────────────
     def _resolve_dnsx(self, candidates):
@@ -105,23 +129,21 @@ class ShufflednsRunner(BaseRunner):
         try:
             f.write("\n".join(candidates))
             f.close()
-            r = subprocess.run(
-                ["dnsx", "-l", f.name, "-silent", "-json"],
-                capture_output=True, text=True, timeout=120,
-            )
+            returncode, stdout, stderr = self._run_dnsx(f.name, json_mode=True)
         finally:
             os.unlink(f.name)
 
+        if returncode != 0:
+            return {}
+
+        values, _error = self.parse_output(stdout, stderr, None)
         resolved = {}
-        for line in r.stdout.splitlines():
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            host = rec.get("host", "")
-            ips = rec.get("a", [])
-            if host and ips:
-                resolved[host] = ips
+        for item in values:
+            if isinstance(item, dict):
+                host = item.get("value", "")
+                ips = item.get("ips") or []
+                if host and ips:
+                    resolved[host] = ips
         return resolved
 
     # ── 泛解析 IP 检测 ──────────────────────────────────
@@ -143,21 +165,17 @@ class ShufflednsRunner(BaseRunner):
         try:
             f.write("\n".join(probes))
             f.close()
-            r = subprocess.run(
-                ["dnsx", "-l", f.name, "-silent", "-json"],
-                capture_output=True, text=True, timeout=30,
-            )
+            # 泛解析探测是辅助步骤，给一个更短的上限，别为它多等两分钟。
+            returncode, stdout, stderr = self._run_dnsx(f.name, json_mode=True, timeout=30)
         finally:
             os.unlink(f.name)
 
         wips = set()
-        for line in r.stdout.splitlines():
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            for ip in rec.get("a", []):
-                wips.add(ip)
+        if returncode == 0:
+            values, _error = self.parse_output(stdout, stderr, None)
+            for item in values:
+                if isinstance(item, dict):
+                    wips.update(item.get("ips") or [])
 
         self._WILDCARD_CACHE[domain] = wips
         return wips
@@ -169,6 +187,96 @@ class ShufflednsRunner(BaseRunner):
         return hashlib.md5(value.encode("utf-8")).hexdigest()[:12]
 
     # ── 主流程 ───────────────────────────────────────
+    def build_command(self, domain, options=None):
+        """构建「用 dnsx 解析候选列表」的命令行。
+
+        ShuffleDNS 自身没有二进制（本实现用 dnsx 代替 massdns），因此这里
+        构建的是 dnsx 命令行：``dnsx -l <input_file> -silent -json``。
+
+        Args:
+            domain: 目标域名（仅用于日志与默认输入文件命名）。
+            options: 必须提供 ``input_file``（候选列表）；``json`` 控制是否
+                要 ``-json`` 逐行输出（泛解析检测与 IP 解析都需要）。
+
+        Returns:
+            命令行的参数列表。
+
+        Raises:
+            KeyError: 未提供 ``input_file``。
+        """
+        options = options or {}
+        input_file = options["input_file"]
+        cmd = ["dnsx", "-l", input_file]
+        if self.config.get("silent", True):
+            cmd.append("-silent")
+        if options.get("json", True):
+            cmd.append("-json")
+        if options.get("resp_only"):
+            cmd.append("-resp-only")
+        cmd.extend(self.config.get("extra_args", []))
+        return cmd
+
+    def parse_output(self, stdout, stderr, artifacts=None):
+        """解析 dnsx 的输出。
+
+        两种形态都支持：
+
+        * ``-json``：每行一个 JSON 对象，取出 ``host`` 与 ``a``（IP 列表），
+          返回 ``list[dict]``，每个元素形如 ``{"value": host, "ips": [...]}``；
+        * ``-resp-only`` 或纯文本：按行切成字符串列表。
+
+        Args:
+            stdout: 子进程标准输出。
+            stderr: 子进程标准错误（未使用）。
+            artifacts: 可选 ``output_file``（本 runner 一般不落盘，
+                提供它是为了与其它 runner 的签名保持一致）。
+
+        Returns:
+            tuple[list, str | None]: ``(解析结果, 解析错误码)``。
+        """
+        artifacts = artifacts or {}
+        output_file = artifacts.get("output_file")
+        text = ""
+        if output_file and os.path.exists(output_file):
+            with open(output_file, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        if not text:
+            text = stdout or ""
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return [], None
+
+        # 判断是否是 -json 形态：只要首行能解析成带 host 的 JSON 就走 JSON 分支。
+        records = []
+        malformed = 0
+        json_like = 0
+        for line in lines:
+            if not line.startswith("{"):
+                continue
+            json_like += 1
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                malformed += 1
+                continue
+            if not isinstance(raw, dict):
+                malformed += 1
+                continue
+            host = raw.get("host") or raw.get("input") or ""
+            ips = raw.get("a") or raw.get("aaaa") or []
+            if isinstance(ips, str):
+                ips = [ips]
+            if host:
+                records.append({"value": host, "ips": list(ips)})
+
+        if records:
+            return records, None
+        if json_like and malformed == json_like:
+            # 看着像 JSON 却一行都没解析成功：这是解析失败，不是零结果。
+            return [], ErrorCode.PARSE_ERROR
+        return lines, None
+
     def run_scan(self, domain):
         """执行 shuffledns 混合模式扫描"""
         # 1. 字典爆破

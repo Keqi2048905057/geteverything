@@ -433,7 +433,7 @@ class BaseRunner:
 
         return [resolved] + cmd[1:]
 
-    def _run_subprocess(self, cmd, timeout: int):
+    def _run_subprocess(self, cmd, timeout: int, cwd=None):
         """执行子进程并**真正**落实超时（返回 ``(returncode, stdout, stderr)``）。
 
         为什么不能用 ``subprocess.run(timeout=...)``：Windows 上 ``.cmd`` /
@@ -454,6 +454,12 @@ class BaseRunner:
         里的 ``os.killpg(os.getpgid(child))`` 会把 worker 自己也一起 ``SIGKILL``
         掉。Windows 不支持 ``start_new_session``（会被忽略），那边靠
         ``taskkill /T`` 按进程树清理，不依赖进程组。
+
+        Args:
+            cmd: 命令行参数列表。
+            timeout: 超时秒数。
+            cwd: 子进程工作目录；``None`` 表示继承当前目录。
+                enscan 这类「把结果写在自己工作目录下」的工具需要它。
         """
         process = subprocess.Popen(
             cmd,
@@ -462,6 +468,7 @@ class BaseRunner:
             text=True,
             encoding="utf-8",
             errors="replace",
+            cwd=cwd,
             start_new_session=os.name != "nt",
         )
         try:
