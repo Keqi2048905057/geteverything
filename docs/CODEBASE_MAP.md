@@ -168,6 +168,13 @@
 - `modules/registry.py:RUNNER_REGISTRY`（dict，17 键）→ `get_supported_runners()` 返回排序键列表；`build_runner(tool_name)` 无参实例化，未注册抛 `ValueError`。
 - `modules/__init__.py` 只重导出 `build_runner`、`get_supported_runners`。
 
+> **本节描述的是 M0 基线的 `base.py`。** M4 起执行路径改过了，读代码时以这几条为准：
+> `_run_subprocess`（`Popen` + `communicate(timeout)` + 进程树清理）取代了
+> `subprocess.run(timeout=...)`；`_execute` / `_execute_stdout` 在跑之前先删同名旧输出文件；
+> 每个 runner 另有 `build_command` / `parse_output` / `run` 三个方法，
+> 失败不再降级成 `return False`，而是带上 `error_code`（详见 §9.10）。
+> 表里「实际命令」一列仍然准确——`build_command` 拼出来的就是这些。
+
 | 文件 | 职责 | 关键类 | 对应外部工具（实际命令） | 被谁调用 | 依赖谁 |
 |---|---|---|---|---|---|
 | `modules/base.py` | 所有 Runner 基类：命令解析/执行/读写/临时文件 | `BaseRunner` | —（无） | 17 个 Runner 继承 | `config.OUTPUT_DIR`、`subprocess`、`shutil`、`hashlib`、`tempfile` |
@@ -184,7 +191,7 @@
 | `modules/gospider.py` / `katana.py` / `waybackurls.py` / `dirsearch.py` / `feroxbuster.py` | 纯重导出薄壳，无逻辑 | —（仅 `from .url_tools import XRunner`） | 同上 | registry | `url_tools` |
 | `modules/port_tools.py` | 端口扫描两兄弟的**真实实现** | `NaabuRunner`、`NmapRunner` | `naabu -host <d> -o <f> -silent`；`nmap [-p N] -oN <f> <d>` | registry（经 naabu.py / nmap.py） | base、`NAABU_CONFIG`/`NMAP_CONFIG` |
 | `modules/naabu.py` / `nmap.py` | 纯重导出薄壳 | — | 同上 | registry | `port_tools` |
-| `modules/enscan.py` | 企业信息收集，产物走「运行前后 glob 新 JSON 文件」 | `ENScanRunner`（`_parse_json_output`、`run_scan`） | `enscan -n <keyword> -json`（`cwd=results/`） | registry | base、`glob`、`ENSCAN_CONFIG` |
+| `modules/enscan.py` | 企业信息收集，产物走「运行前后 glob 新 JSON 文件」 | `ENScanRunner`（`_parse_json_output`、`build_command`、`parse_output`、`run_scan`） | `enscan -n <keyword> -json`（`cwd=results/`，经 `_run_subprocess`） | registry | base、`glob`、`ENSCAN_CONFIG` |
 
 ### 3.4 `agent/`
 
@@ -261,7 +268,8 @@
 **与描述不符之处**：
 - 没有"任务执行/任务状态"实体。`scan_runs` 只有 `id/domain/tool_name/result_count/created_at`（`storage.py:137-147`），**没有 status、started_at、finished_at、error_code、progress**。
 - 没有异步：没有 `threading`/`Queue`/`celery`/`apscheduler`（全仓 grep 无匹配），`api/scan.py:105` 同步等待所有子进程结束。
-- `error_code` 只在设计文档里存在（`本机联调版实施方案_DSH.md` §6.2），**代码中没有任何一处定义或写入 `error_code`**。
+- `error_code` 只在设计文档里存在（本机联调版方案 §6.2），**代码中没有任何一处定义或写入 `error_code`**。
+  ▶ **M4 已解决**：`core/errors.py:ErrorCode` 定义了全部错误码，见 §9.10。
 
 ### 4.b 适配器的加载与调用：如何发现模块、如何判定成功/失败/超时/空结果
 
@@ -415,7 +423,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | katana | `katana_results` | `url` | url |
 | gospider | `gospider_results` | `url` | url |
 
-实测行数（当前工作副本）：`waybackurls_results=296`、`enscan_results=37`、`feroxbuster_results=12`、`dirsearch_results=9`、`amass_intel_results=2`、`scan_runs=28`，其余为 0。**没有** `subdomain_results`、`alive_results`、`jobs`、`assets`、`observations`、`artifacts`、`scopes`、`settings` 等表。
+实测行数（当前工作副本）：`waybackurls_results=296`、`enscan_results=37`、`feroxbuster_results=12`、`dirsearch_results=9`、`amass_intel_results=2`、`scan_runs=28`，其余为 0。旧库里**没有** `subdomain_results`、`alive_results`、`jobs`、`assets`、`observations`、`artifacts`、`scopes`、`settings` 等表——`jobs` / `artifacts` / `scopes` 等属于**新库** `results/local.db`（§9.3）。
 
 **表结构的三个硬约束（决定 bug 表现）**：
 1. **专属表没有 `category` 列**（分类信息硬编码在 `TOOL_DATABASES` 里），所以 `get_tool_results(category=...)` 在专属表分支无法按分类过滤，只能靠 `TOOL_DATABASES[meta]["category"]` 反查。
@@ -429,7 +437,9 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 **代码中不存在任务状态机。** `scan_runs` 无 `status` 列，写入即终结（`storage.py:_create_scan_run` 一条 INSERT，无 UPDATE）。API 也没有 job 概念。
 
-`queued / running / succeeded / partial / failed / timeout / cancelled / interrupted` 这套状态枚举，以及 `tool_not_found/permission_denied/invalid_target/scope_violation/timeout/parse_error/network_error/rate_limited/partial_success/unknown_error` 这套 error_code，**只写在设计文档** `本机联调版实施方案_DSH.md`（§6.1 / §6.2）与 `DSH_执行提示词.md` 第 7 条里，属于**尚未实现的 M3/M4 目标**。当前的"状态"只有：HTTP 请求是否返回、子进程是否 exit 0（被吞成 `bool`）、`scan_runs` 是否多了一行。
+`queued / running / succeeded / partial / failed / timeout / cancelled / interrupted` 这套状态枚举，以及 `tool_not_found/permission_denied/invalid_target/scope_violation/timeout/parse_error/network_error/rate_limited/partial_success/unknown_error` 这套 error_code，在 M0 基线时**只写在设计文档**（本机联调版方案 §6.1 / §6.2）里，属于当时**尚未实现的 M3/M4 目标**。当时的"状态"只有：HTTP 请求是否返回、子进程是否 exit 0（被吞成 `bool`）、`scan_runs` 是否多了一行。
+
+▶ **M3 已实现状态机**（`core/jobs.py`，见 §9.4），**M4 已实现 error_code**（`core/errors.py`，见 §9.10）。
 
 ---
 
@@ -465,10 +475,15 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 ## 7. 已知薄弱点 / 坑（实际阅读所得）
 
 > 共 36 条，每条都给出文件与函数位置，可直接跳转。
+>
+> **这是 M0 基线时通读代码的记录**，作为「原始代码长什么样」保留。
+> 其中已修复的条目在文末加了 `▶` 标注并指向 §9.9 的现状修正表；
+> 未加标注的仍然成立。
 
 ### 7.1 异常与错误处理
 
-1. **失败被吞成空结果**：`modules/base.py:_execute` 与 `_execute_stdout` 把 `FileNotFoundError`/`TimeoutExpired`/`CalledProcessError` 全部降级为 `return False`，Runner 再 `return []`。调用方无法区分"工具没装""超时""非 0 退出""本来就没结果"。这在设计文档里被列为 P0（`本机联调版实施方案_DSH.md` §1.1），代码未改。
+1. **失败被吞成空结果**：`modules/base.py:_execute` 与 `_execute_stdout` 把 `FileNotFoundError`/`TimeoutExpired`/`CalledProcessError` 全部降级为 `return False`，Runner 再 `return []`。调用方无法区分"工具没装""超时""非 0 退出""本来就没结果"。这在设计文档里被列为 P0，代码未改。
+   ▶ **M4 已解决**：统一 `RunnerResult` + `error_code`，详见 §9.10。
 2. **异常冒泡路径不一致**：`tool_runner.py:137` 对 `runner.run_scan` 无保护，而 `modules/httpx.py:177,211` 会 `raise RuntimeError`、`modules/shuffledns.py` 会抛 `FileNotFoundError/TimeoutExpired`、`modules/amass.py:76` 会抛 `ValueError` → 在 `api/scan.py` 直接 500，在 Agent 路径被 `agent/action.py:366` 兜住，行为取决于从哪个入口进来。
 3. **`SystemExit` 与 HTTP 混用**：`tool_runner.py:111/117/121` 用 `raise SystemExit(1)` 表达"无目标/无工具"，这是 CLI 语义；`api/scan.py:execute_scan` 不捕获 `BaseException`，Web 场景下表现为 500 或被 dev server 中断。`app.py:112` 是唯一显式处理 `SystemExit` 的地方。
 4. **`_execute_tool` 的宽泛捕获**：`agent/action.py:366` `except Exception as exc: result = {"ok": False, "error": str(exc), "tool": action}` —— 会把 `KeyError`/`AttributeError` 这类编程错误伪装成"工具执行失败"反馈给用户，排查时容易走错方向。
@@ -519,7 +534,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 ### 7.7 仓库与工程卫生
 
 31. **敏感产物已进 Git**（`git ls-files` 实测 83 个跟踪文件中包含）：`results/scan_results.db`、`results/*.txt`、`results/outs/*.json`（真实企业名与域名）、`uploads/*.txt`（真实目标清单）、`scripts/dirsearch.exe`、`scripts/OneForAll.exe`、`scripts/oneforall.exe`、`SecLists/raft-small-directories.txt`。仓库根的 `.gitignore` 虽有 `**/results/`、`**/uploads/`、`*.db`，但对**已跟踪文件无效**。
-32. **首页无模板**：`app.py:160` 渲染 `index.html`，仓库无 `web/` 目录（`本机联调版实施方案_DSH.md` 也把它列为 P0）。
+32. **首页无模板**：`app.py:160` 渲染 `index.html`，仓库无 `web/` 目录（当时的实施方案也把它列为 P0）。▶ **M1 已解决**：`web/templates/` 与 `web/static/` 已补齐。
 33. **测试覆盖极薄**：`tests/` 下只有 2 个单元测试文件（导入、布局、常量），`tests/integration/` 与 `tests/fixtures/` 均为占位 `__init__.py`；**没有任何针对 Runner、storage、intent/planner 的测试**，也没有 mock runner。
 34. **`app.py` 只有单个应用实例**（模块级 `app = Flask(...)`），没有 `create_app()` 工厂；`tests/unit/test_smoke.py:21` 直接 `import app` 并检查 `app.app.url_map`。
 35. **`_is_storage_question` 关键词过宽**：`agent/action.py:25-38` 的 `DATABASE_QUERY_KEYWORDS` 含 `"数据库"`、`"保存位置"`、`"db"` 等；`:138` 的条件只在"非 analyze 意图且无扫描词"时短路，边界用例（如"把结果保存位置告诉我然后扫一下"）容易被误判成纯问答而**静默不执行扫描**。
@@ -581,7 +596,7 @@ get_everything_framework/
 │   ├── ids.py                带前缀的 UUID4（job_/step_/scope_/upload_/evt_…）
 │   ├── db.py                 本机应用库连接（WAL + busy_timeout + BEGIN IMMEDIATE 事务）
 │   ├── audit.py              audit_events 写入与查询
-│   ├── db schema 见 core/db.py:init_schema  scopes / audit_events / uploads / jobs / job_steps / job_events
+│   ├── db schema 见 core/db.py:init_schema  scopes / audit_events / uploads / jobs / job_steps / job_events / artifacts
 │   ├── scope.py              Scope 模型与目标校验（排除优先、拒全放行）
 │   ├── scope_store.py        Scope 持久化 + require()（无 Scope 即拒绝）
 │   ├── uploads.py            受控上传：uploads/<id>/{raw.*,normalized.txt,meta.json}
@@ -590,12 +605,14 @@ get_everything_framework/
 │   ├── security.py           SECRET_KEY 弱值检测 + 进程级一次性密钥
 │   ├── auth.py               单一管理员 Token + Session + X-Local-Token
 │   ├── health.py             /health 采集（database / worker / queue / tools / modes / security）
+│   ├── runner_result.py      M4：Observation / ToolHealth / RunnerResult + scrub_command
+│   ├── artifacts.py          M4：原始证据落盘（stdout/stderr/output）+ 登记 + 截断脱敏读取
 │   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复
 ├── jobs/                     ← 进程层（刻意不放进 core/）
 │   ├── executor.py           执行逻辑（与进程无关，可直接单测调用）
 │   └── worker.py             独立 worker 进程：python -m jobs.worker
 ├── api/
-│   └── jobs.py               /api/jobs*（7 个接口）
+│   └── jobs.py               /api/jobs*（7 个接口）+ /api/jobs/<id>/artifacts + /api/artifacts/<id>
 └── web/
     ├── templates/index.html  首页（Scope 下拉 + 创建任务 + 任务表）
     ├── templates/login.html  登录页
@@ -623,6 +640,8 @@ get_everything_framework/
 | POST | `/api/jobs/{id}/retry` | `api/jobs.py` | **需管理员** | M3 新增 |
 | GET | `/api/jobs/{id}/steps` | `api/jobs.py` | **需管理员** | M3 新增（页面轮询用） |
 | GET | `/api/jobs/{id}/events` | `api/jobs.py` | **需管理员** | M3 新增 |
+| GET | `/api/jobs/{id}/artifacts` | `api/jobs.py` | **需管理员** | M4 新增；只给元数据（id/kind/size/sha256），**不下发路径** |
+| GET | `/api/artifacts/{id}` | `api/jobs.py` | **需管理员** | M4 新增；返回内容（默认 ≤64 KB，截断+脱敏，无 `path`） |
 | POST | `/api/run` | `api/scan.py` | **需管理员** | M2 起：必填 `scope_id`，拒绝 `file_path`，收 `upload_id`；`mode=mock`（默认）/`real` |
 | POST | `/api/tool/<n>/run` | `api/scan.py` | **需管理员** | 同上，单工具 |
 | POST | `/api/upload` | `api/upload.py` | **需管理员** | M2 起只返回 `upload_id`，不再暴露服务器路径 |
@@ -692,19 +711,19 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 | 项 | 现状 | 计划 |
 |---|---|---|
-| `storage.py` 并发 | 无 WAL、`with conn` 只提交不关闭、每方法新建连接 | M4/M5 迁移时一并处理 |
+| `storage.py` 并发 | 无 WAL、`with conn` 只提交不关闭、每方法新建连接 | M5 迁移时一并处理 |
 | `/api/export` | 仍只返回服务器路径，不是流式下载 | M6 |
 | `/api/results`、`/api/tools` | 仍匿名可读 | 方案未要求，需确认 |
 | 前端轮询 | 任务表 3 秒轮询 `/api/jobs`，未做 SSE/WebSocket | 本机联调够用 |
-| 真实 runner 的结构化结果 | `RunnerResult`（exit_code/duration_ms/command_preview/raw_artifact_id）未落地 | M4 |
-| `assets` / `observations` / `artifacts` 表 | 未创建 | M5 |
-| 敏感产物仍在 Git 索引 | `results/`、`uploads/`、`SecLists/`、`scripts/*.exe` | 待用户确认后 `git rm --cached` |
+| 真实 runner 的结构化结果 | **已落地**（M4）：统一 `RunnerResult`，见 §9.10 | — |
+| `assets` / `observations` / `artifacts` 表 | `artifacts` 已建（M4）；`assets` / `observations` 未创建 | M5 |
+| 敏感产物仍在 Git 索引 | **已解决**：自有仓库 `geteverything` 只保留一份干净历史，`results/`、`uploads/`、`SecLists/`、`scripts/*.exe` 均未入库 | — |
 
 ### 9.8 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 236 passed（M1 基线 70 → M2 142 → M3 236）
+$ python -m pytest           # 405 passed, 2 skipped（M1 70 → M2 142 → M3 236 → M4 405）
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
@@ -715,11 +734,16 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/unit/test_security_baseline.py` | SECRET_KEY 弱值、受控上传、`.env` 原子写（M2） |
 | `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry（M3） |
 | `tests/unit/test_jobs_executor.py` | mock/real 分流、进度、取消边界、**真实子进程 kill/重启**（M3） |
+| `tests/unit/test_runner_result.py` | 命令预览脱敏、`RunnerResult` 组装、artifact 落盘/读取（M4） |
+| `tests/unit/test_runner_interface.py` | **真实子进程**：成功/零结果/未安装/非零/127/超时/SystemExit/残留文件清理（M4） |
+| `tests/unit/test_runners_m4.py` | subfinder / httpx / dnsx 的 `build_command` + `parse_output`（M4） |
+| `tests/unit/test_runners_m4_rollout.py` | **其余 14 个 runner** 的接口覆盖 + 解析 + 横切自检（M4 铺开） |
 | `tests/integration/test_web_baseline.py` | 首页可渲染、登录/登出（M1） |
 | `tests/integration/test_m2_security.py` | 认证、受控上传、file_path 拒绝、审计（M2） |
 | `tests/integration/test_m2_scope_enforcement.py` | 无 Scope/越界拒绝、mock 不碰真实 runner（M2） |
 | `tests/integration/test_m2_page_scan.py` | 首页 = 异步任务、不阻塞（M2/M3） |
 | `tests/integration/test_m3_jobs_api.py` | 7 个 jobs 接口、10 个任务响应时间、状态持久化（M3） |
+| `tests/integration/test_m4_runner_result.py` | RunnerResult 端到端：零结果 vs 失败、artifact 不下发路径（M4） |
 
 ### 9.9 第 6 节 BUG 索引表的**现状修正**
 
@@ -732,6 +756,97 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | #23「SECRET_KEY 默认固定值」 | 已解决：默认值清空，弱值告警 + 进程级一次性密钥，有回归测试 |
 | #24「/api/settings 可匿名写 .env」 | 已解决：需管理员；原子写（临时文件+fsync+`os.replace`）+ 写入前备份 + 审计（只记字段名） |
 | #32「首页无模板」 | 已解决：`web/templates/` 与 `web/static/` 已补齐 |
-| #33「测试覆盖极薄」 | 已解决：236 项，含真实子进程 kill/重启 |
+| #33「测试覆盖极薄」 | 已解决：405 项，含真实子进程 kill/重启 |
 | #34「无 create_app()」 | 已加 `create_app()`，但仍保留模块级单例 `app`（测试与 waitress 共用） |
-| #2 第 1 条「残留输出文件」 | **仍然存在**：`results/<md5(domain)>_<tool>.txt` 会被 `_read_results` 当成本次结果，仅影响 `mode=real` |
+| #2 第 1 条「残留输出文件」 | **已解决**（M4）：`_execute` / `_execute_stdout` 执行前先删同名旧文件；删不掉时写 `stale_output_warning` 到 `last_execution`，不再把上次输出当本次结果 |
+| #2 第 5 条「SQLite 并发」 | **仅新库已解决**：`core/db.py` 用 WAL + `busy_timeout=5000`；`storage.py` 旧库未动 |
+
+### 9.10 M4：统一结果与错误模型（**「失败被吞成空结果」的终点**）
+
+§9.9 与第 7.7 节都记过这个 P0：`modules/base.py:_execute` 把
+`FileNotFoundError` / `TimeoutExpired` / `CalledProcessError` 全部降级成 `return False`，
+Runner 再 `return []`，调用方**无法区分**「工具没装」「超时」「非零退出」「本来就没结果」。
+M4 起这条链路被拆开：
+
+```text
+core/runner_result.py
+  ├── Observation     一条结构化观测：category + value + data + source_tool
+  ├── ToolHealth      工具健康度：status + message + checked_at
+  └── RunnerResult    status / error_code / exit_code / duration_ms /
+                      command_preview / data[] / stderr_preview / parser_version
+      ├── ok(data, ...)        成功（error_code 可为 no_results）
+      ├── failure(code, ...)   失败
+      ├── to_dict()            API 出参
+      └── to_step_outcome()    写进 job_steps 的形状
+```
+
+**统一接口**（方案第 8.1 节）：每个 runner 都要实现
+
+| 方法 | 契约 |
+|---|---|
+| `build_command(target, options)` | 只拼命令行，**不执行**、不碰磁盘；`options` 至少支持 `output_file` |
+| `parse_output(stdout, stderr, artifacts)` | 只解析，返回 `(values, error_code)`；不抛异常、不执行 |
+| `run(target)` | 基类提供：执行 + 解析 + 组装 `RunnerResult`，**绝不返回裸空列表** |
+| `run_scan(target)` | 历史签名保留：返回字符串列表，供 `tool_runner.py` 等旧调用方使用 |
+
+**17 个 runner 的铺开状态**（以 `modules/registry.py` 为准）：
+
+| 分类 | runner | 输出方式 | 备注 |
+|---|---|---|---|
+| 子域发现 | `subfinder` | `-o <file>` | 首批 |
+| | `amass` / `amass_intel` | `-o <file>` | amass_intel 入参是 ASN，非法即 `ValueError` |
+| | `assetfinder` | stdout | 无 `-o`；解析时按目标域正则规范化 |
+| | `oneforall` | stdout | 经 `python oneforall.py ... run` 调用 |
+| | `enscan` | **自有工作目录下的 `*.json`** | 靠执行前后 diff 找新文件；必须传 `cwd=output_dir`，并走带超时的 `_run_subprocess` |
+| | `alterx` | `-l <in> -o <out>` | 候选列表来自 `ScanResultStore`，缺 `input_file` 抛 `KeyError` |
+| | `shuffledns` | 无输出文件（内部调 `dnsx`） | `build_command`/`parse_output` 描述的是「用 dnsx 解析一批候选」；混合流程（字典爆破 + 已有候选 + 泛解析过滤）仍在 `run_scan` |
+| DNS / HTTP | `dnsx` | `-l <in> -o <out>` | 首批 |
+| | `httpx` | `-l <in> -json` | 首批；`Observation.data` 保留 status_code / title / webserver / tech / cdn |
+| 爬虫 | `gospider` | stdout | |
+| | `katana` | `-o <file>` | |
+| | `waybackurls` | stdout | |
+| 目录 | `feroxbuster` | `-o <file>` | `--json` 时按行解析 JSON 取 `url`，坏行跳过 |
+| | `dirsearch` | `-o <file>` | `wordlist` 为空则不加 `-w` |
+| 端口 | `naabu` | `-o <file>` | |
+| | `nmap` | `-oN <file>` | 正因如此 `OUTPUT_FLAGS` 才需要认 `-oN/-oX/-oG/-oA` |
+
+**三个只有在真机/Linux 上才会暴露的缺陷**（都在 M4 修掉，都有回归测试）：
+
+1. **残留输出文件被当成本次结果**。`_execute` 的结果由工具写盘，若上一轮留下了同名文件，
+   本轮工具失败时 `_read_results` 会把**上次的输出**读回来当成功。
+   现在 `_execute` / `_execute_stdout` 都在执行前先删（`_clear_stale_output_for`），
+   删不掉就记 `stale_output_warning`。
+   注意 `_execute_stdout` 的输出文件**不在命令行里**，所以必须显式经
+   `_record_execution(..., output_file=...)` 记下来，否则证据采集与残留清理都找不到它。
+2. **Windows 下超时杀不掉孙进程**。`.cmd` 工具链是 `python(worker) → cmd.exe → 工具`，
+   `subprocess.run(timeout=)` 只杀掉中间层，孤儿进程攥着 stdout/stderr 管道，
+   `subprocess.run` 会**永远等不到管道关闭**——「超时」形同虚设，worker 被永久占住
+   （实测：任务卡在 `running`，留下孤儿 PID）。改为
+   `Popen` + `communicate(timeout)` → `_kill_process_tree`（Windows `taskkill /F /T`）
+   → 再 `communicate(timeout=PROCESS_DRAIN_SECONDS)` 排空。
+3. **POSIX 下 `killpg` 会连调用方一起杀**。`Popen` 不传 `start_new_session=True` 时，
+   子进程与 worker 同属一个进程组，`os.killpg(os.getpgid(child), SIGKILL)` 的杀伤范围
+   包含 worker 自己——表现为 Linux/CI 上测试进程凭空消失（本地 Windows 全绿，因为
+   `start_new_session` 被忽略、走的是 `taskkill`）。现在 `_run_subprocess` 在 POSIX 下
+   另起进程组，且 `_kill_process_tree` 会先比对 child / own 进程组，同组时只 `kill()` 直接子进程。
+
+**产物与脱敏**：`core/artifacts.py` 把每次执行的三种证据落盘（表 `artifacts`，M4 新建）
+
+| kind | 内容 | 落盘后缀 |
+|---|---|---|
+| `stdout` | 子进程 stdout | `.out` |
+| `stderr` | 子进程 stderr | `.err` |
+| `output` | 工具自己写的输出文件（`-o` / `-oN` / enscan 的 JSON） | `.result` |
+
+* 超过 `SCAN_LIMITS["max_artifact_bytes"]`（默认 2 MB）会被截断并附截断提示；
+  `jobs/executor.py` 另用 `MAX_RESULT_EVIDENCE_BYTES`（1 MB）限制单份结果证据；
+* 读取接口 `GET /api/jobs/<id>/artifacts`（列表）与 `GET /api/artifacts/<id>`（内容）
+  **都不下发服务器路径**（`list_artifacts` 走 `_row_to_dict(..., include_path=False)`），
+  内容读取默认上限 64 KB（`DEFAULT_READ_LIMIT`）并显式返回 `truncated`；
+* `command_preview` 经 `core/runner_result.py:scrub_command` 处理，覆盖
+  `--api-key=xxx`、`--api-key xxx`、URL 里的 `user:pass@`，以及 20 位以上的长 token。
+
+**为什么 `scrub_command` 要留着长路径**：回归测试 `test_run_command_preview_is_redacted`
+最初把 `results/` 里的长路径也打码了，排查时反而看不出工具到底读了哪个文件。
+判断标准是「像不像密钥」而不是「长不长」——正则用前后向断言排除路径分隔符后，
+`results/...` 这类路径会原样保留（测试里断言 `"results" in preview`）。
