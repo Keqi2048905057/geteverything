@@ -337,10 +337,17 @@ def test_new_tables_do_not_touch_legacy_schema(tmp_path):
         assert expected in tables
     assert {"assets", "observations"} <= tables
 
-    # jobs 表结构未被 P1 改动：不该多出 idempotency_key 之类的列。
+    # jobs 表只被「纯增量补列」改过（P0-7a / P0-7b，用户逐项预授权）：
+    # 既有列一个都不能少，新增列必须可空，且不得改写任何既有列及其数据。
     job_columns = {row["name"] for row in db.query("PRAGMA table_info(jobs)", path=path)}
-    assert "idempotency_key" not in job_columns
     assert "attempt" in job_columns
+    assert {"idempotency_key", "next_attempt_at"} <= job_columns
+
+    notnull = {
+        row["name"]: row["notnull"] for row in db.query("PRAGMA table_info(jobs)", path=path)
+    }
+    assert notnull["idempotency_key"] == 0
+    assert notnull["next_attempt_at"] == 0
 
 
 def test_assets_table_matches_plan_columns(tmp_path):

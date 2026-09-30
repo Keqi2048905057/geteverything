@@ -77,12 +77,19 @@ def create_job():
           "targets": ["example.test"],
           "tools": ["subfinder"],
           "mode": "mock",
-          "scenario": "success"     // 可选，仅 mock
+          "scenario": "success",     // 可选，仅 mock
+          "idempotency_key": "..."   // 可选，见下
         }
 
+    幂等（P0-7a）：带 ``idempotency_key`` 时，同一个键在「上一个同键任务还没终结」
+    期间只会产生一个任务；重复请求返回**同一个** ``job_id``，响应里
+    ``reused=true``。键的语义是「防重复提交」，不是「永久只跑一次」——任务落到
+    终态（succeeded / failed / cancelled）后，同一个键可以再次创建。
+
     Returns:
-        202 + ``{"ok": true, "job_id": ..., "status": "queued"}``。
+        202 + ``{"ok": true, "job_id": ..., "status": "queued", "reused": false}``。
         这里用 202 Accepted 而不是 200：请求已被接受，但**尚未**完成。
+        命中幂等键时状态码仍是 202（响应体形状不变），调用方看 ``reused``。
     """
     require_admin()
 
@@ -99,6 +106,12 @@ def create_job():
     tools = _split_list(payload.get("tools") or payload.get("tool"), "tools")
     if not tools:
         raise BadRequestError("必须提供至少一个工具", details={"field": "tools"})
+
+    # 幂等键由调用方提供，非法（非字符串 / 超长）一律 400，不做静默截断。
+    try:
+        idempotency_key = jobs_store.normalize_idempotency_key(payload.get("idempotency_key"))
+    except ValueError as exc:
+        raise BadRequestError(str(exc), details={"field": "idempotency_key"}) from exc
 
     # 工具名与 /api/run 走同一套校验。
     from tool_runner import load_tools
@@ -133,25 +146,28 @@ def create_job():
             )
         scenario = normalize_scenario(raw_scenario) if raw_scenario is not None else None
 
-    job = jobs_store.create_job(
+    job, reused = jobs_store.create_job_with_status(
         scope_id=scope.id,
         targets=validated_targets,
         tools=tools,
         mode=mode,
         upload_id=upload_id,
         scenario=scenario,
+        idempotency_key=idempotency_key,
     )
-    audit.record(
-        audit.EVENT_JOB_CREATED,
-        target_id=job["id"],
-        detail={
-            "scope_id": scope.id,
-            "mode": mode,
-            "tools": tools,
-            "targets": validated_targets,
-            "total_steps": job["total_steps"],
-        },
-    )
+    detail = {
+        "scope_id": scope.id,
+        "mode": mode,
+        "tools": tools,
+        "targets": validated_targets,
+        "total_steps": job["total_steps"],
+    }
+    if reused:
+        # 命中已有任务：这不是一次「新建」，因此只记一条「重复请求被折叠」
+        # 的可追溯记录（审计事件类型仍是 job_created，target 指向那个已存在的任务）。
+        detail["idempotency_key"] = idempotency_key
+        detail["reused"] = True
+    audit.record(audit.EVENT_JOB_CREATED, target_id=job["id"], detail=detail)
 
     return (
         jsonify(
@@ -162,6 +178,7 @@ def create_job():
                 "mode": job["mode"],
                 "total_steps": job["total_steps"],
                 "scope_id": job["scope_id"],
+                "reused": reused,
             }
         ),
         202,
@@ -227,7 +244,17 @@ def retry_job(job_id: str):
         raise NotFoundError(f"任务不存在: {job_id}")
 
     audit.record(audit.EVENT_JOB_RETRY_REQUESTED, target_id=job_id, detail={"attempt": job["attempt"]})
-    return jsonify({"ok": True, "job_id": job_id, "status": job["status"], "attempt": job["attempt"]})
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "status": job["status"],
+            "attempt": job["attempt"],
+            # 退避（P0-7b）：任务已回到 queued，但要到这个时间之后 worker 才会领。
+            # 下发它，前端才能把「排队中」和「在等退避」区分开。
+            "next_attempt_at": job["next_attempt_at"],
+        }
+    )
 
 
 @api_bp.route("/jobs/<job_id>/steps", methods=["GET"])

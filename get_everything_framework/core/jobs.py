@@ -140,6 +140,28 @@ DEFAULT_LEASE_SECONDS = 60
 #: 达到上限后 retry 会被拒绝，避免手工反复重试把队列刷爆。
 MAX_ATTEMPTS = 5
 
+#: 重试退避（方案第 7 节「Retry 必须有上限和退避」）：
+#: 第 N 次尝试前的等待 = ``min(BASE * 2 ** (N-1), MAX)``。
+#: 指数退避的作用是：工具刚因为网络抖动失败时，不要让 worker 立刻把它
+#: 再领起来重跑一遍——那会把「上游故障」放大成「本地也一起雪崩」。
+RETRY_BACKOFF_BASE_SECONDS = 5
+RETRY_BACKOFF_MAX_SECONDS = 300
+
+#: 幂等键长度上限。超长的键多半是调用方把一个 hash 之外的东西（如整份请求体）
+#: 塞进来了，属于用法错误，直接拒绝比存下来更好。
+MAX_IDEMPOTENCY_KEY_LENGTH = 200
+
+
+def retry_backoff_seconds(attempt: int) -> int:
+    """第 ``attempt`` 次尝试前的退避秒数（从 1 开始计数）。
+
+    第 1 次（首次执行）没有退避，返回 0；之后 5s / 10s / 20s / 40s …
+    封顶 :data:`RETRY_BACKOFF_MAX_SECONDS`。
+    """
+    if attempt <= 1:
+        return 0
+    return min(RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 2)), RETRY_BACKOFF_MAX_SECONDS)
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -157,6 +179,9 @@ def _future(seconds: int) -> str:
 
 
 def _job_to_dict(row) -> dict:
+    # 旧库可能还没有 P0-7 新增的两列（``ensure_schema`` 会补，但只读路径
+    # 在补列之前也可能被调用），因此按列名存在性读取，缺列时退化为 None。
+    keys = row.keys()
     return {
         "id": row["id"],
         "scope_id": row["scope_id"],
@@ -179,6 +204,9 @@ def _job_to_dict(row) -> dict:
         "worker_id": row["worker_id"],
         "lease_until": row["lease_until"],
         "attempt": row["attempt"],
+        # P0-7a / P0-7b（用户预授权，DECISIONS 3.1 纯增量补列）。
+        "idempotency_key": row["idempotency_key"] if "idempotency_key" in keys else None,
+        "next_attempt_at": row["next_attempt_at"] if "next_attempt_at" in keys else None,
     }
 
 
@@ -261,6 +289,27 @@ def add_event(job_id: str, event_type: str, detail: dict | None = None) -> None:
 # ── 创建 ──────────────────────────────────────────────────
 
 
+def normalize_idempotency_key(value) -> str | None:
+    """规范化幂等键：空值返回 ``None``，非字符串或超长抛 ``ValueError``。
+
+    Rails 的 ``Idempotency-Key`` 与 Stripe 的做法一致：键由**调用方**提供，
+    服务端只保证「同一个键不会同时有两个未终结的任务」。
+
+    Raises:
+        ValueError: 键不是字符串，或长度超过 :data:`MAX_IDEMPOTENCY_KEY_LENGTH`。
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("idempotency_key 必须是字符串")
+    key = value.strip()
+    if not key:
+        return None
+    if len(key) > MAX_IDEMPOTENCY_KEY_LENGTH:
+        raise ValueError(f"idempotency_key 最长 {MAX_IDEMPOTENCY_KEY_LENGTH} 个字符")
+    return key
+
+
 def create_job(
     *,
     scope_id: str,
@@ -270,8 +319,45 @@ def create_job(
     upload_id: str | None = None,
     scenario: str | None = None,
     created_by: str = "local-admin",
+    idempotency_key: str | None = None,
 ) -> dict:
-    """创建任务并展开步骤快照，返回 queued 状态的 job。
+    """创建任务并展开步骤快照，返回 queued 状态的 job（不含「是否命中幂等键」）。
+
+    幂等语义与 :func:`create_job_with_status` 完全相同；这个包装只是为了让
+    既有调用方（测试与 CLI）继续拿到单个 dict。
+    """
+    job, _ = create_job_with_status(
+        scope_id=scope_id,
+        targets=targets,
+        tools=tools,
+        mode=mode,
+        upload_id=upload_id,
+        scenario=scenario,
+        created_by=created_by,
+        idempotency_key=idempotency_key,
+    )
+    return job
+
+
+def create_job_with_status(
+    *,
+    scope_id: str,
+    targets: list[str],
+    tools: list[str],
+    mode: str = "mock",
+    upload_id: str | None = None,
+    scenario: str | None = None,
+    created_by: str = "local-admin",
+    idempotency_key: str | None = None,
+) -> tuple[dict, bool]:
+    """创建任务并展开步骤快照，返回 ``(job, reused)``。
+
+    幂等（P0-7a）：传入 ``idempotency_key`` 时，若已存在同键的**未终结**任务，
+    直接返回**那一个**任务（``reused=True``）而不是再建一个。判定与插入在同一个
+    ``BEGIN IMMEDIATE`` 事务内，两个并发请求不会各自插出一条。
+
+    「未终结」= ``queued`` / ``running``：任务一旦落到终态，同一个键可以再次
+    创建。否则「重试失败的任务」会被幂等键永久挡住。
 
     Args:
         scope_id: 必填，任务必须关联授权范围。
@@ -281,76 +367,99 @@ def create_job(
         upload_id: 目标来源的受控上传 ID（可空）。
         scenario: mock 场景名（仅 mock 模式有效）。
         created_by: 创建者标识。
+        idempotency_key: 可选的幂等键（同一键只允许一个未终结任务）。
 
     Returns:
-        dict: 新建 job 的字典表示（``status=queued``）。
+        tuple[dict, bool]: 新建或命中的 job，以及「是否命中已有任务」。
 
     Raises:
-        ValueError: targets 或 tools 为空。
+        ValueError: targets 或 tools 为空，或幂等键非法。
     """
     if not targets:
         raise ValueError("targets 不能为空")
     if not tools:
         raise ValueError("tools 不能为空")
 
+    key = normalize_idempotency_key(idempotency_key)
+
     job_id = new_job_id()
     created_at = _now()
     total_steps = len(targets) * len(tools)
 
     db.ensure_schema()
+    hit_id: str | None = None
+    reused = False
     with db.transaction() as conn:
-        conn.execute(
-            """
-            INSERT INTO jobs (
-                id, scope_id, status, mode, targets_json, tools_json, upload_id, scenario,
-                created_by, created_at, started_at, finished_at, progress,
-                total_steps, done_steps, error_code, error_message,
-                cancel_requested, worker_id, lease_until, attempt
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, 0, NULL, NULL, 0, NULL, NULL, 1)
-            """,
-            (
-                job_id,
-                scope_id,
-                STATUS_QUEUED,
-                mode,
-                json.dumps(list(targets), ensure_ascii=False),
-                json.dumps(list(tools), ensure_ascii=False),
-                upload_id,
-                scenario,
-                created_by,
-                created_at,
-                total_steps,
-            ),
-        )
-        # 步骤快照：工具 × 目标，创建时就定下来，进度才是可计算的。
-        for tool_name in tools:
-            for target in targets:
-                conn.execute(
-                    """
-                    INSERT INTO job_steps (
-                        id, job_id, tool_name, target, status, attempt,
-                        started_at, finished_at, exit_code, error_code, error_message,
-                        artifact_id, found_count, results_json
-                    ) VALUES (?, ?, ?, ?, ?, 1, NULL, NULL, NULL, NULL, NULL, NULL, 0, '[]')
-                    """,
-                    (new_step_id(), job_id, tool_name, target, STEP_PENDING),
-                )
-        record_event(
-            conn,
-            job_id,
-            EVENT_JOB_CREATED,
-            {
-                "scope_id": scope_id,
-                "mode": mode,
-                "targets": list(targets),
-                "tools": list(tools),
-                "total_steps": total_steps,
-                "upload_id": upload_id,
-                "scenario": scenario,
-            },
-        )
+        if key:
+            existing = conn.execute(
+                "SELECT id FROM jobs WHERE idempotency_key = ? AND status IN (?, ?) "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (key, STATUS_QUEUED, STATUS_RUNNING),
+            ).fetchone()
+            if existing is not None:
+                # 命中已有任务：不插入、不写 created 事件。
+                # 「查」与「插」同在 BEGIN IMMEDIATE 事务内，两个并发请求
+                # 不会各自插出一条同键任务。
+                hit_id = existing["id"]
+                reused = True
 
-    return get_job_or_raise(job_id)
+        if hit_id is None:
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    id, scope_id, status, mode, targets_json, tools_json, upload_id, scenario,
+                    created_by, created_at, started_at, finished_at, progress,
+                    total_steps, done_steps, error_code, error_message,
+                    cancel_requested, worker_id, lease_until, attempt,
+                    idempotency_key, next_attempt_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, ?, 0, NULL, NULL, 0, NULL, NULL, 1, ?, NULL)
+                """,
+                (
+                    job_id,
+                    scope_id,
+                    STATUS_QUEUED,
+                    mode,
+                    json.dumps(list(targets), ensure_ascii=False),
+                    json.dumps(list(tools), ensure_ascii=False),
+                    upload_id,
+                    scenario,
+                    created_by,
+                    created_at,
+                    total_steps,
+                    key,
+                ),
+            )
+            # 步骤快照：工具 × 目标，创建时就定下来，进度才是可计算的。
+            for tool_name in tools:
+                for target in targets:
+                    conn.execute(
+                        """
+                        INSERT INTO job_steps (
+                            id, job_id, tool_name, target, status, attempt,
+                            started_at, finished_at, exit_code, error_code, error_message,
+                            artifact_id, found_count, results_json
+                        ) VALUES (?, ?, ?, ?, ?, 1, NULL, NULL, NULL, NULL, NULL, NULL, 0, '[]')
+                        """,
+                        (new_step_id(), job_id, tool_name, target, STEP_PENDING),
+                    )
+            record_event(
+                conn,
+                job_id,
+                EVENT_JOB_CREATED,
+                {
+                    "scope_id": scope_id,
+                    "mode": mode,
+                    "targets": list(targets),
+                    "tools": list(tools),
+                    "total_steps": total_steps,
+                    "upload_id": upload_id,
+                    "scenario": scenario,
+                    "idempotency_key": key,
+                },
+            )
+            hit_id = job_id
+
+    return get_job_or_raise(hit_id), reused
 
 
 # ── 读取 ──────────────────────────────────────────────────
@@ -445,26 +554,34 @@ def claim_next_job(worker_id: str, lease_seconds: int = DEFAULT_LEASE_SECONDS) -
     ``BEGIN IMMEDIATE`` + ``UPDATE ... WHERE status='queued'`` 双重保护：
     即使误开了多个 worker，同一个任务也只会被一个进程领到。
 
+    领取条件还包含**退避窗口**（P0-7b）：``next_attempt_at`` 为空或已过期的
+    任务才可领。退避中的任务仍在 ``queued``（因此 ``/health`` 的排队计数
+    会把它们算进去），只是暂时取不到——这样「任务在队列里但还没到时候」
+    与「任务丢了」是两件可区分的事。
+
     Returns:
         dict | None: 领到的 job（``status=running``）；没有可领任务时返回 ``None``。
     """
     db.ensure_schema()
+    now = _now()
     with db.transaction() as conn:
         # 取出待领任务：``created_at`` 只精确到秒，同一秒内创建的任务必须靠
         # ``rowid``（真实插入顺序）决定先后，否则 FIFO 会退化成随机顺序。
         row = conn.execute(
-            "SELECT id FROM jobs WHERE status = ? ORDER BY created_at ASC, rowid ASC LIMIT 1",
-            (STATUS_QUEUED,),
+            "SELECT id FROM jobs WHERE status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?) "
+            "ORDER BY created_at ASC, rowid ASC LIMIT 1",
+            (STATUS_QUEUED, now),
         ).fetchone()
         if row is None:
             return None
 
         job_id = row["id"]
-        started_at = _now()
+        started_at = now
         cursor = conn.execute(
             """
             UPDATE jobs
-               SET status = ?, worker_id = ?, lease_until = ?, started_at = COALESCE(started_at, ?)
+               SET status = ?, worker_id = ?, lease_until = ?, started_at = COALESCE(started_at, ?),
+                   next_attempt_at = NULL
              WHERE id = ? AND status = ?
             """,
             (STATUS_RUNNING, worker_id, _future(lease_seconds), started_at, job_id, STATUS_QUEUED),
@@ -611,6 +728,11 @@ def is_cancel_requested(job_id: str) -> bool:
 def retry_job(job_id: str) -> dict | None:
     """把可重试的终态任务重新排回 queued，并重置未成功的步骤。
 
+    退避（P0-7b）：重新排队时写入 ``next_attempt_at``（第 N 次尝试的退避见
+    :func:`retry_backoff_seconds`）。任务**立刻**变成 ``queued``（界面能马上
+    看到），但 worker 要等到退避窗口过去才会领它——否则「重试」会变成
+    「对着同一台上游故障连打」，把一个远端抖动放大成本地队列雪崩。
+
     Returns:
         dict | None: 操作后的 job；不存在返回 ``None``。
 
@@ -632,15 +754,18 @@ def retry_job(job_id: str) -> dict | None:
         if row["attempt"] >= MAX_ATTEMPTS:
             raise ValueError(f"已达到最大重试次数（{MAX_ATTEMPTS}），拒绝继续 retry")
 
+        next_attempt = row["attempt"] + 1
+        backoff = retry_backoff_seconds(next_attempt)
+
         conn.execute(
             """
             UPDATE jobs
                SET status = ?, cancel_requested = 0, started_at = NULL, finished_at = NULL,
                    progress = 0, done_steps = 0, error_code = NULL, error_message = NULL,
-                   worker_id = NULL, lease_until = NULL, attempt = attempt + 1
+                   worker_id = NULL, lease_until = NULL, attempt = ?, next_attempt_at = ?
              WHERE id = ?
             """,
-            (STATUS_QUEUED, job_id),
+            (STATUS_QUEUED, next_attempt, _future(backoff) if backoff else None, job_id),
         )
         # 已经成功的步骤不重跑，其余回到 pending。
         conn.execute(
@@ -648,7 +773,12 @@ def retry_job(job_id: str) -> dict | None:
             "error_code = NULL, error_message = NULL WHERE job_id = ? AND status != ?",
             (STEP_PENDING, job_id, STEP_SUCCEEDED),
         )
-        record_event(conn, job_id, EVENT_JOB_RETRY_REQUESTED, {"from": status, "attempt": row["attempt"] + 1})
+        record_event(
+            conn,
+            job_id,
+            EVENT_JOB_RETRY_REQUESTED,
+            {"from": status, "attempt": next_attempt, "backoff_seconds": backoff},
+        )
 
     return get_job(job_id)
 

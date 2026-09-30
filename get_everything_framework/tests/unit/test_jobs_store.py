@@ -278,6 +278,250 @@ def test_retry_unknown_job_returns_none(local_db):
     assert jobs_store.retry_job("job_missing") is None
 
 
+# ── P0-7b：重试退避 ───────────────────────────────────────
+
+
+def test_retry_sets_backoff_window(scope_id):
+    """重试后任务立刻是 queued，但要等退避窗口过去 worker 才领得到。
+
+    这是「retry 必须退避」的可观测形态：``next_attempt_at`` 有值、且在将来。
+    """
+    job = _make_job(scope_id)
+    jobs_store.request_cancel(job["id"])
+
+    retried = jobs_store.retry_job(job["id"])
+    assert retried["status"] == jobs_store.STATUS_QUEUED
+    assert retried["attempt"] == 2
+    assert retried["next_attempt_at"] is not None
+    assert retried["next_attempt_at"] > jobs_store._now()
+
+
+def test_backoff_delays_claim_until_window_passes(scope_id):
+    """退避窗口内领不到；把 ``next_attempt_at`` 拨到过去后立刻能领。"""
+    job = _make_job(scope_id)
+    jobs_store.request_cancel(job["id"])
+    jobs_store.retry_job(job["id"])
+
+    # 窗口内：任务还在队列里（queued 计数含它），但取不到。
+    assert jobs_store.claim_next_job("w1") is None
+    assert jobs_store.queue_counts()["queued"] == 1
+
+    # 人为把窗口推旧，等价于「等待退避时间过去」。
+    from core import db
+
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE jobs SET next_attempt_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", job["id"]),
+        )
+
+    claimed = jobs_store.claim_next_job("w2")
+    assert claimed["id"] == job["id"]
+    assert claimed["status"] == jobs_store.STATUS_RUNNING
+    # 领走后退避窗口被清空：窗口只用来「推迟领取」，不是任务的长期属性。
+    assert claimed["next_attempt_at"] is None
+
+
+def test_claim_clears_expired_backoff_window(scope_id):
+    """退避窗口已过期后被领取，``next_attempt_at`` 也要被清掉。
+
+    否则一个「早就过期的窗口」会一直挂在这个任务上，事后看任务详情会
+    误导成「这个任务还在退避中」。
+    """
+    job = _make_job(scope_id)
+    jobs_store.request_cancel(job["id"])
+    jobs_store.retry_job(job["id"])
+
+    from core import db
+
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE jobs SET next_attempt_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00+00:00", job["id"]),
+        )
+
+    claimed = jobs_store.claim_next_job("w1")
+    assert claimed["next_attempt_at"] is None
+
+
+def test_backoff_does_not_block_other_jobs(scope_id):
+    """一个任务在退避，不能把后面排队的任务一起堵住。"""
+    first = _make_job(scope_id)
+    second = _make_job(scope_id)
+    jobs_store.request_cancel(first["id"])
+    jobs_store.retry_job(first["id"])
+
+    claimed = jobs_store.claim_next_job("w1")
+    assert claimed["id"] == second["id"]
+
+
+def test_retry_backoff_grows_and_is_capped():
+    """退避函数本身：第 1 次不退避，之后指数增长并封顶。"""
+    assert jobs_store.retry_backoff_seconds(1) == 0
+    assert jobs_store.retry_backoff_seconds(2) == jobs_store.RETRY_BACKOFF_BASE_SECONDS
+
+    growth = [jobs_store.retry_backoff_seconds(n) for n in range(2, 12)]
+    assert growth == sorted(growth)
+    assert growth[-1] == jobs_store.RETRY_BACKOFF_MAX_SECONDS
+    assert max(growth) <= jobs_store.RETRY_BACKOFF_MAX_SECONDS
+
+
+def test_claim_does_not_consume_next_attempt_at_of_fresh_job(scope_id):
+    """新任务的 ``next_attempt_at`` 为空 = 立即可领（既有行为不能变）。"""
+    job = _make_job(scope_id)
+    assert job["next_attempt_at"] is None
+    assert jobs_store.claim_next_job("w1")["id"] == job["id"]
+
+
+# ── P0-7a：幂等键 ─────────────────────────────────────────
+
+
+def test_create_job_with_same_idempotency_key_reuses_job(scope_id):
+    """同一个键在任务未终结期间只产生一个任务，返回同一个 job_id。"""
+    first, reused_first = jobs_store.create_job_with_status(
+        scope_id=scope_id, targets=["a.example.test"], tools=["subfinder"], idempotency_key="k-1"
+    )
+    second, reused_second = jobs_store.create_job_with_status(
+        scope_id=scope_id, targets=["a.example.test"], tools=["subfinder"], idempotency_key="k-1"
+    )
+
+    assert reused_first is False
+    assert reused_second is True
+    assert first["id"] == second["id"]
+    assert len(jobs_store.list_jobs()) == 1
+    # 幂等命中的那次不重复展开步骤，否则进度分母会被算错。
+    assert len(jobs_store.list_steps(first["id"])) == 1
+
+
+def test_idempotency_key_is_visible_on_job(scope_id):
+    job = _make_job(scope_id, idempotency_key="k-visible")
+    assert job["idempotency_key"] == "k-visible"
+    assert jobs_store.get_job(job["id"])["idempotency_key"] == "k-visible"
+
+
+def test_idempotency_key_is_normalized(scope_id):
+    """两侧空白会被裁掉：``" k "`` 与 ``"k"`` 是同一把键。"""
+    first = _make_job(scope_id, idempotency_key=" k-norm ")
+    second, reused = jobs_store.create_job_with_status(
+        scope_id=scope_id, targets=["a.example.test"], tools=["subfinder"], idempotency_key="k-norm"
+    )
+    assert reused is True
+    assert second["id"] == first["id"]
+
+
+def test_create_job_without_idempotency_key_always_creates(scope_id):
+    """不传键 = 不幂等，行为与 P0-7 之前完全一致。"""
+    _make_job(scope_id)
+    _make_job(scope_id)
+    assert len(jobs_store.list_jobs()) == 2
+
+
+def test_idempotency_key_is_released_by_terminal_status(scope_id):
+    """键只挡「未终结」任务：任务跑完/取消后同一个键可以再次创建。
+
+    否则「重试一个失败任务」会被幂等键永久挡住，键就从「防重复提交」
+    变成了「永久只跑一次」，语义过强。
+    """
+    first = _make_job(scope_id, idempotency_key="k-release")
+    jobs_store.request_cancel(first["id"])
+
+    second, reused = jobs_store.create_job_with_status(
+        scope_id=scope_id, targets=["a.example.test"], tools=["subfinder"], idempotency_key="k-release"
+    )
+    assert reused is False
+    assert second["id"] != first["id"]
+    assert len(jobs_store.list_jobs()) == 2
+
+
+def test_idempotency_key_is_not_reused_while_running(scope_id):
+    """running 也算「未终结」：任务正在跑时重复提交不能又开一个。"""
+    first = _make_job(scope_id, idempotency_key="k-running")
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+
+    second, reused = jobs_store.create_job_with_status(
+        scope_id=scope_id, targets=["a.example.test"], tools=["subfinder"], idempotency_key="k-running"
+    )
+    assert reused is True
+    assert second["id"] == first["id"]
+
+
+def test_reused_creation_writes_no_extra_created_event(scope_id):
+    """幂等命中不是一次新建，不应再写一条 job_created 事件。"""
+    job = _make_job(scope_id, idempotency_key="k-event")
+    jobs_store.create_job_with_status(
+        scope_id=scope_id, targets=["a.example.test"], tools=["subfinder"], idempotency_key="k-event"
+    )
+
+    created = [
+        event for event in jobs_store.list_events(job["id"]) if event["event_type"] == jobs_store.EVENT_JOB_CREATED
+    ]
+    assert len(created) == 1
+
+
+def test_different_idempotency_keys_create_different_jobs(scope_id):
+    first = _make_job(scope_id, idempotency_key="k-a")
+    second = _make_job(scope_id, idempotency_key="k-b")
+    assert first["id"] != second["id"]
+
+
+@pytest.mark.parametrize("bad", ["", "   ", None])
+def test_blank_idempotency_key_means_no_key(scope_id, bad):
+    """空串 / 纯空白 / None 一律视为「没传键」，不是「键等于空串」。"""
+    assert jobs_store.normalize_idempotency_key(bad) is None
+    first = _make_job(scope_id, idempotency_key=bad)
+    second = _make_job(scope_id, idempotency_key=bad)
+    assert first["id"] != second["id"]
+
+
+def test_idempotency_key_rejects_wrong_type_and_overlong(scope_id):
+    with pytest.raises(ValueError, match="必须是字符串"):
+        jobs_store.normalize_idempotency_key(123)
+    with pytest.raises(ValueError, match="最长"):
+        jobs_store.normalize_idempotency_key("x" * (jobs_store.MAX_IDEMPOTENCY_KEY_LENGTH + 1))
+
+
+def test_idempotency_and_backoff_columns_are_additive_on_legacy_db(tmp_path):
+    """旧库（没有这两列）升级后仍可读写：这是 P0-7 的迁移验收口径。"""
+    import sqlite3
+
+    import core.db as db
+
+    path = str(tmp_path / "legacy_jobs.db")
+    # 手工造一个「P0-7 之前」的 jobs 表：只有 attempt，没有新增两列。
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE jobs (
+            id TEXT PRIMARY KEY, scope_id TEXT NOT NULL, status TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'mock', targets_json TEXT NOT NULL DEFAULT '[]',
+            tools_json TEXT NOT NULL DEFAULT '[]', upload_id TEXT, scenario TEXT,
+            created_by TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+            progress INTEGER NOT NULL DEFAULT 0, total_steps INTEGER NOT NULL DEFAULT 0,
+            done_steps INTEGER NOT NULL DEFAULT 0, error_code TEXT, error_message TEXT,
+            cancel_requested INTEGER NOT NULL DEFAULT 0, worker_id TEXT, lease_until TEXT,
+            attempt INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO jobs (id, scope_id, status, created_at, total_steps) "
+        "VALUES ('job_old', 'scope_old', 'queued', '2026-01-01T00:00:00+00:00', 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    db.init_schema(path)
+
+    columns = {row["name"] for row in db.query("PRAGMA table_info(jobs)", path=path)}
+    assert {"idempotency_key", "next_attempt_at", "attempt"} <= columns
+    # 既有行没被动过，新列取 NULL。
+    old = db.query("SELECT * FROM jobs WHERE id = 'job_old'", path=path)[0]
+    assert old["status"] == "queued"
+    assert old["attempt"] == 1
+    assert old["idempotency_key"] is None
+    assert old["next_attempt_at"] is None
+
+
 # ── 进度与终态 ────────────────────────────────────────────
 
 

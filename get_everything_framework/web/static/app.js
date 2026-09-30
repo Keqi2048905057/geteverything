@@ -74,6 +74,10 @@
       job.error_code,
       job.started_at,
       job.finished_at,
+      // 尝试次数与退避窗口也要进指纹：retry 之后这两者会变，若不进指纹，
+      // 「排队中 → 又排了一次队」在详情页上就看不到变化。
+      job.attempt,
+      job.next_attempt_at,
       (job.steps || [])
         .map(function (step) {
           return step.id + ":" + step.status + ":" + step.found_count + ":" + step.error_code;
@@ -250,6 +254,11 @@
       ["结束", job.finished_at || "—"],
       ["worker", job.worker_id || "—"],
     ];
+    // 退避中的任务也是 queued，光看状态会以为「马上就会跑」。把窗口显示出来，
+    // 用户才能区分「排队中」与「在等退避」。
+    if (job.next_attempt_at) {
+      pairs.push(["最早可重试", job.next_attempt_at]);
+    }
     pairs.forEach(function (pair) {
       meta.appendChild(el("dt", null, pair[0]));
       meta.appendChild(el("dd", null, pair[1]));

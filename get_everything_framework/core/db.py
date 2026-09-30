@@ -167,7 +167,9 @@ def init_schema(path: str | None = None) -> None:
                 cancel_requested INTEGER NOT NULL DEFAULT 0,
                 worker_id        TEXT,
                 lease_until      TEXT,
-                attempt          INTEGER NOT NULL DEFAULT 1
+                attempt          INTEGER NOT NULL DEFAULT 1,
+                idempotency_key  TEXT,
+                next_attempt_at  TEXT
             )
             """
         )
@@ -318,9 +320,29 @@ def init_schema(path: str | None = None) -> None:
 
         _migrate_columns(conn)
 
+        # 依赖新增列的索引必须放在 ``_migrate_columns`` **之后**：
+        # 旧库升级时列是刚 ALTER 出来的，语句顺序反了就会
+        # ``no such column: idempotency_key`` —— 升级路径必须只有
+        # 「纯增量、不会失败」的 DDL（DECISIONS-E / 3.1）。
+        # 刻意**不用 UNIQUE**：唯一性由 ``core.jobs.create_job_with_status``
+        # 在 ``BEGIN IMMEDIATE`` 事务里保证（查重与插入同事务，写者本就串行）；
+        # 部分唯一索引收益很小，却会给旧库引入一个「历史脏数据导致建索引失败」
+        # 的风险面。
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_idempotency ON jobs(idempotency_key, status)"
+        )
+        # P0-7b：worker 每次领取都按 (status, next_attempt_at) 过滤，索引让这个
+        # 热路径不必全表扫描。
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_next_attempt ON jobs(status, next_attempt_at)"
+        )
+
 
 # 增量列迁移：``CREATE TABLE IF NOT EXISTS`` 对已存在的表不会补列，
 # 而本机联调是「同一个 results/local.db 一路用下去」，所以必须显式 ALTER。
+#
+# 口径（DECISIONS-E / 3.1）：**只 ADD COLUMN**，不动既有列、不删既有数据。
+# 新增列一律可空（或带常量默认值），这样既有行的语义不变。
 _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     # M4：结构化观测结果与执行元数据落到步骤上，任务详情页才能显示
     # 状态码/标题/技术栈以及耗时与脱敏命令预览。
@@ -329,6 +351,14 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
         "duration_ms": "INTEGER",
         "command_preview": "TEXT",
         "parser_version": "TEXT",
+    },
+    # P0-7a / P0-7b（用户弹窗预授权，DECISIONS 3.1）：
+    #   * idempotency_key  —— 同一把幂等键只允许存在一个**未终结**的任务；
+    #   * next_attempt_at  —— 重试退避的「最早可领取时间」，NULL 表示立即可领。
+    # 两列都可空：既有任务行的语义完全不变（NULL = 没有幂等键 / 无退避）。
+    "jobs": {
+        "idempotency_key": "TEXT",
+        "next_attempt_at": "TEXT",
     },
 }
 

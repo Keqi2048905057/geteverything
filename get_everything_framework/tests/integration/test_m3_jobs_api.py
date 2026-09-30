@@ -381,6 +381,61 @@ def test_retry_unknown_job_returns_404(admin_client):
     assert admin_client.post("/api/jobs/job_missing/retry").status_code == 404
 
 
+# ── P0-7a：创建接口的幂等键 ───────────────────────────────
+
+
+def test_create_job_is_idempotent_with_same_key(admin_client):
+    """同一个 idempotency_key 重复 POST 只产生一个任务，返回同一个 job_id。"""
+    scope_id = _make_scope(admin_client)
+
+    first = _create_job(admin_client, scope_id, idempotency_key="api-key-1")
+    second = _create_job(admin_client, scope_id, idempotency_key="api-key-1")
+
+    assert first.status_code == 202 and second.status_code == 202
+    assert first.get_json()["reused"] is False
+    assert second.get_json()["reused"] is True
+    assert first.get_json()["job_id"] == second.get_json()["job_id"]
+
+    jobs = admin_client.get("/api/jobs").get_json()["jobs"]
+    assert len(jobs) == 1
+
+
+def test_create_job_without_key_reports_not_reused(admin_client):
+    """不传键时响应里也有 ``reused`` 字段（形状稳定），值为 false。"""
+    scope_id = _make_scope(admin_client)
+    assert _create_job(admin_client, scope_id).get_json()["reused"] is False
+
+
+def test_create_job_rejects_non_string_idempotency_key(admin_client):
+    scope_id = _make_scope(admin_client)
+    resp = _create_job(admin_client, scope_id, idempotency_key=123)
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "bad_request"
+
+
+def test_create_job_rejects_overlong_idempotency_key(admin_client):
+    scope_id = _make_scope(admin_client)
+    resp = _create_job(admin_client, scope_id, idempotency_key="x" * 201)
+    assert resp.status_code == 400
+
+
+def test_reused_creation_is_audited_with_flag(admin_client):
+    """幂等命中在审计里可追溯（否则「少了一个任务」在事后无从解释）。"""
+    from core import audit
+
+    scope_id = _make_scope(admin_client)
+    _create_job(admin_client, scope_id, idempotency_key="api-key-audit")
+    _create_job(admin_client, scope_id, idempotency_key="api-key-audit")
+
+    events = [
+        event
+        for event in audit.list_events(limit=50)
+        if event["event_type"] == audit.EVENT_JOB_CREATED
+    ]
+    assert any(event["detail"].get("reused") is True for event in events)
+    assert any("reused" not in event["detail"] for event in events)
+
+
 # ── 执行与审计 ────────────────────────────────────────────
 
 
