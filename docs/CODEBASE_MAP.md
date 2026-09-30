@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff）（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移）（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -610,6 +610,7 @@ get_everything_framework/
 │   ├── exports.py            P0-5：导出登记 + 公开出参（不含 path）+ 下载文件解析
 │   ├── canonical.py          P1：canonical_key 规则（subdomain/host/ip/cidr/url/port/service 的归一化）
 │   ├── assets.py             P1：资产/观测两层模型 + Obs 落库 + Diff Engine（added/removed/changed/unchanged）
+│   ├── migrate.py            P1 §12：旧库 → 新库的只读迁移（确定性观测 ID、时间归一、单条脏数据不中断）
 │   ├── uploads.py            受控上传：uploads/<id>/{raw.*,normalized.txt,meta.json}
 │   ├── mock.py               mock 执行结果（7 种场景，错误码对齐 §6.2）
 │   ├── safety.py             mock/real 模式解析 + GEF_ALLOW_REAL_SCAN 开关
@@ -771,12 +772,12 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 677 passed, 2 skipped, 0 failures
+$ python -m pytest           # 697 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 存量，P1 未新增）
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 资产/观测/Diff `677`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 资产/观测/Diff/迁移 `697`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34 —— **34 是 M7 的历史存量，不是 P1 的新债**。
@@ -797,6 +798,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/unit/test_storage_connection.py` | **DECISIONS-I**：旧库连接必关（含异常路径）、`busy_timeout`、表结构未变、`-W error::ResourceWarning` 复现 |
 | `tests/unit/test_canonical.py` | **P1 §9**：七种类型的归一化规则、方案验收的三个 URL 折叠成一个 key、`guess_type` 不猜错 |
 | `tests/unit/test_assets.py` | **P1 §8/§10**：两层模型（一行资产 + N 条观测）、`first_seen` 不被覆盖、scope 参与唯一性、`%`/`_` 转义、状态迁移不删数据、Diff 验收（A B C → A C D）、category→type 映射、落库失败不改任务结果 |
+| `tests/unit/test_migrate_legacy.py` | **P1 §12**：dry-run 与 `--apply` 前后旧库 sha256 不变、重跑幂等（确定性观测 ID）、`web`→`url` 翻译、`...Z`→`+00:00` 归一、跨表同资产合并成一行、单条失败不中断、CLI 三个退出码 |
 | `tests/integration/test_web_baseline.py` | 首页可渲染、登录/登出（M1） |
 | `tests/integration/test_m2_security.py` | 认证、受控上传、file_path 拒绝、审计（M2） |
 | `tests/integration/test_m2_scope_enforcement.py` | 无 Scope/越界拒绝、mock 不碰真实 runner（M2） |
@@ -1154,14 +1156,61 @@ status_code / title / server / technology / url
 资产是「整理后的情报」，比原始结果行更敏感，所以归在需要登录的一侧 ——
 与 `/api/results`（旧库、匿名只读）刻意区分开。
 
-#### 9.12.6 P1 之后仍未做的（对照执行方案）
+#### 9.12.6 旧库 → 新库的迁移（`core/migrate.py` + `scripts/migrate_legacy_results.py`）
+
+方案第 12 节「数据库收口」落到可执行层。口径先钉死（方案原文）：
+
+```text
+旧库 = legacy read-only      （results/scan_results.db，storage.py）
+新库 = canonical             （results/local.db，core/db.py）
+```
+
+```text
+旧库 17 张工具表 + tool_results
+   ↓  每行 → 一条 observation（category 经 CATEGORY_TO_TYPE 翻译成资产类型）
+新库 assets（去重）+ observations（时间线）
+```
+
+| 关键设计 | 为什么这么做 |
+|---|---|
+| `open_legacy()` 用 `mode=ro` URI 打开 | 旧库**一个字节都不改**；缺文件时先自己判一次，给出「旧库不存在」而不是 SQLite 的 `unable to open database file` |
+| 观测 ID = `obs_mig_` + 旧库行身份的 sha1 | **确定性 ID 是幂等的前提**：重跑时 `observation_exists()` 命中就跳过，中断后重来不会产生重复时间线 |
+| `plan` 按 `observed_at` **全局升序**排序 | `first_seen` 只在首次写入时定下、之后永不覆盖。跨表顺序取决于 `table_map` 的遍历顺序，不排序就会把「两张表里先遍历到的那张」的时间当成首次发现 |
+| `...Z` → `+00:00` | 旧库写 `datetime.utcnow().isoformat() + "Z"`，新库写 `+00:00`。两种写法混在一列里，**字符串排序会把 `Z` 排到 `+` 之后**，时间线顺序直接错乱 |
+| 单条脏数据只记 `reason` 不抛异常 | 旧库里混着脏数据是常态（`bad space.com`、未知 category），一条坏行不该让整次迁移失败 |
+| `scope_id` 留 `NULL` | 旧库年代没有 Scope 概念，**不能事后编一个**；编了就等于伪造授权范围 |
+| 表不存在就跳过 | 旧库是渐进长出来的（本机副本实际是 17 张表 + `tool_results`），缺表是正常形态 |
+
+CLI 默认 **dry-run**，`--apply` 才真正写；源库与目标库是同一个文件时直接拒绝（退出码 2）。
+
+```text
+python scripts/migrate_legacy_results.py              # 只读，看会迁什么
+python scripts/migrate_legacy_results.py --apply       # 真正写入
+```
+
+测试：`tests/unit/test_migrate_legacy.py`（20 例）。核心是三条**证伪式**断言：
+① dry-run 前后旧库 sha256 不变；② `--apply` 前后旧库 sha256 不变；③ 连跑两次，
+`count_assets()` 与观测条数都不变。再加「同一资产来自两张表 → 一行资产 + 两条观测，
+`first_seen` 取更早那条」。
+
+> ⚠️ **本机旧库是空的**（实测 17 张工具表 + `tool_results` 全部 0 行），
+> 所以 dry-run 输出「扫描到 0 行」。这不是脚本坏了 —— DECISIONS-F 明确
+> **不执行真实迁移**，脚本与测试用临时库自验；旧库真有数据时，由用户手动加 `--apply`。
+
+#### 9.12.7 P1 之后仍未做的（对照执行方案）
 
 | 方案项 | 现状 |
 |---|---|
 | §8 两层模型 | ✅ 表 + 数据层 + 执行链接线 + API + 页面 |
 | §9 资产规范化 | ✅ 七种类型 + 全部规则写成测试 |
 | §10 Diff | ✅ 四类输出 + 属性变化 + 两个端点 |
-| §11 统一旧执行链 | ⬜ 未做：`api/scan.py` 同步扫描与 Job 链仍并存 |
-| §12 旧库数据迁进新库 | ⬜ 未做（DECISIONS-F：只允许脚本 + 临时库测试，真实迁移留给用户手动跑） |
+| §11 统一旧执行链 | ⬜ 未做：`api/scan.py` 同步扫描与 Job 链仍并存（**改的是调用链，属架构级改动，需授权**） |
+| §12 旧库数据迁进新库 | 🔄 脚本 + 测试 + dry-run 已完成（DECISIONS-F 允许的部分）；**真实迁移等用户手动 `--apply`** |
+| §13 SQLAlchemy + Alembic | ⬜ 未做（新依赖 + ORM 层重写，本机联调版不引入） |
+| §15 测试矩阵 | 🔄 API / 安全 / Worker / Runner 四组已有；平台双跑见 §16 |
+| §16 Windows + Linux CI | ⬜ 未做（当前 CI 只有 `ubuntu-latest`） |
+| §17 mypy | ⬜ 34 errors（M7 范围） |
+| §18 真实本地 E2E | ⬜ 未做（硬约束：不打真实外部目标） |
 | `assets.status` 自动转 `stale` | ⚠️ 函数已就绪（`mark_stale_assets`），**但还没有任何计划任务/接口调它** |
 | Diff 在前端露出 | ⬜ 未做：`/api/jobs/{a}/diff/{b}` 已可用，页面还没有「对比」按钮 |
+

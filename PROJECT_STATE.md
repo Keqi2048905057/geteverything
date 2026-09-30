@@ -14,8 +14,8 @@
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅ → M5 剩余 ⬜ → M6 🔄 → M7 ⬜**
-- 更新日期：2026-10-02（P1 资产/观测/Diff 轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §12 迁移脚本）→ M5 剩余 ⬜ → M6 🔄 → M7 ⬜**
+- 更新日期：2026-10-02（P1 §12 旧库迁移脚本轮）
 
 ---
 
@@ -131,6 +131,8 @@
 - [x] 两次扫描之间生成 diff（新增 / 删除 / 变更 / 未变 + `counts`）
 - [x] 资产列表、筛选、详情页（`/assets` + `/api/assets*`）
 - [x] 每条资产可追溯来源（`observations.source_tool` / `job_id` / `step_id` / `observed_at`）
+- [x] 旧库 → 新库的迁移（`core/migrate.py` + `scripts/migrate_legacy_results.py`，默认 dry-run、可重跑、旧库只读；20 项单测锁定「旧库 sha256 不变」）
+- [ ] **旧库真实迁移未执行**（DECISIONS-F 只授权写脚本；且本机旧库 17 张表当前确为 0 行，迁了也是空结果）
 - [ ] 旧的 `/api/run` 同步扫描链路也产资产（目前**只有 Job 链**产；方案第 11 节统一执行链）
 - [ ] 资产过期自动化（`mark_stale_assets()` 已就绪但无人调用）
 - [ ] Diff 在前端露出（「对比两次任务」按钮）
@@ -145,7 +147,7 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（677 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（697 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [ ] SQLite 并发测试
 - [ ] 本地 fixture HTTP 测试
@@ -245,7 +247,7 @@
 | C | 旧 clone 是否执行 `git rm --cached`（仍跟踪 19 个敏感文件） | 不可逆操作，需确认 |
 | D | `/api/tools` / `/api/results` / `/api/export` 是否加鉴权 | 影响本机脚本兼容性 |
 | E | M5 的 `assets` / `observations` 表粒度：唯一资产 vs 保留观测历史 | **表结构要一次定对**，改起来涉及迁移 |
-| F | 旧库历史数据（waybackurls 296 / enscan 37 等）是否迁进新库 | 决定 M5 是否顺带修 `storage.py` 并发 |
+| F | 旧库历史数据（waybackurls 296 / enscan 37 等）是否迁进新库 | **已按 DECISIONS-F 落地脚本**（`scripts/migrate_legacy_results.py`，默认 dry-run）；真实迁移仍待你手动 `--apply`。注：本机旧库实测 17 张表全为 0 行 |
 | G | httpx 观测元数据先在哪露出：按目标汇总页 vs 资产列表页 | 决定 M5 开工顺序 |
 | H | 是否删除 `%TEMP%\gef_old_clone_full.bundle`（105.7 MB 历史备份） | 无风险，纯清理 |
 | I | 两条已知 warning 是否顺手修 | 无风险，纯清理 |
@@ -257,18 +259,15 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-01（P0 产品化加固轮）
+验证时间：2026-10-02（P1 §12 旧库迁移脚本轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 538 passed, 2 skipped, 0 warnings in 46s      ← 警告已清零
-mypy:   Found 34 errors in 8 files (checked 55 source files)     ← M7 待修，本轮未增减
+pytest: 697 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+mypy:   Found 34 errors in 8 files (checked 59 source files)     ← M7 待修，本轮未增减
 ```
 
-两条历史 warning（`ResourceWarning: unclosed file`、`RuntimeWarning: 未检测到强 SECRET_KEY`）
-**本轮已全部消除**，根因与修法见上一节。
-
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → **P0 加固 `538`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 `697`**
 
 ---
 

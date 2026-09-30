@@ -177,6 +177,12 @@
 - `web/templates/assets.html` + `web/static/assets.js`：**资产列表页**（无框架、无 CDN），
   支持按范围/类型/状态/关键字筛选、分页、点开观测时间线。
 - `app.py`：`GET /assets` 页面路由；首页顶栏加入口。
+- `core/migrate.py` + `scripts/migrate_legacy_results.py`：**旧库 → 新库的只读迁移**。
+  旧库以 `mode=ro` 打开，一个字节都不改；观测 ID 由旧库行身份哈希而来（**确定性**，
+  所以可安全重跑，已迁行跳过）；`...Z` 时间戳统一成 `+00:00`；
+  计划按 `observed_at` 全局升序排序（否则 `first_seen` 会取成「两张表里先遍历到的那张」的时间）；
+  单条脏数据只记 `reason` 不中断；`scope_id` 留 `NULL`（旧库年代没有 Scope 概念，不能事后编）。
+  CLI **默认 dry-run**，`--apply` 才写；源库=目标库时拒绝执行。
 
 变更：
 
@@ -198,7 +204,7 @@
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 677 passed, 2 skipped, 0 failures
+$ python -m pytest           # 697 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待修，P1 未新增）
 ```
 
@@ -213,6 +219,7 @@ $ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待�
 - `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 `docs/DECISIONS.md` §3 待授权）。
 - Agent 尚未改走 Job Service（P0-6 未完成部分）。
 - **P1 遗留**：旧的 `/api/run` 同步扫描链路**不产生** `assets` 观测（只有 Job 链会），
-  两套模型尚未合流（方案第 11 节）；旧库历史数据也还没迁进新库（方案第 12 节，
-  按 DECISIONS-F 只允许脚本 + 临时库测试）；`mark_stale_assets()` 已就绪但**还没有任何计划任务调用它**；
+  两套模型尚未合流（方案第 11 节，改的是调用链，属架构级改动）；
+  旧库历史数据已有迁移脚本但**未执行真实迁移**（DECISIONS-F：等用户手动 `--apply`；
+  且本机旧库当前 17 张表全为 0 行）；`mark_stale_assets()` 已就绪但**还没有任何计划任务调用它**；
   Diff 端点可用但页面上还没有「对比」按钮。

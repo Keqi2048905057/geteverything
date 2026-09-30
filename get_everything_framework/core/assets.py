@@ -40,6 +40,7 @@ def _now() -> str:
 
     return jobs_now()
 
+
 # ── 资产状态 ──────────────────────────────────────────────
 
 STATUS_ACTIVE = "active"
@@ -154,6 +155,8 @@ def record_observation(
     data: dict | None = None,
     metadata: dict | None = None,
     confidence: str | None = None,
+    observation_id: str | None = None,
+    path: str | None = None,
 ) -> dict:
     """登记一次观测，并顺带维护对应的唯一资产行。
 
@@ -169,6 +172,11 @@ def record_observation(
         data: 结构化属性（status_code / title / technology …）。
         metadata: 合并进资产行的附加属性（只补新键，不覆盖已有键）。
         confidence: 置信度标记（如 ``high`` / ``tentative``）。
+        observation_id: 指定观测 ID。默认随机生成；**迁移脚本**用它把
+            「旧库某一行」映射成固定 ID，从而可以安全重跑（配合
+            :func:`observation_exists`）。
+        path: 目标数据库路径。默认用 :func:`core.db.db_path`；
+            迁移脚本会显式传入，测试也靠它指向临时库。
 
     Returns:
         dict: ``{"asset_id", "observation_id", "type", "value", "canonical_key",
@@ -188,8 +196,8 @@ def record_observation(
     observed_at = observed_at or _now()
     metadata = metadata or {}
 
-    db.ensure_schema()
-    with db.transaction() as conn:
+    db.ensure_schema(path)
+    with db.transaction(path) as conn:
         # Scope 也要进唯一性：同一台主机在两个 Scope 下是两条独立资产，
         # 否则收紧 Scope 会连带影响另一个 Scope 的资产列表。
         existing = conn.execute(
@@ -237,7 +245,7 @@ def record_observation(
                 (observed_at, STATUS_ACTIVE, _json(merged), confidence, asset_id),
             )
 
-        observation_id = new_observation_id()
+        observation_id = observation_id or new_observation_id()
         conn.execute(
             """
             INSERT INTO observations (
@@ -544,8 +552,23 @@ def list_observations(
     return [_row_to_observation(row) for row in rows]
 
 
+def observation_exists(observation_id: str, *, path: str | None = None) -> bool:
+    """观测 ID 是否已存在（**迁移脚本**用来保证可安全重跑）。"""
+    if not observation_id:
+        return False
+    db.ensure_schema(path)
+    rows = db.query("SELECT 1 FROM observations WHERE id = ? LIMIT 1", (observation_id,), path=path)
+    return bool(rows)
+
+
 def asset_summary(scope_id: str | None = None) -> dict:
-    """按类型统计（资产列表页顶部的分类型计数）。"""
+    """按类型统计（资产列表页顶部的分类型计数）。
+
+    ``scopes`` 字段等于按同一条件统计的资产总数（用 :func:`count_assets`
+    再算一次，而不是复用 ``total``）：过滤带 ``scope_id`` 时两者相等，
+    不带时也一样 —— 保留它是因为 API 出参里已经这么定名了。
+    """
+
     db.ensure_schema()
     clauses = "WHERE IFNULL(scope_id, '') = IFNULL(?, '')" if scope_id is not None else ""
     params = (scope_id,) if scope_id is not None else ()
