@@ -1,0 +1,70 @@
+# ── Python 运行期产物 ─────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# ── 虚拟环境 ──────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── 本地密钥（禁止提交） ──────────────────────────────────
+.env
+.env.*
+!.env.example
+**/agent/.env
+
+# ── 扫描产物：数据库 / 结果 / 上传样本 / 导出 / 备份 ──────
+# 注意：含 "/" 的规则锚定到本文件所在目录，所以这里统一用 **/ 前缀，
+# 保证子目录（get_everything_framework/）下的同名目录同样被忽略。
+**/results/
+**/uploads/
+**/exports/
+**/backups/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+# 工具原始输出文件（results/ 下按 md5(domain)_<tool>.txt 命名）
+*_subfinder.txt
+*_amass.txt
+*.bak
+.env.*.bak
+
+# ── 测试与静态检查缓存 ────────────────────────────────────
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ── 编辑器 / 系统 ─────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+
+# ── 自行下载、不入库的字典与工具二进制 ────────────────────
+# 这些内容体积大、随上游变化，且曾因误提交进 Git 让仓库膨胀。
+# 用 scripts/install_windows.ps1 或 install_linux.sh 获取，或手动放入。
+SecLists/
+**/SecLists/
+*.exe
+
+# ── 执行类过程文档：留在本机，不入库 ──────────────────────
+# 这些是「怎么把活干出来」的过程记录（执行指令、实施方案、逐里程碑验收报告），
+# 属于本地工作材料而非项目资产：内容随进展频繁变动，且会暴露本机路径与
+# 验收用的临时 Token。项目本身的设计与用法写在 README.md 与 CODEBASE_MAP.md。
+# 注意：文件仍在磁盘上，只是不再被跟踪。
+DSH_执行提示词.md
+本机联调版实施方案_DSH.md
+docs/milestones/
+
+# 说明：AGENTS.md 与 .dsh/skills/ 是本仓库的工作约定与配套技能，
+# 属于项目资产，**不**忽略。

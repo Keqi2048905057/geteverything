@@ -1,0 +1,737 @@
+# get_everything_framework 代码地图
+
+> 本文档基于对项目源码的**逐文件实际阅读**产出（读取范围：项目根 + `api/` + `modules/` + `agent/` + `tests/` 下全部 `.py`，以及 `README.md`、`requirement.txt`、`pyproject.toml`、`.github/workflows/ci.yml`、旧结果库 `results/scan_results.db` 的真实表结构）。
+> 文档中出现的行号/函数名均来自实际文件内容；凡代码与 README 不一致处，一律以代码为准并显式标注。
+> 项目根：`<仓库根>/get_everything_framework`（Git 仓库根是其上一级目录；文档不再写死本机绝对路径）。
+> 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
+> **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
+>
+> **last-mapped：本机联调版 @ M4（2026-09-30）**
+> 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
+> **第 9 节**记录本机联调版新增/改写的部分（M0→M4）。两者冲突时，第 9 节更新。
+
+---
+
+## 1. 项目一句话定位与技术栈
+
+**一句话定位**：一个**同步阻塞式**的资产收集编排框架 —— Flask 暴露 REST API，`modules/` 里每个外部安全工具封装成一个 `BaseRunner` 子类，`tool_runner.py` 串行调度它们，结果写进单个 SQLite 文件；另有一套**基于正则规则的对话式 Planner**（被命名为 "LLM Agent"）用于把自然语言转成固定的几个工具步骤。
+
+### 技术栈（全部来自实际文件，非推测）
+
+| 项 | 依据 | 结论 |
+|---|---|---|
+| 语言/版本 | `pyproject.toml` `target-version = "py310"`；CI 用 `python-version: "3.11"` | Python 3.10+，CI 实测 3.11 |
+| Web 框架 | `app.py:17` `from flask import Flask, render_template, request, session`；`requirement.txt:8` `Flask==3.1.3` | Flask 3.x + Werkzeug 3.1.8 + Jinja2 3.1.6 |
+| 运行依赖 | `requirement.txt`（26 行，全量钉版本） | `Flask` `python-dotenv` `openai==2.38.0` `openpyxl==3.1.5` `httpx==0.28.1` `tqdm` `pydantic` |
+| 开发依赖 | `requirement-dev.txt` | `pytest>=7.0` `ruff>=0.5` `mypy>=1.10` |
+| 存储 | `config.py:87` `SQLITE_CONFIG = {"path": .../results/scan_results.db}`；`storage.py:7` `import sqlite3` | SQLite（标准库，无 ORM） |
+| 配置 | `config.py:6` `load_dotenv(os.path.join(_BASE_DIR, ".env"))` | `.env` + `python-dotenv`；`.env.example` 提供模板 |
+| 外部工具 | `modules/*.py` 里 `subprocess.run` | 17 个 Go/Python/EXE 外部扫描器 |
+| 前端 | `app.py:26` `template_folder="web/templates"`，`app.py:160` `render_template("index.html")` | **仓库中不存在 `web/`、`templates/`、`static/` 目录**（实测 `Test-Path` 全部 False）；README:484 也承认是占位文件，因此 `/` 路由目前必然 `TemplateNotFound` |
+| 启动方式 | `app.py:165-166` `if __name__ == "__main__": app.run(host="127.0.0.1", port=5000, debug=True)` | `python app.py` → http://127.0.0.1:5000 ；`debug=True` 写死 |
+| Agent CLI | `agent_cli.py:17` `agent = AgentAction(debug=True)` | `python agent_cli.py` 进 REPL |
+| CI | `.github/workflows/ci.yml` | `ruff check .` + `pytest -q`，工作目录 `get_everything_framework` |
+
+**README 与代码的明确不符**（以代码为准）：
+1. README:279 宣称 `nuclei` 可通过 Agent 调用 —— 代码里 `modules/registry.py` 无 nuclei，`agent/action.py` 的 `available_tools` 也没有。
+2. README:402 说 registry 有 "17 个工具" —— 与 `RUNNER_REGISTRY` 的 17 个键一致 ✅。
+3. README:361 说 `exporter.py` 导出 "CSV / JSON / TXT" —— 实现只支持 `csv` / `json`，其他格式抛 `ValueError`（`exporter.py:116`）。
+4. README:329-333 声称存在 `web/templates/index.html`、`static/` —— 实测两个目录都不存在；README:345 还写着 `venv/`、README:336 写着 `exports/`，前者也不存在。
+5. README:44 与 README:479 把 Agent 描述为"DeepSeek 等大模型接入" —— 运行时完全不调用模型（见 §4.c）。
+6. README:290 说 `target_parser.py` 支持 4 种格式 —— 与实现一致 ✅（`.txt/.csv/.xlsx/.json`）；README 未提"非法目标静默丢弃"。
+7. README:408 提到 `results/tmp*_httpx_input.txt` 会被自动删除 —— 实际 `modules/base.py:_write_input_file` 生成的文件名后缀是 `_{domain}_{tool}_input.txt`（`:204`），前缀不是 `tmp`，且基类版本无人调用（子类各自重写）。
+
+### 1.1 全部 HTTP 路由清单（实测 `api_bp` + 页面路由）
+
+| 方法 | 路径 | 处理函数 | 入参形态 | 出参形态 | 鉴权 |
+|---|---|---|---|---|---|
+| GET/POST | `/` | `app.py:index()` | form（`domain` / `action` / `agent_message`） | HTML 模板（**当前必然 500**） | 无 |
+| GET | `/api/tools` | `api/tools.py:list_tools()` | — | `{"tools":[{name,category,database}]}` | 无 |
+| GET | `/api/databases` | `api/tools.py:list_databases()` | — | `{"databases":[...]}` | 无 |
+| POST | `/api/run` | `api/scan.py:execute_scan()` | JSON `{domain?, tools?, tool?, file_path?}` | 扫描 report dict | 无 |
+| POST | `/api/tool/<tool_name>/run` | `api/scan.py:execute_single_tool()` | JSON `{domain}` | 单工具结果 dict | 无 |
+| GET | `/api/results` | `api/results.py:query_results()` | query `domain/tool/category/limit` | `{"results":[...]}` | 无 |
+| GET | `/api/tool/<tool_name>/results` | `api/results.py:query_tool_results()` | query `domain/limit` | `{"results":[...]}` 或 400 | 无 |
+| GET | `/api/export` | `api/results.py:export_data()` | query `domain/tool/category/format/limit` | `{ok,path,count,format}` | 无 |
+| POST | `/api/upload` | `api/upload.py:upload_file()` | multipart `file` | `{ok,file_path,target_count,targets_preview}` | 无 |
+| GET | `/api/settings` | `api/settings.py:get_settings()` | — | `{ok,settings:{llm,search,enscan}}`（Key 已掩码） | 无 |
+| POST | `/api/settings` | `api/settings.py:save_settings()` | JSON 白名单字段 | `{ok,message,updated_fields}` | 无 |
+| GET | `/api/settings/enscan` | `api/settings.py:get_enscan_cookies()` | — | `{ok,config_path,cookies}` | 无 |
+| POST | `/api/settings/enscan` | `api/settings.py:save_enscan_cookies()` | JSON `enscan_{aqc,tyc,icp}_cookie` | `{ok,config_path,message}` | 无 |
+
+> 共 13 条路由（1 页面 + 12 API），**没有任何认证装饰器、没有 CSRF、没有 Scope 校验**。README:43 也写成"12 个 RESTful 接口"，与实测一致 ✅。
+
+---
+
+## 2. 分层架构图
+
+```
+┌─ 入口层 ────────────────────────────────────────────────────────────────┐
+│  app.py:index()            GET/POST /          （同步表单扫描 subfinder）│
+│  agent_cli.py:main()       CLI REPL            （AgentAction 多轮对话）  │
+│  api/__init__.py           api_bp = Blueprint("api", url_prefix="/api")  │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                │ 请求体: dict (JSON) / form / multipart
+┌───────────────▼─ 路由层 api/ ───────────────────────────────────────────┐
+│  tools.py   GET  /api/tools        /api/tables出参  → dict              │
+│  scan.py    POST /api/run          /api/tool/<name>/run                 │
+│  results.py GET  /api/results      /api/tool/<name>/results  /api/export│
+│  upload.py  POST /api/upload       → target_parser → uploads/*.txt      │
+│  settings.py GET/POST /api/settings        /api/settings/enscan         │
+│  …无任何鉴权、无 Scope 校验、无任务队列（全部同步执行）                  │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                │ 参数 dict[str, Any]
+┌───────────────▼─ 编排层（根目录） ──────────────────────────────────────┐
+│  tool_runner.load_targets()  → list[str] 目标                          │
+│  tool_runner.load_tools()    → list[str] 工具名（校验 registry）        │
+│  tool_runner.run_tools()     → 双层 for（工具 × 目标）串行执行          │
+│  tool_runner.run_single_tool()                                          │
+│  target_parser.parse_targets_file() → list[str]（上传目标归一化）       │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                │ build_runner(tool_name) → BaseRunner 实例
+┌───────────────▼─ 适配器层 modules/ ─────────────────────────────────────┐
+│  registry.py  RUNNER_REGISTRY（17 项，import 期全部加载）               │
+│  base.py      BaseRunner._resolve_command / _execute / _execute_stdout  │
+│               _build_output_file / _read_results / _write_input_file    │
+│  17 个 Runner：subfinder assetfinder amass amass_intel oneforall alterx  │
+│               shuffledns dnsx httpx naabu nmap gospider katana           │
+│               waybackurls feroxbuster dirsearch enscan                  │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                │ subprocess.run(...)  → 外部进程；产物 = results/<md5>_<tool>.txt
+┌───────────────▼─ 工具层（进程外） ──────────────────────────────────────┐
+│  subfinder / assetfinder / amass / dnsx / httpx / naabu / nmap /        │
+│  katana / gospider / waybackurls / feroxbuster / dirsearch / enscan /   │
+│  oneforall(python)   —— 通过 PATH 查找，config.py 只给裸命令名          │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                │ list[str]（读输出文件后的行列表）
+┌───────────────▼─ 存储层 storage.py ─────────────────────────────────────┐
+│  ScanResultStore.save_dedicated_results() → scan_runs + <tool>_results  │
+│  TOOL_DATABASES：17 个工具的「表名 / 结果列名 / 分类」映射              │
+└───────────────┬─────────────────────────────────────────────────────────┘
+                │ SQLite 行 (tuple)
+┌───────────────▼─ 输出层 ────────────────────────────────────────────────┐
+│  exporter.gather_export_rows() / export_results() → exports/*.csv|json  │
+│  api/results.py → jsonify({"results": [...]})                          │
+│  storage.get_*_summary / get_view_* → 页面 & Agent 文本渲染            │
+└─────────────────────────────────────────────────────────────────────────┘
+
+旁路（与上主链解耦，且**不经过任何模型**）：
+  app.py:118 action == "chat" → agent/service.handle_agent_message()
+    → agent/action.AgentAction.run()
+      → agent/intent.analyze_intent()   （正则关键词）
+      → agent/planner.build_plan()      （模板拼装）
+      → AgentAction._execute_tool()     → 复用 tool_runner.run_tools / storage / exporter
+```
+
+**关键结论（与任务描述的差异）**：任务书描述的 "LLM 规划 agent" 在运行时**不会调用任何大模型**。`AgentAction.__init__` 接收 `client` 参数但只赋值给 `self.client` 后从不使用（`agent/action.py:52`、grep 显示 `.chat(` 只出现在 `agent/client.py:34` 与 `agent/providers/openai_compat.py` 内部）。`SYSTEM_PROMPT`（含 skills）只被塞进 `self.conversation_history[0]`（`agent/action.py:776`），从未发送给 provider。规划完全由 `agent/intent.py` 的关键词 + `agent/planner.py` 的固定模板决定。
+
+---
+
+## 3. 模块职责表
+
+### 3.1 根目录
+
+| 文件 | 职责 | 关键类/函数 | 被谁调用 | 依赖谁 |
+|---|---|---|---|---|
+| `app.py` | Flask 应用实例 + 页面路由 + Blueprint 注册 + 页面上下文构建 | `app`、`index()`、`normalize()`、`normalize_domain`、`build_page_context()`、`_to_ui_history()` | WSGI/`python app.py`；`tests/unit/test_smoke.py:21` | `agent`、`config`、`storage`、`tool_runner`、`api`、flask |
+| `config.py` | 全局配置：`Config` 类（从 `.env` 读取）、路径常量、17 个 `*_CONFIG` 工具配置、分类表 | `Config`、`Config.to_dict()`、`Config._mask()`、`build_tool_config()`、`OUTPUT_DIR`、`SQLITE_CONFIG`、`TARGET_CONFIG`、`SCAN_CONFIG`、`TOOL_CATEGORIES`、`TOOL_COMMANDS` | 几乎全部模块 | `dotenv`、`os` |
+| `storage.py` | SQLite 数据访问层（建表 + 写入 + 多维查询） | `TOOL_DATABASES`、`ScanResultStore`（`_init_db`、`_get_connection`、`save_dedicated_results`、`save_tool_results`、`save_results`、`get_dedicated_results`、`get_tool_results`、`get_view_results`、`get_alive_results`、`get_tool_database_overview` 等） | `api/*`、`tool_runner`、`exporter`、`agent/action`、`modules/dnsx|httpx|alterx|shuffledns` | `sqlite3`、`config` |
+| `tool_runner.py` | 编排核心：加载目标 → 校验工具 → 双层循环执行 → 落库 | `load_targets()`、`load_tools()`、`save_runner_results()`、`run_tools()`、`run_single_tool()` | `app.py:110`、`api/scan.py:105,159`、`agent/action.py:379,396` | `config`、`modules`、`storage` |
+| `target_parser.py` | 目标文件解析与归一化（去协议/去尾点/域名与 IP 校验） | `normalize_target()`、`parse_targets_file()`、`_parse_txt/_parse_csv/_parse_json/_parse_xlsx()`、`save_normalized_targets()`、`DOMAIN_PATTERN`、`IP_PATTERN` | `api/upload.py:56,60` | `csv`/`json`/`re`/`urlparse`、`openpyxl`（延迟导入） |
+| `exporter.py` | 结果聚合与落盘导出 | `ensure_export_dir()`、`gather_export_rows()`、`export_results()` | `api/results.py:138,241`、`agent/action.py:492,493` | `csv`/`json`、`config`、`storage` |
+| `agent_cli.py` | Agent 终端 REPL 入口 | `main()` | `python agent_cli.py` | `agent.AgentAction` |
+
+> 模块级导入副作用提醒：`import storage` 只 import `config`（不建库）；`ScanResultStore()` 才 `_init_db`。但 `import agent`（`agent/__init__.py`）会连带 import `action.py` → `modules.httpx.HttpxRunner` → `storage`，而 `import app`（`app.py:19`）又 import agent，因此**只要启动 Flask 就已经把 LLM 相关模块全部加载**（尽管它们不被使用）。
+
+
+### 3.2 `api/`（全部无鉴权、无 Scope、无队列）
+
+| 文件 | 职责 | 关键函数 | 被谁调用 | 依赖谁 |
+|---|---|---|---|---|
+| `api/__init__.py` | 创建并导出 `api_bp`，末尾 import 5 个子模块以完成路由注册 | `api_bp` | `app.py:31` | flask |
+| `api/tools.py` | `GET /api/tools`、`GET /api/databases` | `_build_tool_payload()`（内部 `build_runner` 实例化 17 个 Runner）、`list_tools()`、`list_databases()` | 前端/curl | `modules`、`storage` |
+| `api/scan.py` | `POST /api/run`（批量）、`POST /api/tool/<name>/run`（单工具） | `_normalize_domain()`、`execute_scan()`、`execute_single_tool()` | 前端/curl | `tool_runner`、`storage` |
+| `api/results.py` | 结果查询与导出 | `_normalize_domain()`、`_normalize_value()`、`_parse_limit()`、`query_results()`、`query_tool_results()`、`export_data()` | 前端/curl | `storage`、`exporter` |
+| `api/upload.py` | 上传目标文件 → 归一化 txt，结果写 Flask `session` | `upload_file()`、`ALLOWED_EXTENSIONS` | 前端/curl | `target_parser`、`config.UPLOAD_DIR`、`werkzeug.utils.secure_filename` |
+| `api/settings.py` | `.env` 与 enscan `config.yaml` 的读写 | `_read_env_file()`、`_write_env_file()`、`_ensure_enscan_config()`、`_read_enscan_yaml()`、`_write_enscan_yaml()`、`get_settings()`、`save_settings()`、`get_enscan_cookies()`、`save_enscan_cookies()`、`ALLOWED_KEYS`、`KEY_MAPPING` | 前端/curl | `config.Config`、`re`、`pathlib` |
+
+### 3.3 `modules/`（适配器层）
+
+**约定（`base.py` + `registry.py`）**
+- `modules/base.py:BaseRunner.__init__(config, tool_name)`：从 `config` 取 `category` 写入 `self.category`，`self.output_dir = OUTPUT_DIR`。
+- `_resolve_command(cmd)`（`modules/base.py:80`）：相对名走 `shutil.which`，找不到抛 `FileNotFoundError`；`.bat/.cmd` 自动用 `ComSpec /c` 包裹。
+- `_execute(cmd, domain)`（`modules/base.py:109`）：`subprocess.run(check=True, capture_output=True, text=True, timeout=config.get("process_timeout"))`，工具自己用 `-o` 写文件；**任何异常都只 `print` + `return False`**。
+- `_execute_stdout(cmd, domain, output_file)`（`modules/base.py:146`）：同上，但把 `completed.stdout` 写进 `output_file`。
+- `_build_output_file(domain)`（`modules/base.py:46`）：`md5(domain)[:12] + "_" + tool_name + ".txt"` 落在 `results/`。
+- `_read_results(output_file)`（`modules/base.py:62`）：文件不存在返回 `[]`，否则返回去空白后的非空行列表。
+- `_write_input_file(domain, values)`（`modules/base.py:186`）：在 `results/` 建 `delete=False` 临时文件，**调用方负责删除**。
+- `modules/registry.py:RUNNER_REGISTRY`（dict，17 键）→ `get_supported_runners()` 返回排序键列表；`build_runner(tool_name)` 无参实例化，未注册抛 `ValueError`。
+- `modules/__init__.py` 只重导出 `build_runner`、`get_supported_runners`。
+
+| 文件 | 职责 | 关键类 | 对应外部工具（实际命令） | 被谁调用 | 依赖谁 |
+|---|---|---|---|---|---|
+| `modules/base.py` | 所有 Runner 基类：命令解析/执行/读写/临时文件 | `BaseRunner` | —（无） | 17 个 Runner 继承 | `config.OUTPUT_DIR`、`subprocess`、`shutil`、`hashlib`、`tempfile` |
+| `modules/registry.py` | 静态注册表 + 工厂 | `RUNNER_REGISTRY`、`get_supported_runners()`、`build_runner()` | — | `modules/__init__`、`tool_runner`、`api/tools.py` | 17 个 adapter 模块（import 期即加载） |
+| `modules/subfinder.py` | 被动子域枚举 | `SubfinderRunner` | `subfinder -d <d> -t 50 -o <f> [-timeout N] -silent` | registry | base、`SUBFINDER_CONFIG` |
+| `modules/assetfinder.py` | 公开数据源查子域（stdout 捕获 + 正则规范化） | `AssetfinderRunner` | `assetfinder --subs-only <d>` | registry | base、`ASSETFINDER_CONFIG` |
+| `modules/amass.py` | 深度枚举 + ASN 反查（两个 Runner） | `AmassRunner`、`AmassIntelRunner` | `amass enum -d <d> -o <f>`；`amass intel -asn <n> -o <f>` | registry | base、`AMASS_CONFIG`/`AMASS_INTEL_CONFIG` |
+| `modules/oneforall.py` | 综合 Python 工具（stdout 捕获） | `OneForAllRunner` | `oneforall --target <d> run` | registry | base、`ONEFORALL_CONFIG` |
+| `modules/alterx.py` | 由库内已有子域生成变体 | `AlterxRunner` | `alterx -l <tmp> -o <f>` | registry | base、`storage.ScanResultStore`、`ALTERX_CONFIG` |
+| `modules/shuffledns.py` | 「混合模式」爆破 + 已有子域验证 + 泛解析过滤 | `ShufflednsRunner`（`_DISCOVERY_TOOLS`、`_WILDCARD_CACHE`、`_bruteforce_with_dnsx`、`_resolve_dnsx`、`_detect_wildcard_ips`、`_load_existing_candidates`、`run_scan`） | **不是 `shuffledns` 二进制**，内部硬编码调用 `dnsx`（`modules/shuffledns.py:89,109,147`） | registry | base、`storage`、`subprocess`、`SHUFFLEDNS_CONFIG` |
+| `modules/dnsx.py` | DNS 批量解析验证（从库里取候选） | `DnsxRunner`（`_load_candidates`、`_write_input_file`、`run_scan`） | `dnsx -l <tmp> -o <f> -t 50 -silent -resp-only` | registry | base、`storage`、`DNSX_CONFIG` |
+| `modules/httpx.py` | HTTP 存活探测 + JSONL 解析 | `HttpxRunner`（`_load_candidates`、`_write_input_file`、`_build_json_output_file`、`_read_json_results`、`run_scan`） | `<HTTPX_PATH or "http-x"> -l <tmp> -o <f> -json -threads 50 [-timeout 10] -silent -title -status-code -web-server -cdn [-tech-detect]` | registry、`agent/action.py:457`（直接 import 使用） | base、`storage`、`HTTPX_CONFIG` |
+| `modules/url_tools.py` | 5 个 URL/目录类 Runner 的**真实实现** | `GospiderRunner`、`KatanaRunner`、`WaybackurlsRunner`、`FeroxbusterRunner`（`_parse_ferox_json`）、`DirsearchRunner`、`build_url()` | `gospider -s <url> -d 2`；`katana -u <url> -d 2 -o <f>`；`waybackurls <d>`（stdout）；`feroxbuster -u <url> -o <f> --json -w <wordlist>`；`dirsearch -u <url> -o <f>` | registry（经 4 个薄壳模块） | base、5 个 URL/目录 CONFIG |
+| `modules/gospider.py` / `katana.py` / `waybackurls.py` / `dirsearch.py` / `feroxbuster.py` | 纯重导出薄壳，无逻辑 | —（仅 `from .url_tools import XRunner`） | 同上 | registry | `url_tools` |
+| `modules/port_tools.py` | 端口扫描两兄弟的**真实实现** | `NaabuRunner`、`NmapRunner` | `naabu -host <d> -o <f> -silent`；`nmap [-p N] -oN <f> <d>` | registry（经 naabu.py / nmap.py） | base、`NAABU_CONFIG`/`NMAP_CONFIG` |
+| `modules/naabu.py` / `nmap.py` | 纯重导出薄壳 | — | 同上 | registry | `port_tools` |
+| `modules/enscan.py` | 企业信息收集，产物走「运行前后 glob 新 JSON 文件」 | `ENScanRunner`（`_parse_json_output`、`run_scan`） | `enscan -n <keyword> -json`（`cwd=results/`） | registry | base、`glob`、`ENSCAN_CONFIG` |
+
+### 3.4 `agent/`
+
+| 文件 | 职责 | 关键类/函数 | 被谁调用 | 依赖谁 |
+|---|---|---|---|---|
+| `agent/__init__.py` | 导出 `AgentAction`、`handle_agent_message` | — | `app.py:19`、`agent_cli.py:6` | `.action`、`.service` |
+| `agent/service.py` | Web 侧单次对话门面 | `handle_agent_message()` | `app.py:128` | `AgentAction`、`storage` |
+| `agent/action.py` | **Agent 全部行为**：对话状态、意图分发、计划执行、工具handler、文本渲染、域名校验、限流 | `AgentAction`（`run()`、`_handle_pending_plan()`、`_execute_plan()`、`_execute_tool()`、`_tool_subdomain/_tool_summary/_tool_view_results/_tool_alive_results/_tool_httpx/_tool_export_results`、`_validate_domain()`、`_enforce_rate_limit()`、`_save_httpx_metadata()`、`available_tools`、`RATE_LIMIT_CACHE`、`DOMAIN_PATTERN`） | `service.handle_agent_message`、`agent_cli.main` | `exporter`、`modules.httpx.HttpxRunner`、`storage`、`tool_runner`、`.intent/.plan_state/.planner/.system_prompt/.target_ranker` |
+| `agent/intent.py` | 纯正则关键词意图识别 | `UserIntent`、`analyze_intent()`、`extract_domain()`、`extract_org_name()`、`guess_export_format()`、`_extract_set_target()`、`_has_any()`、各 `*_KEYWORDS` | `action.py:126,191`、`plan_state.py:81` | `re` |
+| `agent/planner.py` | 意图 → `AgentPlan`（固定步骤模板） | `PlanStep`、`AgentPlan`、`build_plan()`、`build_passive_plan()`、`build_uploaded_file_plan()`、`strategy_message()`、`_without_excluded_tools()` | `action.py:157,212` | `.intent`、`.strategy_templates` |
+| `agent/plan_state.py` | 待确认计划的确认/取消/改写判定 | `is_confirm()`、`is_cancel()`、`is_plan_modification()`、`apply_user_intervention()`、`is_meaningful_new_intent()`、`is_new_intent()`（**定义了但全仓无调用方，死代码**） | `action.py:16` | `.intent` |
+| `agent/target_ranker.py` | 子域命名打分排序 | `score_subdomain()`、`rank_subdomains()`、`HIGH/MEDIUM/LOW_VALUE_KEYWORDS` | `action.py:314` | 无 |
+| `agent/system_prompt.py` | 基础 system prompt + 拼接已启用 skills | `BASE_SYSTEM_PROMPT`、`SYSTEM_PROMPT` | `action.py:18,776` | `agent.skills.registry` |
+| `agent/strategy_templates.py` | 被动/主动侦察路线文本模板 | `render_src_collection_route()` | `planner.py:5` | 无 |
+| `agent/client.py` | **模型调用统一入口（当前无人调用）** | `LLMClient`（`chat`、`health_check`）、别名 `OpenAICompatibleClient` | 无调用方（`agent_cli`/`service`/`action` 都不构造它） | `.config`、`.providers` |
+| `agent/config.py` | LLM 配置加载与校验（自己再读一遍 `.env` 写 `os.environ`） | `LLMConfig`、`load_llm_config()`、`validate_llm_config()`、`_load_local_env_once()`、`_ENV_LOADED` | `client.py`、`providers/*` | `.errors`、`os`、`pathlib` |
+| `agent/errors.py` | 异常层级 | `LLMError` 及其 7 个子类（`LLMConfigError`/`LLMAuthError`/`LLMRateLimitError`/`LLMTimeoutError`/`LLMConnectionError`/`LLMResponseError`/`LLMServerError`） | `providers/*`、`config.py` | 无 |
+| `agent/model_result.py` | 结构化模型返回体的 dataclass | `ModelResult` | **无调用方（死代码）** | 无 |
+
+### 3.5 `agent/providers/` 与 `agent/skills/`
+
+| 文件 | 职责 | 关键类/函数 | 被谁调用 | 依赖谁 |
+|---|---|---|---|---|
+| `agent/providers/__init__.py` | 按 `LLM_PROVIDER` 选 provider | `build_provider()` | `client.py:31` | 4 个 provider |
+| `agent/providers/base.py` | 抽象基类 | `BaseLLMProvider.chat/health_check` | 各 provider | `abc` |
+| `agent/providers/openai_compat.py` | 唯一有真实网络调用的实现（重试、错误码映射、密钥脱敏） | `OpenAICompatProvider`（`chat`、`_chat_with_retry`、`_chat_once`、`_create_completion`、`_extract_content`、`_convert_error`、`_extract_status_code`、`_sanitize_error_message`、`health_check`） | `build_provider` | `openai` SDK、`.base`、`agent.config`、`agent.errors` |
+| `agent/providers/deepseek.py` | DeepSeek 变体（补默认 base_url） | `DeepSeekProvider` | `build_provider` | `openai_compat` |
+| `agent/providers/qwen.py` | 通义/DashScope 变体 | `QwenProvider` | `build_provider` | `openai_compat` |
+| `agent/providers/ollama.py` | 本地 Ollama 变体（补 base_url 与 api_key="ollama"） | `OllamaProvider` | `build_provider` | `openai_compat` |
+| `agent/skills/base.py` | Skill 数据结构与渲染 | `AgentSkill`（`render`） | `skills/registry`、`osint_recon` | `dataclasses` |
+| `agent/skills/registry.py` | Skill 注册与 prompt 拼装 | `ALL_SKILLS`、`get_enabled_skills()`、`get_skill_by_id()`、`build_enabled_skills_prompt()` | `system_prompt.py:1` | `.base`、`.osint_recon` |
+| `agent/skills/osint_recon.py` | OSINT 信息收集 Skill 的大段提示词与工具契约 | `OSINT_RECON_SKILL`、`OSINT_RECON_PROMPT` | `skills/registry` | `.base` |
+
+### 3.6 `tests/`
+
+| 文件 | 职责 | 关键函数 | 说明 |
+|---|---|---|---|
+| `tests/conftest.py` | 把项目根塞进 `sys.path` | 模块级代码 | 让 pytest 能 `import app` |
+| `tests/unit/test_smoke.py` | 冒烟：核心模块可导入、`/api/` 路由存在、上传上限 2MB、`OUTPUT_DIR` 名为 results、registry 恰好 17 个 | `test_core_modules_importable` 等 5 个 | **不 mock 外部工具、不联网** |
+| `tests/unit/test_repo_layout.py` | 仓库布局与 `.gitignore` 规则存在性 | `test_project_files_exist`、`test_repo_files_exist`、`test_ci_workflow_exists`、`test_gitignore_covers_runtime_artifacts` | 断言仓库根有 LICENSE/SECURITY.md/CONTRIBUTING.md/CHANGELOG.md |
+| `tests/integration/__init__.py` | 占位文档，**无任何集成用例** | — | 注明 M1 起再加 |
+| `tests/fixtures/__init__.py` | 空占位 | — | 无 fixture 文件 |
+
+---
+
+## 4. 三条关键调用链
+
+### 4.a 用户提交一次扫描任务（从 HTTP 到落库）
+
+以 `POST /api/run {"domain":"example.com","tools":["subfinder","dnsx"]}` 为例：
+
+| # | 位置 | 本步数据形态 |
+|---|---|---|
+| 1 | `api/scan.py:execute_scan` 接收请求 | JSON → `dict`（`request.get_json(silent=True) or {}`，解析失败得 `{}`） |
+| 2 | `api/scan.py:_normalize_domain(payload["domain"])` | `"Example.COM "` → `str "example.com"` |
+| 3 | `tools = payload["tools"] or payload["tool"]`；`str` 则包一层 list | `list[str]`；**注意 `[]` 或 `""` 会走 `or` 变成 `None`** |
+| 4 | 校验 `domain or file_path` 至少一个 → 否则 400 | `dict` 错误响应 |
+| 5 | `tool_runner.load_tools(tools)`（`tool_runner.py:54`）| `list[str]` → 与 `get_supported_runners()` 求差集；非法则 `ValueError` → `api/scan.py` 转 400 |
+| 6 | `ScanResultStore()` → `storage.py:_init_db` + 17 次 `_create_tool_table`（`CREATE TABLE IF NOT EXISTS`） | SQLite DDL；连接用完由 `with` 提交但**不关闭** |
+| 7 | `tool_runner.run_tools(domain, file_path, tools, store)`（`tool_runner.py:94`） | 进入编排 |
+| 8 | `load_targets(domain, file_path)`（`tool_runner.py:11`）| `list[str]`；**空则回落到 `TARGET_CONFIG["domains"]`（即 `nfl.com`）** |
+| 9 | 空目标 / 空工具 → `raise SystemExit(1)`（`tool_runner.py:111,117,121`） | 异常，**API 层不捕获 `SystemExit`** |
+| 10 | 外层 `for tool_name in selected_tools:` → `build_runner(tool_name)`（`modules/registry.py:44`） | Runner 实例（`__init__` 内 `ScanResultStore()` 的还会再开库） |
+| 11 | 内层 `for target in targets:` → `runner.run_scan(target)` | 例：`modules/subfinder.py:run_scan` 组装 `cmd: list[str]` |
+| 12 | `BaseRunner._build_output_file(target)`（`modules/base.py:46`） | `str` 路径 `results/<md5[:12]>_subfinder.txt` |
+| 13 | `BaseRunner._execute(cmd, target)`（`modules/base.py:109`）→ `_resolve_command`（`shutil.which`）→ `subprocess.run(..., timeout=process_timeout)` | 子进程；`capture_output=True` 把 stdout/stderr 收进内存；`check=True` 非 0 退出抛 `CalledProcessError` |
+| 14 | 异常分支：`FileNotFoundError` / `TimeoutExpired` / `CalledProcessError` 均 `print` + `return False` | `bool`；**失败信息只进 stdout 日志，不返回、不落库** |
+| 15 | `run_scan` 若上一步 `False` 则 `return []`，否则 `_read_results(output_file)` | `list[str]`；文件不存在 → `[]` |
+| 16 | `save_runner_results(store, target, runner, results)`（`tool_runner.py:76`）| 取 `runner.category`（缺省 `"subdomain"`）与 `runner.tool_name` |
+| 17 | `store.save_dedicated_results(domain, tool_name, category, results)`（`storage.py:252`）→ `_normalize_results`（strip+去重）→ `_create_scan_run` → 逐条 `INSERT OR IGNORE` | 先写 `scan_runs(domain, tool_name, result_count=len(normalized), created_at)` 得 `run_id`，再写 `subfinder_results(run_id, domain, subdomain, raw_result, created_at)`；`UNIQUE(domain, subdomain)` 去重 |
+| 18 | 汇总 `run_details`，`print` 统计，返回 report | `dict{targets, tools, total_found, total_inserted, runs}` |
+| 19 | `api/scan.py` `jsonify(report)` | HTTP 200 JSON。**注意：整个扫描在 Flask 请求线程内同步跑完，无 job id、无进度、无取消** |
+
+**与描述不符之处**：
+- 没有"任务执行/任务状态"实体。`scan_runs` 只有 `id/domain/tool_name/result_count/created_at`（`storage.py:137-147`），**没有 status、started_at、finished_at、error_code、progress**。
+- 没有异步：没有 `threading`/`Queue`/`celery`/`apscheduler`（全仓 grep 无匹配），`api/scan.py:105` 同步等待所有子进程结束。
+- `error_code` 只在设计文档里存在（`本机联调版实施方案_DSH.md` §6.2），**代码中没有任何一处定义或写入 `error_code`**。
+
+### 4.b 适配器的加载与调用：如何发现模块、如何判定成功/失败/超时/空结果
+
+**4.b.0 每个 Runner 的执行方式速查**（决定"输出去哪读"的关键，排错时最容易搞错这一列）
+
+| Runner | 执行方法 | 结果来源 | 失败时 | 独立异常 |
+|---|---|---|---|---|
+| `SubfinderRunner` | `_execute` | 输出文件 `-o` | `[]` | — |
+| `AssetfinderRunner` | `_execute_stdout` | stdout 落文件 | `[]` | — |
+| `AmassRunner` | `_execute` | 输出文件 `-o` + 正则过滤 | `[]` | — |
+| `AmassIntelRunner` | `_execute` | 输出文件 `-o` | `[]` | `ValueError`（非法 ASN，`amass.py:76`） |
+| `OneForAllRunner` | `_execute_stdout` | stdout 落文件 | `[]` | — |
+| `AlterxRunner` | `_execute` | 输出文件 `-o`（`finally` 删临时输入） | `[]` | — |
+| `ShufflednsRunner` | **自建 `subprocess.run`** | 解析 `dnsx -json` stdout | 抛异常 | `FileNotFoundError`/`TimeoutExpired` 不被捕 |
+| `DnsxRunner` | `_execute` | 输出文件 `-o`（`finally` 删临时输入） | `[]` | — |
+| `HttpxRunner` | `_execute` | JSONL `-json` → `_read_json_results` → **只取 `url`** | **`RuntimeError`** | `httpx.py:177,211` |
+| `NaabuRunner` / `NmapRunner` | `_execute` | 输出文件 `-o` / `-oN` | `[]` | — |
+| `GospiderRunner` | `_execute_stdout` | stdout 落文件 | `[]` | — |
+| `KatanaRunner` | `_execute` | 输出文件 `-o` | `[]` | — |
+| `WaybackurlsRunner` | `_execute_stdout` | stdout 落文件 | `[]` | — |
+| `FeroxbusterRunner` | `_execute` | 输出文件 `-o` + `--json` 逐行解析 | `[]` | — |
+| `DirsearchRunner` | `_execute` | 输出文件 `-o`（**未开 json_output**） | `[]` | — |
+| `ENScanRunner` | **自建 `subprocess.run`** | `results/**/*.json` 前后 glob 差集 | `[]`（三步 except 全覆盖） | — |
+
+结论：**17 个 Runner 里有 4 个（shuffledns / enscan / httpx 的失败分支）不走 `BaseRunner._execute` 的统一异常处理**，这是"同一类 bug 在不同工具上表现不同"的根因。
+
+1. **发现**：`modules/registry.py:1-16` 在 **import 期**硬编码 `from .alterx import AlterxRunner` 等 16 行 import，然后 `RUNNER_REGISTRY` 字典登记 17 个键。没有插件扫描、没有 `pkgutil`/`importlib` 动态发现。
+2. **薄壳重导出**：`modules/dirsearch.py`、`feroxbuster.py`、`katana.py`、`gospider.py`、`waybackurls.py` 只做 `from .url_tools import XRunner`；`naabu.py`/`nmap.py` 只做 `from .port_tools import ...`。改实现应改 `url_tools.py` / `port_tools.py`。
+3. **构造**：`build_runner(tool_name)`（`modules/registry.py:44`）无参 `runner_cls()`；未注册抛 `ValueError("不支持的收集器: ...")`。
+4. **统一执行**：所有 Runner 都实现 `run_scan(target)`，都依赖 `BaseRunner._resolve_command` + `_execute`/`_execute_stdout`，都返回 `list[str]`（`HttpxRunner.run_scan` 也是先解析 JSONL 再只返回 URL 字符串列表）。
+5. **成功判定**：`_execute`/`_execute_stdout` 返回 `True` 当且仅当 `subprocess.run` 未抛异常（`check=True` 意味着 exit code 0）。Runner 再读输出文件。
+6. **失败 / 超时判定**：**三者被压成同一个 `False`**（`modules/base.py:135-144`、`175-184`）：
+   - `FileNotFoundError` → `print("[!] 未找到工具 ...")` → `False`
+   - `subprocess.TimeoutExpired` → `print("[!] ... 扫描超时 ...")` → `False`
+   - `subprocess.CalledProcessError` → `print("[!] ... 扫描失败: {stderr or stdout}")` → `False`
+   - 之后 Runner 一律 `return []`（如 `modules/subfinder.py:65-66`、`modules/port_tools.py:63-64`）。
+7. **空结果**：`_read_results` 在文件不存在或全部空行时同样返回 `[]`。
+   → **成功但零结果、工具不存在、超时、非 0 退出，在调用方看都是 `[]`，无法区分**。这正是任务书里 "error_code 从哪来" 的答案：**代码里没有 error_code，只有 `print` 的日志和 `[]`**。
+8. **例外（会抛异常的 Runner）**：
+   - `modules/httpx.py:177` 无候选目标时 `raise RuntimeError`；`:211` 执行失败时也 `raise RuntimeError`。
+   - `modules/shuffledns.py:88,108,146` 直接 `subprocess.run(["dnsx", ...])`（**硬编码命令名，不用 `self.config["path"]`**），且**没有 try/except**，`FileNotFoundError`/`TimeoutExpired` 会向上抛出。
+   - `modules/amass.py:76` `AmassIntelRunner._parse_asn` 非法 ASN 抛 `ValueError`。
+   - 这些异常在 `tool_runner.run_tools` 的第 11 步**没有任何 try/except**，会直接冒泡到 `api/scan.py`（未捕获）→ HTTP 500；在 Agent 路径上则由 `agent/action.py:366 _execute_tool` 的 `except Exception` 兜住并渲染成 `"ok": false`。
+
+### 4.c "LLM agent 规划链"（真实情况：全程无模型调用）
+
+```
+用户自然语言
+  → app.py:index()  action=="chat"                    （form 字段 agent_message）
+  → agent/service.py:handle_agent_message()           （组装 AgentAction，透传 session 里的 history/pending_plan/agent_context/uploaded_targets）
+  → agent/action.py:AgentAction.run(text)
+      1) self.steps = []
+      2) _resolve_menu_input(text)                    菜单 "1"~"4" → 复用上一次选项文本
+      3) if self.pending_plan: _handle_pending_plan() 确认/取消/改写/新意图
+      4) agent/intent.py:analyze_intent(text, has_uploaded_file, context_state)   ← 纯正则
+         · extract_domain / extract_org_name / _extract_set_target
+         · 关键词表：SUBdomain/VIEW_RESULT/UPLOAD_FILE/DB_QUERY/RANK/PROBE/EXISTING/...
+         · 产出 UserIntent(intent_type, target, requested_tools, needs_confirmation, ...)
+      5) intent_type 直接分发：cancel_plan / set_target / view_existing_results /
+         analyze_existing_subdomains / storage 问答 / 缺 target 提示
+      6) agent/planner.py:build_plan(intent, uploaded_context)   ← 固定模板，非模型生成
+         返回 AgentPlan(target, strategy, requires_confirmation, steps=[PlanStep(id,tool,args,description)])
+         strategy 文本来自 agent/strategy_templates.py:render_src_collection_route()
+      7) requires_confirmation=True → 存进 self.pending_plan 并渲染提示，等用户回"确认执行"
+      8) 确认后 _execute_plan() → 逐 step 调 _execute_tool(action, args)
+         action ∈ available_tools {subdomain, summary, view_results, alive_results, httpx, export_results}
+  → AgentAction._execute_tool()  （agent/action.py:360）
+      · handler 抛异常 → {"ok": False, "error": str(exc), "tool": action}
+      · _attach_storage_info() 补上 {"type":"sqlite","path":...,"tables":[...]}
+  → 各 handler 真正干活：
+      _tool_subdomain  → tool_runner.run_tools()  → 复用 §4.a 第 8~18 步
+      _tool_httpx      → modules/httpx.py:HttpxRunner.run_scan()（直连，不经 registry）
+                         → _save_httpx_metadata() → storage.save_tool_results(domain,"httpx","web",[json 字符串...])
+      _tool_view_results/_tool_alive_results/_tool_summary → storage 查询
+      _tool_export_results → exporter.gather_export_rows + export_results
+  → _format_execution_summary() → 文本
+  → app.py 写 session["agent_history"]/["pending_plan"]/["agent_context"]/["agent_steps"]
+```
+
+**真实情况说明（必须纠正任务书假设）**：
+- **provider 调用这一步不存在**。`agent/providers/*`、`agent/client.py`、`agent/system_prompt.py`、`agent/skills/*`、`agent/model_result.py` 构成一套完整但**未被接线的 LLM 客户端**；`AgentAction` 里的 `self.client` 是死字段。
+- 因此 "provider 超时" 类 bug 在当前 Web/CLI 流程中**不会触发**（代码路径不可达）；要触发只能自己写脚本构造 `LLMClient`。
+- 当前表现为**确定性规则引擎**：同样的输入永远给同样的计划；"确认执行" 靠 `plan_state.is_confirm()` 的关键词（"确认/执行/开始/继续/run/start..."）。
+- `SYSTEM_PROMPT` 只在 `_normalize_history` 里作为 history[0] 存在（`agent/action.py:776`），其唯一效果是被返回给前端/存进 session。
+
+---
+
+## 5. 数据模型
+
+**以下为 `results/scan_results.db` 的实测结构**（用 sqlite3 直接读 `sqlite_master`，而非只看 `storage.py` 的建表语句）。
+
+### 5.1 通用表
+
+```sql
+CREATE TABLE scan_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    result_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL            -- datetime.utcnow().isoformat(timespec="seconds") + "Z"
+);
+CREATE INDEX idx_scan_runs_domain ON scan_runs(domain);
+CREATE INDEX idx_scan_runs_tool   ON scan_runs(tool_name);
+
+CREATE TABLE tool_results (              -- 未注册工具的兜底表
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    domain TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(domain, tool_name, category, value),
+    FOREIGN KEY(run_id) REFERENCES scan_runs(id)
+);
+```
+
+### 5.2 工具专属表（17 张，模板由 `storage.py:_create_tool_table` 用 f-string 动态拼表名/列名）
+
+```sql
+CREATE TABLE <table> (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    domain TEXT NOT NULL,
+    <result_column> TEXT NOT NULL,       -- 见下表
+    raw_result TEXT NOT NULL,            -- 当前实现里恒等于 <result_column>
+    created_at TEXT NOT NULL,
+    UNIQUE(domain, <result_column>),
+    FOREIGN KEY(run_id) REFERENCES scan_runs(id)
+);
+CREATE INDEX idx_<table>_domain ON <table>(domain);
+```
+
+| 工具名 | 表名 | 结果列 | category |
+|---|---|---|---|
+| amass | `amass_results` | `subdomain` | subdomain |
+| amass_intel | `amass_intel_results` | `subdomain` | subdomain |
+| subfinder | `subfinder_results` | `subdomain` | subdomain |
+| assetfinder | `assetfinder_results` | `subdomain` | subdomain |
+| shuffledns | `shuffledns_results` | `subdomain` | subdomain |
+| alterx | `alterx_results` | `subdomain` | subdomain |
+| oneforall | `oneforall_results` | `subdomain` | subdomain |
+| enscan | `enscan_results` | `subdomain` | subdomain |
+| dnsx | `dnsx_results` | `hostname` | alive |
+| httpx | `httpx_results` | `endpoint` | web |
+| naabu | `naabu_results` | `port_result` | port |
+| nmap | `nmap_results` | `port_result` | port |
+| feroxbuster | `feroxbuster_results` | `url` | url |
+| dirsearch | `dirsearch_results` | `url` | url |
+| waybackurls | `waybackurls_results` | `url` | url |
+| katana | `katana_results` | `url` | url |
+| gospider | `gospider_results` | `url` | url |
+
+实测行数（当前工作副本）：`waybackurls_results=296`、`enscan_results=37`、`feroxbuster_results=12`、`dirsearch_results=9`、`amass_intel_results=2`、`scan_runs=28`，其余为 0。**没有** `subdomain_results`、`alive_results`、`jobs`、`assets`、`observations`、`artifacts`、`scopes`、`settings` 等表。
+
+**表结构的三个硬约束（决定 bug 表现）**：
+1. **专属表没有 `category` 列**（分类信息硬编码在 `TOOL_DATABASES` 里），所以 `get_tool_results(category=...)` 在专属表分支无法按分类过滤，只能靠 `TOOL_DATABASES[meta]["category"]` 反查。
+2. **`raw_result` 当前恒等于结果列的值**（`storage.py:289` 传的是 `value, value`），没有任何原始行/原始 JSON 被保留 —— 想追溯"工具原话"必须去看 `results/<hash>_<tool>.txt` 文件。
+3. **唯一键只有 `(domain, <result_column>)`**，不含 `tool_name`/时间。因此同一域名反复扫描只会让 `run_id` 不断新建、`scan_runs` 不断膨胀，而结果行永远停在第一次插入的那条（`INSERT OR IGNORE`）。
+
+
+> ⚠️ 但 `agent/action.py` 会把不存在的表名告诉用户：`_get_storage_tables()`（`:508,512,517,519,521`）返回 `"subdomain_results"`、`"alive_results"`；`_answer_storage_question()`（`:853`）说"主要表包括 `subdomain_results`、`alive_results`"。这些表从未创建，相关文本是**误导性输出**（仅字符串，不会引发 SQL 报错）。
+
+### 5.3 任务状态机
+
+**代码中不存在任务状态机。** `scan_runs` 无 `status` 列，写入即终结（`storage.py:_create_scan_run` 一条 INSERT，无 UPDATE）。API 也没有 job 概念。
+
+`queued / running / succeeded / partial / failed / timeout / cancelled / interrupted` 这套状态枚举，以及 `tool_not_found/permission_denied/invalid_target/scope_violation/timeout/parse_error/network_error/rate_limited/partial_success/unknown_error` 这套 error_code，**只写在设计文档** `本机联调版实施方案_DSH.md`（§6.1 / §6.2）与 `DSH_执行提示词.md` 第 7 条里，属于**尚未实现的 M3/M4 目标**。当前的"状态"只有：HTTP 请求是否返回、子进程是否 exit 0（被吞成 `bool`）、`scan_runs` 是否多了一行。
+
+---
+
+## 6. BUG 定位索引表（共 22 条症状）
+
+| # | 典型症状 | 最可能的 3 个排查位置 | 该处典型失败模式 |
+|---|---|---|---|
+| 1 | 扫描任务「一直卡在 running」/ 请求长时间不返回 | ① `tool_runner.py:run_tools`（第 130–154 行的双层同步 for）② `modules/base.py:_execute` 的 `timeout=config.get("process_timeout")` ③ `config.py:build_tool_config` 的 `process_timeout: 300` | 根本没有异步任务系统；整个扫描在 Flask 请求线程里同步跑完。单目标最长可挂 300s×目标数，前端只能等到超时。没有 job_id 可查进度，也没有取消接口 |
+| 2 | 任务「立刻失败」，没有任何扫描日志 | ① `tool_runner.py:load_targets`（`:29-32` 打开 file_path）② `tool_runner.py:load_tools`（`:68-73`）→ `raise SystemExit(1)` ③ `api/scan.py:execute_scan`（未捕获 `SystemExit`/`FileNotFoundError`） | `file_path` 不存在 → `FileNotFoundError` → 500；`SystemExit` 是 `BaseException`，Flask 不兜，页面/客户端看到 500 或连接被断；`/api/tool/<name>/run` 里 `load_tools([tool_name])` 抛 `ValueError` 被转 400，但 `run_single_tool` 后续的 `runner.run_scan` 无保护 |
+| 3 | 工具「明明能跑通」却返回空结果 / 库里 0 行 | ① `modules/base.py:_read_results`（`:62-78` 文件不存在即返回 `[]`）② 各 Runner 的 `-o <output_file>` 写入路径 ③ `modules/base.py:_build_output_file`（`:59` md5 前缀命名） | 工具把结果打到 stdout 而配置用了 `_execute`（或反之），文件根本没生成；`results/` 不可写；域名的 md5 文件名与预期不一致导致读错文件 |
+| 4 | 结果页看不到数据（明明 scan_runs 有记录） | ① `api/results.py:query_results` → `exporter.gather_export_rows` ② `storage.py:get_view_results`（**只 UNION subdomain 类表**）③ `storage.py:get_tool_results` | `gather_export_rows` 在 `category is None` 时只调 `get_view_results`（subdomain 8 张表）+ `get_tool_results` 兜底；`url/web/port` 类数据在 `category` 未指定时会被 `limit` 截断或重复。`get_tool_results` 的 `category` 形参**在专属表分支被完全忽略**（`storage.py:671-704`），所以按 category 过滤静默失效 |
+| 5 | 上传目标文件解析出错 / 400「未识别到有效目标」 | ① `target_parser.py:normalize_target`（`:31` DOMAIN_PATTERN/IP_PATTERN 双重 `fullmatch`）② `target_parser.py:_parse_xlsx`（`:120` `load_workbook`）③ `api/upload.py:upload_file`（`:46` 扩展名白名单） | 带路径的 URL（`https://a.com/x`）只取 hostname 后仍需匹配域名正则；`*.xlsx` 未装 openpyxl 时 `_parse_xlsx` 抛 `ImportError`，`api/upload.py` **不捕获** → 500；`.xls`（老格式）不在白名单 → 400；中文/全角字符、`_`开头的域会被正则拒掉 |
+| 6 | 新增一个扫描工具后「没生效」 | ① `modules/registry.py:RUNNER_REGISTRY`（`:19-37`）② `config.py:build_tool_config` + 对应 `*_CONFIG` ③ `storage.py:TOOL_DATABASES`（`:15-101`） | 三处都要登记：漏 registry → `load_tools` 报"存在不支持的工具"；漏 TOOL_DATABASES → 结果落到通用 `tool_results` 且 `get_dedicated_results` 抛 `ValueError`；漏 `*_CONFIG` → `KeyError: 'path'` |
+| 7 | 扫描范围/目标校验被绕过（传入任意 file_path 或空目标却扫了别的域名） | ① `tool_runner.py:load_targets`（`:29-41` 直接 `open(file_path)` + 空目标回落 `TARGET_CONFIG`）② `config.py:TARGET_CONFIG`（`:94-97` 默认 `domains=["nfl.com"]`）③ `api/scan.py:execute_scan`（`:94` 只校验 `domain or file_path` 非空） | **没有 Scope 概念**（grep 全仓无 scope 表/校验器）。`file_path` 可为任意绝对路径（任意文件读取）；目标全被过滤掉时回落到硬编码的 `nfl.com` 并真的发起扫描；`tools: []` 也会因为 `payload.get("tools") or payload.get("tool")` 变成 `None`，进而 `load_tools` 回落到 `SCAN_CONFIG["enabled_runners"]=["amass"]` 去扫 |
+| 8 | 设置项保存后「不生效」 | ① `api/settings.py:save_settings` → `_write_env_file`（`:99`）② `config.py:Config` 类属性（`:13-39`，**import 期求值**）③ `api/settings.py:KEY_MAPPING`（`:58-80`） | `.env` 写成功了，但 `Config.LLM_API_KEY` 等是类属性，进程内已固化，必须重启（响应里的 message 也这么说）；`load_dotenv` 默认**不覆盖**已存在的环境变量；`KEY_MAPPING` 里 `enscan_*_cookie` 映射到 `FOFA_EMAIL/FOFA_KEY/HUNTER_API_KEY` 是**永远不会走到的死分支**（enscan 键在 `save_settings` 里走 yaml 分支），极易误导后来者 |
+| 9 | 导出文件缺字段 / 行重复 / 混入别的工具数据 | ① `exporter.py:gather_export_rows`（`:46-77` 两段拼接）② `storage.py:_get_tool_results_fallback`（`:706-747` 遍历**全部 17 张表**）③ `exporter.py:export_results`（`:109` 动态 fieldnames） | 同一条子域名会先由 `get_view_results` 加入、又被 `_get_tool_results_fallback` 从同一张专属表再加一次 → 重复行；`category` 过滤在专属表分支失效 → 混入其他分类；`fmt` 不是 csv/json 时抛 `ValueError`，`api/results.py:export_data` 不捕获 → 500（`agent/intent.guess_export_format` 会产出 `"xlsx"`，必然踩中） |
+| 10 | 前端页面 500 / `TemplateNotFound: index.html` | ① `app.py:26` `template_folder="web/templates"` ② `app.py:160` `render_template("index.html", **context)` ③ `app.py:92` `index()` 的 `request.values.get("domain")` | 仓库里 **不存在 `web/` 目录**（实测 `Test-Path web` = False），`/` 必然抛 `TemplateNotFound`；同时 `app.py:110` 会在渲染前同步跑 subfinder；`debug=True` 让异常页暴露堆栈 |
+| 11 | Agent 规划报错 / 答非所问 | ① `agent/intent.py:analyze_intent`（`:118-273` 的分支顺序）② `agent/planner.py:build_plan`（`:79-199`）③ `agent/action.py:run`（`:109-182`） | 分支顺序敏感：`确认/执行/开始/继续` 的关键词判断（`:121`）优先于一切，含"继续"的正常句子会被吞成 `confirm_plan`；`build_plan` 对 `confirm_plan`/`cancel_plan`/`analyze_existing_subdomains` 都返回 `None`，走到 `:161` 就回"我没有识别到明确任务"；`subdomain_scan` 恒用 `scan_tool="subfinder"`，用户说 amass 也不改（除 `plan_state.apply_user_intervention` 的"改用 amass"字面量） |
+| 12 | provider 超时 / 认证失败 | ① `agent/providers/openai_compat.py:_convert_error`（`:133`，按 401/403/429/5xx/404/400 + 文本关键字分类）② `agent/providers/openai_compat.py:_chat_with_retry`（`:52`，退避 `min(2**attempt, 8)`）③ `agent/config.py:validate_llm_config`（`:114`） | **当前 Web/CLI 流程根本不会走到这里**（`LLMClient` 无调用方）。若自行调用：`validate_llm_config` 在 `LLMClient.__init__` 里抛 `LLMConfigError`；`openai` SDK 的 `APITimeoutError` 没有 `status_code`，只能靠 `"timeout" in message.lower()` 命中，`sanitize` 只对 api_key 做替换 |
+| 13 | 子进程路径找不到（Windows `.exe` / `scripts/` 下的工具） | ① `config.py:HTTPX_CONFIG`（`:171`）② `modules/base.py:_resolve_command`（`:98-107`）③ `config.py:GO_BIN_WINDOWS/GO_BIN_POSIX`（`:91-92`） | **`HTTPX_CONFIG` 的 path 默认值写成了 `"http-x"`（`:171`）**，PATH 里没有该命令 → `FileNotFoundError` → 静默 `[]`。`scripts/dirsearch.exe`、`scripts/oneforall.exe`、`scripts/OneForAll.exe` 明明存在，但 config 只给裸名 `"dirsearch"`/`"oneforall"`，且 `GO_BIN_*` 常量**定义了从未使用**（不注入 PATH）。只有 `.bat/.cmd` 会被 ComSpec 包裹，`.exe` 依赖 `shutil.which` |
+| 14 | 子进程超时 / 命令挂死，进程不退出 | ① `modules/shuffledns.py:_bruteforce_with_dnsx`（`:88` 硬编码 `timeout=300`，无 try/except）② `modules/base.py:_execute`（`:125` `capture_output=True`）③ `modules/enscan.py:run_scan`（`:55` `capture_output=True` + `cwd=results/`） | `capture_output=True` 在输出量大时可能因管道写满而卡住；`shuffledns`/`enscan` 自建 `subprocess.run` **绕过了 `process_timeout` 统一入口**（enscan 用自己的 `process_timeout`，shuffledns 写死 300/120/30）；`shuffledns` 的 `TimeoutExpired` 会向上抛穿到 `api/scan.py` → 500 |
+| 15 | 并发任务互相干扰 / 结果串台 | ① `modules/shuffledns.py:_WILDCARD_CACHE`（`:46` **类级可变 dict**）② `agent/action.py:RATE_LIMIT_CACHE`（`:23` 类级 dict，`:814 _enforce_rate_limit`）③ `modules/enscan.py:run_scan`（`:53,77` 运行前后 glob `results/**/*.json` 取差集） | 类属性被所有实例/线程共享：泛解析缓存跨任务污染且无上限；限流是**进程级全局**，一个用户把 `httpx:domain` 锁 8 秒会拒绝另一个会话。enscan 用"新增 json 文件"判定结果，并发或被别的工具写入 json 时会取到**别人的产物** |
+| 16 | 数据库被锁 `database is locked` | ① `storage.py:_get_connection`（`:123-125` 无 `PRAGMA busy_timeout`、不启用 WAL）② `storage.py` 全部 `with self._get_connection() as conn:`（sqlite3 的上下文管理器**只提交事务、不关闭连接**）③ 每次 `ScanResultStore()` 都跑一遍 `_init_db` 的 17 次 DDL | 无 WAL、无 busy_timeout、无 `foreign_keys=ON`（外键形同虚设）；每个 API 调用都新建 `ScanResultStore()` 并执行建表语句，写锁竞争窗口被放大；连接对象只提交不关闭，长期运行会累积文件句柄 |
+| 17 | 工具产物文件堆积 / 临时文件泄漏 | ① `modules/base.py:_write_input_file`（`:201` `delete=False`，落在 `results/`）② `modules/shuffledns.py` 的 `words_file` 与 `NamedTemporaryFile` ③ `api/upload.py:upload_file`（`:53,58` 先 `file.save(raw_path)` 再解析） | 基类的临时文件"调用方负责删除"，除 `dnsx/httpx/alterx` 外无人删；`upload` 在解析失败（返回 400）时**不清理已保存的 raw 文件**，`uploads/` 会不断积累；`enscan` 把原始 JSON 复制成 `results/<hash>_enscan.txt` 也从不清理 |
+| 18 | httpx 探测「跑通了」但拿不到状态码/标题/技术栈 | ① `modules/httpx.py:run_scan`（`:213-214` 只 `return [r.get("url") ...]`）② `modules/httpx.py:_read_json_results`（`:111-155` 解析出的 6 个字段被丢弃）③ `agent/action.py:_save_httpx_metadata`（`:908-911` 存的是 `json.dumps(item)`，落到 `httpx_results.endpoint` 列） | 走 `tool_runner` 的路径**丢失所有元数据**（README/设计文档声称有指纹，实际只剩 URL）；只有经 Agent 的 `_tool_httpx` 才把 JSON 字符串塞进结果列——即同一个工具的两条调用链写出的数据形态不同 |
+| 19 | httpx 一执行就把整批任务打挂 | ① `modules/httpx.py:177`（无候选 `raise RuntimeError`）② `modules/httpx.py:211`（`_execute` 返回 False 时 `raise RuntimeError`）③ `tool_runner.py:137`（`runner.run_scan(target)` **无 try/except**） | 与其它 Runner "失败返回 `[]`" 的约定不一致；在 `/api/run` 批量路径上会直接冒泡成 500，**后续目标/工具全部不再执行**；只有在 Agent 路径被 `agent/action.py:366` 的 `except Exception` 兜住 |
+| 20 | Agent 对话「失忆」/ 多轮后上下文丢失 | ① `app.py:139,146`（`session["agent_history"]=...[-40:]`、`session["agent_steps"]=...[-50:]`）② `app.py:27` `app.secret_key = Config.SECRET_KEY`（默认 `"dev-secret-key"`）③ `agent/action.py:_trim_history`（`:785` 上限 30 条） | Flask session 是**签名 Cookie**（客户端存储）；`agent_history`/`agent_steps` 里含完整工具结果文本，很容易超过浏览器 4KB Cookie 上限 → Flask 静默丢弃 Cookie → 下一轮 `session.get("agent_history")` 变空。默认密钥还可被伪造 |
+| 21 | `/api/tools`、`/api/databases` 返回的记录数不对/很慢 | ① `api/tools.py:list_tools`（`:80-88` 每个工具都 `build_runner` 实例化）② `api/tools.py:_build_tool_payload`（`:35`）③ `storage.py:get_tool_databases`（`:527-541`，**不返回任何 count**） | 接口 docstring（`api/tools.py:52-66`）宣称返回 `record_count`，实现只返回 `tool_name/table/result_column/category`；真正的计数方法 `get_tool_database_overview`（`storage.py:543`）**在 API 层从未被调用**。另外 `build_runner` 会执行 `DnsxRunner/HttpxRunner/AlterxRunner/ShufflednsRunner` 的 `__init__`（各建一个 `ScanResultStore()`，触发建表） |
+| 22 | 子域爆破类工具（shuffledns/alterx/dnsx）总是零结果 | ① `config.py:SHUFFLEDNS_CONFIG`（`:145` wordlist=`SecLists/subdomains-top1million-5000.txt`）② `modules/shuffledns.py:_bruteforce_with_dnsx`（`:63` 文件不存在只 print 一句）③ `config.py:FEROXBUSTER_CONFIG`（`:200` wordlist 是硬编码绝对路径 `D:/c4/v2/backend/framework-main/SecLists/...`） | `SecLists/` 里**实际只有 `raft-small-directories.txt`**（实测），配置引用的两个字典文件都不存在：shuffledns 静默返回空、feroxbuster 会把不存在的路径当 `-w` 参数传给子进程而失败。`alterx`/`dnsx`/`httpx` 的候选来自 `store.get_results_by_domain()`，subfinder 没先跑过就永远是空 |
+
+---
+
+## 7. 已知薄弱点 / 坑（实际阅读所得）
+
+> 共 36 条，每条都给出文件与函数位置，可直接跳转。
+
+### 7.1 异常与错误处理
+
+1. **失败被吞成空结果**：`modules/base.py:_execute` 与 `_execute_stdout` 把 `FileNotFoundError`/`TimeoutExpired`/`CalledProcessError` 全部降级为 `return False`，Runner 再 `return []`。调用方无法区分"工具没装""超时""非 0 退出""本来就没结果"。这在设计文档里被列为 P0（`本机联调版实施方案_DSH.md` §1.1），代码未改。
+2. **异常冒泡路径不一致**：`tool_runner.py:137` 对 `runner.run_scan` 无保护，而 `modules/httpx.py:177,211` 会 `raise RuntimeError`、`modules/shuffledns.py` 会抛 `FileNotFoundError/TimeoutExpired`、`modules/amass.py:76` 会抛 `ValueError` → 在 `api/scan.py` 直接 500，在 Agent 路径被 `agent/action.py:366` 兜住，行为取决于从哪个入口进来。
+3. **`SystemExit` 与 HTTP 混用**：`tool_runner.py:111/117/121` 用 `raise SystemExit(1)` 表达"无目标/无工具"，这是 CLI 语义；`api/scan.py:execute_scan` 不捕获 `BaseException`，Web 场景下表现为 500 或被 dev server 中断。`app.py:112` 是唯一显式处理 `SystemExit` 的地方。
+4. **`_execute_tool` 的宽泛捕获**：`agent/action.py:366` `except Exception as exc: result = {"ok": False, "error": str(exc), "tool": action}` —— 会把 `KeyError`/`AttributeError` 这类编程错误伪装成"工具执行失败"反馈给用户，排查时容易走错方向。
+5. **`api/results.py:export_data` 未捕获 `export_results` 的 `ValueError`**（`exporter.py:116`），非法 `format` 直接 500。
+6. **`api/upload.py` 未捕获 `target_parser` 的 `ImportError`**（`target_parser.py:117`），上传 `.xlsx` 且未装 openpyxl 时 500，而不是 400 + 明确提示。
+
+### 7.2 路径与外部依赖
+
+7. **硬编码绝对路径**：`config.py:200` `wordlist="D:/c4/v2/backend/framework-main/SecLists/raft-small-directories.txt"` —— 作者本机路径，换机器必失败。
+8. **`HTTPX_CONFIG` 命令名疑似笔误**：`config.py:171` `os.getenv("HTTPX_PATH", "http-x")`，默认值不是 `httpx`。
+9. **配置引用的字典文件不存在**：`config.py:145` 的 `SecLists/subdomains-top1million-5000.txt`；仓库 `SecLists/` 只有 `raft-small-directories.txt`。
+10. **`GO_BIN_WINDOWS`/`GO_BIN_POSIX` 是死常量**（`config.py:91-92`），从未用于注入 PATH；`scripts/*.exe` 也不会被自动发现。
+11. **`modules/shuffledns.py` 硬编码 `"dnsx"` 命令名**（`:89,109,147`）而不读 `self.config["path"]`，无法通过配置切换二进制；并且它**根本没有调用 `shuffledns` 二进制**，类名/工具名与实际行为不符。
+12. **`modules/enscan.py` 依赖 `cwd=results/` + 前后 glob 差集**（`:53,58,77`）识别产物：并发运行或其它工具往 `results/` 写 `.json` 时会认错文件；文件已存在但被覆盖时 `new_files` 为空 → 静默 `[]`。
+
+### 7.3 SQL 与并发
+
+13. **f-string 拼 SQL 表名/列名**：`storage.py:_create_tool_table`（`:189`）、`get_dedicated_results`（`:498,508`）、`get_tool_results`（`:688`）、`_get_tool_results_fallback`（`:729`）、`_query_subdomain_tables`（`:384,401`）。当前插值来源都是模块级常量 `TOOL_DATABASES`，**不构成注入**，但一旦有人把用户输入接到表名就会立刻变成注入点。值全部走 `?` 占位参数，这点是对的。
+14. **无 WAL / 无 `busy_timeout` / 无 `PRAGMA foreign_keys=ON`**（`storage.py:_get_connection`，`:123`）。`FOREIGN KEY(run_id) REFERENCES scan_runs(id)` 因此形同虚设；并发写入直接 `database is locked`。
+15. **连接泄漏**：所有写方法用 `with self._get_connection() as conn:`。sqlite3 的 Connection 上下文管理器**只做事务提交/回滚，不关闭连接**，因此每次调用都遗留一个未 `close()` 的连接对象。
+16. **`category` 参数被静默忽略**：`storage.py:get_tool_results`（`:671-704`）签名有 `category`，但在专属表分支里完全没用；`_get_tool_results_fallback`（`:706`）也不按 category 过滤。所以 `/api/results?category=web` 对已注册工具不生效。
+17. **`gather_export_rows` 双重收集**（`exporter.py:46-77`）：subdomain 行先由 `get_view_results` 取一遍，`get_tool_results` 的 fallback 又把 17 张表 UNION 一遍，导致重复行与 limit 语义混乱。
+18. **`_create_scan_run` 无条件插入**（`storage.py:241`）：`result_count=0` 的记录也会写 `scan_runs`，表会随空扫描持续膨胀。
+19. **`_init_db` 在每次 `ScanResultStore()` 都执行**：17 次 `CREATE TABLE IF NOT EXISTS` + 18 次 `CREATE INDEX`（`storage.py:177-207`），而 `AgentAction._validate_domain` 之前的每个 handler、每个 API 请求都会新建实例。
+
+### 7.4 全局可变状态
+
+20. **`modules/shuffledns.py:_WILDCARD_CACHE`**（`:46`）：类级 dict，跨实例/跨线程共享，键为域名，**永不清理**，长期运行内存单调增长，且会让后续任务复用被污染的泛解析 IP 集合。
+21. **`agent/action.py:RATE_LIMIT_CACHE`**（`:23`）：类级 dict，进程级全局限流（`AGENT_TOOL_MIN_INTERVAL_SEC` 默认 8 秒），多会话互相干扰，且只有插入没有清理。
+22. **`agent/config.py:_ENV_LOADED`**（`:22`）+ `_load_local_env_once()` 直接改写 `os.environ`：模块级副作用，且只在 `key` 不存在时写入，与 `config.py:6` 的 `load_dotenv` 存在加载顺序耦合（谁先 import 谁说了算）。
+
+### 7.5 配置与密钥
+
+23. **`SECRET_KEY` 默认固定值**：`config.py:17` `os.getenv("SECRET_KEY", "dev-secret-key")` + `app.py:166` `debug=True`。Session 可伪造，且 Web 调试器暴露。
+24. **`/api/settings` 可匿名写 `.env`**：`api/settings.py:save_settings`（`:187`）无任何鉴权。`_write_env_file`（`:99`）把请求体里的值**原样拼进 `KEY=VALUE` 行**，未做引号/换行转义 —— 值里带 `\n` 就能注入任意环境变量（例如覆盖 `LLM_BASE_URL`）。写入也不是原子操作（直接 `open(..., "w")` 覆盖）。
+25. **`_write_enscan_yaml` 用 `re.sub` 回填 Cookie**（`api/settings.py:150-166`）：替换串 `rf'\1"{cookie}"'` 未转义，Cookie 中的 `\`、`\g`、`"`、换行都会破坏 YAML 或产生错误替换；读取侧的正则 `rf'{source}:\s*\n\s+cookie:\s*"(.*?)"'`（`:144`）也依赖模板的精确缩进格式。
+26. **`KEY_MAPPING` 里 `enscan_*_cookie` → `FOFA_EMAIL/FOFA_KEY/HUNTER_API_KEY`**（`api/settings.py:77-79`）是永远不会执行的映射（enscan 键在保存逻辑里走 yaml 分支），注释也自相矛盾，是典型的踩坑点。
+
+### 7.6 Agent 与模型层
+
+27. **LLM 全链路未接线**：`agent/client.py:LLMClient`、`agent/providers/*`、`agent/model_result.ModelResult` 均无调用方；`AgentAction.__init__(client=...)` 只存不用（`agent/action.py:52`）。`agent/system_prompt.SYSTEM_PROMPT` 的唯一去处是 `conversation_history[0]`（`:776`）。这意味着"LLM Agent"当前是纯规则引擎，文档（README:44、README:479）与实际能力不符。
+28. **死代码与重复代码**：
+    - 真死代码（全仓无调用方）：`agent/plan_state.py:is_new_intent`（`:80`）、`config.py:TOOL_COMMANDS`（`:244`）、`config.py` 的 `DEFAULT_PASSIVE_TOOLS/DEFAULT_SUBDOMAIN_TOOLS/DEFAULT_WEB_PROBE_TOOLS/DEFAULT_CONTENT_DISCOVERY_TOOLS/DEFAULT_PORT_SCAN_TOOLS`（`:262-266`）、`agent/model_result.py` 整个模块、`storage.py:get_tool_database_overview`（`:543`）、`config.py:GO_BIN_WINDOWS/GO_BIN_POSIX`（`:91-92`）。
+    - 重复代码：`modules/base.py:_write_input_file`（`:186`）**只被 `AlterxRunner` 使用**（`modules/alterx.py:71`）；`DnsxRunner`（`dnsx.py:62`）与 `HttpxRunner`（`httpx.py:70`）各自抄了一份逻辑几乎相同的同名方法。
+29. **`agent/action.py:_get_storage_tables` 与 `_answer_storage_question` 输出不存在的表名**（`:508,512,517,519,521,853`）：`subdomain_results`、`alive_results` 从未创建，用户按此去查库会扑空；`alive_results` 工具实际查的是 `dnsx_results`（`storage.py:get_alive_results`，`:631`）。
+30. **`enscan` Cookie 复用外部 key 的注释误导**：`api/settings.py:77-79` 与模块顶部 docstring 描述不一致。
+
+### 7.7 仓库与工程卫生
+
+31. **敏感产物已进 Git**（`git ls-files` 实测 83 个跟踪文件中包含）：`results/scan_results.db`、`results/*.txt`、`results/outs/*.json`（真实企业名与域名）、`uploads/*.txt`（真实目标清单）、`scripts/dirsearch.exe`、`scripts/OneForAll.exe`、`scripts/oneforall.exe`、`SecLists/raft-small-directories.txt`。仓库根的 `.gitignore` 虽有 `**/results/`、`**/uploads/`、`*.db`，但对**已跟踪文件无效**。
+32. **首页无模板**：`app.py:160` 渲染 `index.html`，仓库无 `web/` 目录（`本机联调版实施方案_DSH.md` 也把它列为 P0）。
+33. **测试覆盖极薄**：`tests/` 下只有 2 个单元测试文件（导入、布局、常量），`tests/integration/` 与 `tests/fixtures/` 均为占位 `__init__.py`；**没有任何针对 Runner、storage、intent/planner 的测试**，也没有 mock runner。
+34. **`app.py` 只有单个应用实例**（模块级 `app = Flask(...)`），没有 `create_app()` 工厂；`tests/unit/test_smoke.py:21` 直接 `import app` 并检查 `app.app.url_map`。
+35. **`_is_storage_question` 关键词过宽**：`agent/action.py:25-38` 的 `DATABASE_QUERY_KEYWORDS` 含 `"数据库"`、`"保存位置"`、`"db"` 等；`:138` 的条件只在"非 analyze 意图且无扫描词"时短路，边界用例（如"把结果保存位置告诉我然后扫一下"）容易被误判成纯问答而**静默不执行扫描**。
+36. **`modules/registry.py` 的 import 期全量加载**：任何单个 adapter 的语法/依赖错误都会让 `import modules` 失败，进而 `/api/tools`、`/api/run`、`/api/tools` 全部 500（例如 `modules/enscan.py` 若缺依赖）。没有按需加载或容错注册。
+
+---
+
+## 8. 最小调试入口速查
+
+> 所有命令的工作目录都是项目根 `get_everything_framework/`。以下仅列**实际读代码得出的**入口，未实测运行（避免发起真实扫描）。
+
+| 目的 | 做法 | 关键观察点 |
+|---|---|---|
+| 看有哪些工具被注册 | `python -c "from modules import get_supported_runners as g; print(g())"` | 返回 17 个名字；少一个就是 `registry.py` 漏登记 |
+| 看某个 Runner 的 category / config | `python -c "from modules import build_runner; r=build_runner('httpx'); print(r.category, r.config)"` | 能直接看出 `path` 是否写错（如 `http-x`） |
+| 不跑子进程单独验落库 | `python -c "from storage import ScanResultStore as S; s=S(); print(s.save_dedicated_results('t.com','subfinder','subdomain',['a.t.com']))"` | 返回 `{run_id,scan_count,inserted_count}`；`inserted_count=0` 说明被 `UNIQUE(domain,subdomain)` 去重 |
+| 看真实表结构与行数 | sqlite3 打开 `results/scan_results.db`，`select type,name from sqlite_master` | 实测 19 张表（`scan_runs`+`tool_results`+17 专属表+`sqlite_sequence`）；**没有** `subdomain_results`/`alive_results` |
+| 验意图识别（离线，不联网） | `python -c "from agent.intent import analyze_intent; print(analyze_intent('扫一下 a.com 的子域名'))"` | 打印 `UserIntent`；用于定位 §6 第 11 行的分支顺序问题 |
+| 验计划生成 | `python -c "from agent.intent import analyze_intent as a; from agent.planner import build_plan as b; i=a('扫一下 a.com 的子域名'); print(b(i,{}))"` | `None` 表示 `build_plan` 没有覆盖该 intent_type |
+| 跑测试基线 | `python -m pytest -q`（`pyproject.toml` 已配 `pythonpath=["."]`） | 当前只有 2 个测试文件；全绿也只能说明导入/布局没问题 |
+| 静态检查 | `ruff check .`（CI 用同一命令，规则集仅 `E4/E7/E9/F`） | 未使用导入、未定义名会被抓 |
+| API 自检 | `curl http://127.0.0.1:5000/api/databases` | 返回 17 条，但**没有** `record_count`（与 docstring 不符） |
+| 数据库文件位置 | `config.py:88` → `<项目根>/results/scan_results.db` | `GET /api/databases` 只给表元信息，不给路径 |
+
+**改代码前的三个前置提醒**：
+1. `results/scan_results.db` 已存在且是**真实数据**（含真实资产与 `results/outs/` 里的企业信息）；表结构变更靠 `CREATE TABLE IF NOT EXISTS` 不会自动迁移，需自行 ALTER 或删库重建。
+2. `results/`、`uploads/`、`SecLists/`、`scripts/*.exe` 已被 Git 跟踪（见 §7.7 第 31 条），任何 `git add -A` 都会把扫描产物再次提交。
+3. `app.py` 是模块级单例 `app`，改完直接 `python app.py` 会带 `debug=True` 的自动重载；测试里 `import app` 会连带 import 全部 API 与 modules（触发 17 个 Runner 可导入性检查）。
+
+---
+
+## 附：常用定位速查
+
+| 想改什么 | 去哪儿 |
+|---|---|
+| 新增/修改一个工具的调用命令 | `modules/url_tools.py` / `modules/port_tools.py` / 独立 adapter 文件 + `config.py` 对应 `*_CONFIG` |
+| 新增一个工具（三处登记） | `config.py`（CONFIG + TOOL_CATEGORIES）→ `modules/xxx.py`（继承 `BaseRunner`）→ `modules/registry.py:RUNNER_REGISTRY` → `storage.py:TOOL_DATABASES` |
+| 改 API 出参/入参 | `api/*.py` 对应路由函数 |
+| 改落库结构 | `storage.py:_init_db` / `_create_tool_table` / `TOOL_DATABASES`（注意 DB 已存在时 `CREATE TABLE IF NOT EXISTS` 不会迁移） |
+| 改 Agent 识别逻辑 | `agent/intent.py:analyze_intent` 的关键词与分支顺序 |
+| 改 Agent 计划内容 | `agent/planner.py:build_plan` + `agent/strategy_templates.py` |
+| 真正接入大模型 | `agent/action.py`（构造并调用 `agent/client.py:LLMClient`），`agent/system_prompt.SYSTEM_PROMPT` 已是现成的 messages[0] |
+| 加异步任务/状态机/error_code | 已实现于 `core/jobs.py` + `jobs/worker.py` + `jobs/executor.py`，见第 9 节 |
+
+---
+
+## 9. 本机联调版增量（M0 → M4）
+
+> 第 1～8 节是**改动前基线**。本节只记录新增与改写，冲突时以本节为准。
+> 里程碑验收报告（M0～M4）是本机过程材料，不随仓库分发；本节即公开可查的增量说明。
+
+### 9.1 新增的目录与模块
+
+```text
+get_everything_framework/
+├── core/                     ← 纯数据与模型层，不依赖 Flask（worker 也能用）
+│   ├── errors.py             统一错误码 ErrorCode + AppError 及子类（含 http_status）
+│   ├── errors_handlers.py    Flask 统一错误处理器 + 状态码→错误码映射表
+│   ├── ids.py                带前缀的 UUID4（job_/step_/scope_/upload_/evt_…）
+│   ├── db.py                 本机应用库连接（WAL + busy_timeout + BEGIN IMMEDIATE 事务）
+│   ├── audit.py              audit_events 写入与查询
+│   ├── db schema 见 core/db.py:init_schema  scopes / audit_events / uploads / jobs / job_steps / job_events
+│   ├── scope.py              Scope 模型与目标校验（排除优先、拒全放行）
+│   ├── scope_store.py        Scope 持久化 + require()（无 Scope 即拒绝）
+│   ├── uploads.py            受控上传：uploads/<id>/{raw.*,normalized.txt,meta.json}
+│   ├── mock.py               mock 执行结果（7 种场景，错误码对齐 §6.2）
+│   ├── safety.py             mock/real 模式解析 + GEF_ALLOW_REAL_SCAN 开关
+│   ├── security.py           SECRET_KEY 弱值检测 + 进程级一次性密钥
+│   ├── auth.py               单一管理员 Token + Session + X-Local-Token
+│   ├── health.py             /health 采集（database / worker / queue / tools / modes / security）
+│   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复
+├── jobs/                     ← 进程层（刻意不放进 core/）
+│   ├── executor.py           执行逻辑（与进程无关，可直接单测调用）
+│   └── worker.py             独立 worker 进程：python -m jobs.worker
+├── api/
+│   └── jobs.py               /api/jobs*（7 个接口）
+└── web/
+    ├── templates/index.html  首页（Scope 下拉 + 创建任务 + 任务表）
+    ├── templates/login.html  登录页
+    ├── static/app.css
+    └── static/app.js         无框架无 CDN：轮询 /health 与 /api/jobs，渲染进度条
+```
+
+### 9.2 路由增改对照（第 1.1 节表格的现状）
+
+| 方法 | 路径 | 处理函数 | 鉴权 | 说明 |
+|---|---|---|---|---|
+| GET/POST | `/` | `app.py:index()` | POST 扫描需登录 | 模板已补齐（M1）；M2 起走 Scope 校验；**M3 起提交 = 创建异步任务**（不再同步扫描） |
+| GET | `/login` | `app.py:login_page()` | — | M1 新增，Token 换 Session |
+| GET | `/health` | `api/health.py`（独立 `health_bp`） | — | M1 新增；M2 加 `modes`/`security`，M3 加 `queue` |
+| POST | `/api/auth/login` | `api/auth.py` | — | M1 新增；成功/失败均写审计 |
+| POST | `/api/auth/logout` | `api/auth.py` | — | M1 新增 |
+| GET | `/api/auth/session` | `api/auth.py` | — | M1 新增 |
+| POST | `/api/scopes` | `api/scopes.py` | **需管理员** | M2 新增 |
+| GET | `/api/scopes` | `api/scopes.py` | **需管理员** | M2 新增 |
+| GET | `/api/scopes/{id}` | `api/scopes.py` | **需管理员** | M2 新增；不存在 → 404 `not_found` |
+| POST | `/api/jobs` | `api/jobs.py` | **需管理员** | M3 新增；**202 + `queued`**，立即返回 `job_id` |
+| GET | `/api/jobs` | `api/jobs.py` | **需管理员** | M3 新增；支持 `?status=`、返回 `counts` |
+| GET | `/api/jobs/{id}` | `api/jobs.py` | **需管理员** | M3 新增；job + steps + events |
+| POST | `/api/jobs/{id}/cancel` | `api/jobs.py` | **需管理员** | M3 新增 |
+| POST | `/api/jobs/{id}/retry` | `api/jobs.py` | **需管理员** | M3 新增 |
+| GET | `/api/jobs/{id}/steps` | `api/jobs.py` | **需管理员** | M3 新增（页面轮询用） |
+| GET | `/api/jobs/{id}/events` | `api/jobs.py` | **需管理员** | M3 新增 |
+| POST | `/api/run` | `api/scan.py` | **需管理员** | M2 起：必填 `scope_id`，拒绝 `file_path`，收 `upload_id`；`mode=mock`（默认）/`real` |
+| POST | `/api/tool/<n>/run` | `api/scan.py` | **需管理员** | 同上，单工具 |
+| POST | `/api/upload` | `api/upload.py` | **需管理员** | M2 起只返回 `upload_id`，不再暴露服务器路径 |
+| GET/POST | `/api/settings*` | `api/settings.py` | **需管理员** | M1 加认证；M2 加原子写 + 备份 + 审计 |
+| GET | `/api/tools`、`/api/databases`、`/api/results`、`/api/export` | `api/tools.py`、`api/results.py` | 无 | 保持只读开放（方案只要求修改类 API 认证） |
+
+### 9.3 双库架构（**最容易踩的坑**）
+
+| 库 | 路径 | 归属 | 谁在写 |
+|---|---|---|---|
+| 旧扫描结果库 | `results/scan_results.db` | `storage.py`（按工具建表，19 张） | `tool_runner.run_tools`（仅 `mode=real` 时）；本机联调期间视为**只读历史数据** |
+| 新本机应用库 | `results/local.db`（可用 `LOCAL_DB_PATH` 覆盖） | `core/db.py` | `scopes` / `audit_events` / `uploads` / `jobs` / `job_steps` / `job_events` |
+
+**新库的连接约定**（`core/db.py`）：`PRAGMA journal_mode=WAL` + `busy_timeout=5000` + `BEGIN IMMEDIATE`。
+这解决了第 7.3 节记录的并发问题——但**只针对新库**；`storage.py` 依旧无 WAL、`with conn` 只提交不关闭。
+
+测试切库：`tests/conftest.py` 同时 patch `storage.SQLITE_CONFIG["path"]`、`config.LOCAL_DB_CONFIG["path"]`、
+`core.uploads.UPLOAD_DIR`、`core.health.OUTPUT_DIR`，并调 `core.db.reset_schema_cache()`。
+**任何一个漏 patch 都会让测试往仓库 `results/` 里写文件。**
+
+### 9.4 任务状态机（第 5.3 节的「不存在」已不成立）
+
+```
+queued ──claim──> running ──┬──> succeeded   （全部步骤成功）
+                            ├──> partial     （部分步骤失败，error_code=partial_success）
+                            ├──> failed      （全部失败，error_code=unknown_error）
+                            ├──> timeout     （全部超时，error_code=timeout）
+                            ├──> cancelled   （用户在步骤边界取消）
+                            └──> interrupted （租约过期 / worker 优雅退出，可 retry）
+```
+
+* 终态：`succeeded / partial / failed / timeout / cancelled`；
+* 可 retry：`interrupted / failed / timeout / cancelled / partial`（`succeeded` 与 `running` 拒绝）；
+* retry 只重跑**未成功**的步骤，已成功的步骤保留（`job_steps` 是创建时就落好的快照）；
+* **单表即队列**：`jobs` 自己就是队列，`claim_next_job` 用 `BEGIN IMMEDIATE` + `UPDATE ... WHERE status='queued'`
+  保证同一个 job 只会被一个 worker 领到（`core/jobs.py`）；
+* **租约**：领取时写 `worker_id` + `lease_until`；执行中每个步骤结束续租。
+  worker 被 kill → 租约过期 → 新 worker 启动时 `recover_stale_jobs()` 标为 `interrupted`（不会静默消失）。
+
+### 9.5 三个执行入口的差别（**排查「任务没跑」先看这里**）
+
+| 入口 | 是否异步 | 是否走 Scope | 是否调用真实工具 |
+|---|---|---|---|
+| `POST /api/jobs` | ✅ 立即返回 `job_id` | ✅ 必填 `scope_id` | `mode=mock`（默认）不调用；`real` 需双开关 |
+| `POST /api/run` | ❌ 同步 | ✅ 必填 `scope_id` | 同上 |
+| 首页表单 `POST /` | ✅ 创建 job（M3 起） | ✅ 必填 Scope | 固定 `mock` |
+
+真实扫描的**双开关**：环境 `GEF_ALLOW_REAL_SCAN=true` **且** `Scope.active_scan=true`，缺一即 403 `scope_violation`。
+
+### 9.6 worker 进程
+
+```powershell
+# 单独跑（项目根）
+python -m jobs.worker
+python -m jobs.worker --once            # 只跑一轮（验收/CI）
+python -m jobs.worker --step-delay 3    # 每步停 3 秒，便于观察进度与取消
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 Web + worker
+```
+
+* 心跳文件 `results/worker_heartbeat`（mtime 30 秒内算 `ok`），`/health` 的 `worker` 字段读它：
+  `ok` / `stale` / `missing`——这是「Web 正常但 worker 未启动」的判别依据；
+* `--once` 之外都是常驻循环，`Ctrl+C`/SIGTERM 时把在跑的任务立刻标 `interrupted`（`release_job`）；
+* **子进程 stdout 不要接一个父进程不读的管道**：对端关闭会让 worker 在 `print` 时 `BrokenPipeError`
+  并以退出码 120 死掉（`tests/unit/test_jobs_executor.py` 里有注释记录这个坑）。
+
+### 9.7 本机联调期间仍未修的（按方案分派到后续里程碑）
+
+| 项 | 现状 | 计划 |
+|---|---|---|
+| `storage.py` 并发 | 无 WAL、`with conn` 只提交不关闭、每方法新建连接 | M4/M5 迁移时一并处理 |
+| `/api/export` | 仍只返回服务器路径，不是流式下载 | M6 |
+| `/api/results`、`/api/tools` | 仍匿名可读 | 方案未要求，需确认 |
+| 前端轮询 | 任务表 3 秒轮询 `/api/jobs`，未做 SSE/WebSocket | 本机联调够用 |
+| 真实 runner 的结构化结果 | `RunnerResult`（exit_code/duration_ms/command_preview/raw_artifact_id）未落地 | M4 |
+| `assets` / `observations` / `artifacts` 表 | 未创建 | M5 |
+| 敏感产物仍在 Git 索引 | `results/`、`uploads/`、`SecLists/`、`scripts/*.exe` | 待用户确认后 `git rm --cached` |
+
+### 9.8 测试与验收基线
+
+```text
+$ python -m ruff check .     # All checks passed!
+$ python -m pytest           # 236 passed（M1 基线 70 → M2 142 → M3 236）
+$ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
+```
+
+| 测试文件 | 覆盖 |
+|---|---|
+| `tests/unit/test_smoke.py`、`test_repo_layout.py` | 导入与仓库布局（M0） |
+| `tests/unit/test_scope.py` | Scope 匹配语义与全放行拒绝（M1） |
+| `tests/unit/test_security_baseline.py` | SECRET_KEY 弱值、受控上传、`.env` 原子写（M2） |
+| `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry（M3） |
+| `tests/unit/test_jobs_executor.py` | mock/real 分流、进度、取消边界、**真实子进程 kill/重启**（M3） |
+| `tests/integration/test_web_baseline.py` | 首页可渲染、登录/登出（M1） |
+| `tests/integration/test_m2_security.py` | 认证、受控上传、file_path 拒绝、审计（M2） |
+| `tests/integration/test_m2_scope_enforcement.py` | 无 Scope/越界拒绝、mock 不碰真实 runner（M2） |
+| `tests/integration/test_m2_page_scan.py` | 首页 = 异步任务、不阻塞（M2/M3） |
+| `tests/integration/test_m3_jobs_api.py` | 7 个 jobs 接口、10 个任务响应时间、状态持久化（M3） |
+
+### 9.9 第 6 节 BUG 索引表的**现状修正**
+
+| 原条目 | 现状 |
+|---|---|
+| #1「一直卡在 running / 请求不返回」 | 已解决：`POST /api/jobs` 立即返回；`running` 是真实执行状态，有进度与租约 |
+| #2「立刻失败无日志」 | 部分解决：`api/scan.py` 把 `SystemExit`/`ValueError` 统一转成稳定 `error_code`；`jobs/executor.py` 兜住 `SystemExit`（否则会带走 worker） |
+| #4「结果页看不到数据」 | 未动（属 M5 资产页） |
+| #5「上传解析出错 500」 | 已解决：`api/upload.py` 不再暴露路径；空目标 → 400 `bad_request` |
+| #23「SECRET_KEY 默认固定值」 | 已解决：默认值清空，弱值告警 + 进程级一次性密钥，有回归测试 |
+| #24「/api/settings 可匿名写 .env」 | 已解决：需管理员；原子写（临时文件+fsync+`os.replace`）+ 写入前备份 + 审计（只记字段名） |
+| #32「首页无模板」 | 已解决：`web/templates/` 与 `web/static/` 已补齐 |
+| #33「测试覆盖极薄」 | 已解决：236 项，含真实子进程 kill/重启 |
+| #34「无 create_app()」 | 已加 `create_app()`，但仍保留模块级单例 `app`（测试与 waitress 共用） |
+| #2 第 1 条「残留输出文件」 | **仍然存在**：`results/<md5(domain)>_<tool>.txt` 会被 `_read_results` 当成本次结果，仅影响 `mode=real` |

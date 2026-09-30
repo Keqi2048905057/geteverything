@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · Get Everything Framework</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="login-body">
+  <main class="card">
+    <h1>本地管理员登录</h1>
+    <p class="hint">
+      输入本机管理员 Token。Token 来自项目根 <code>.env</code> 的
+      <code>LOCAL_ADMIN_TOKEN</code>；未配置时，服务启动会在控制台打印本次进程的临时 Token。
+    </p>
+
+    {% if error %}
+      <div class="alert alert-error" role="alert">{{ error }}</div>
+    {% endif %}
+    {% if notice %}
+      <div class="alert alert-ok" role="status">{{ notice }}</div>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('login_page') }}" class="form" autocomplete="off">
+      <label for="token">管理员 Token</label>
+      <input type="password" id="token" name="token" required autofocus
+             placeholder="粘贴 LOCAL_ADMIN_TOKEN">
+      <button type="submit" class="btn btn-primary">登录</button>
+    </form>
+
+    <p class="hint">
+      自动化脚本可跳过登录页，直接在请求头带
+      <code>X-Local-Token: &lt;token&gt;</code>。
+    </p>
+    <p><a href="{{ url_for('index') }}">← 返回首页</a></p>
+  </main>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

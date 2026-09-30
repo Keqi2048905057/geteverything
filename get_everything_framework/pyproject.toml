@@ -1,0 +1,67 @@
+# 本文件只承载本机联调版的工具链配置（pytest / ruff / mypy），
+# 不声明可安装包元数据（项目当前以源码目录方式直接运行，见 README「运行方式」）。
+#
+# 约定：
+#   - 所有命令都在本文件所在目录（项目根）执行；
+#   - pytest 通过 pythonpath 把项目根加入 sys.path，测试内可直接 import app / config 等模块。
+
+# ── pytest ────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "default",
+]
+markers = [
+    "slow: 需要起真实子进程或等待租约过期的用例（可用 -m 'not slow' 跳过）",
+]
+
+# ── ruff（静态检查） ──────────────────────────────────────
+# M0 只启用保守规则集：语法错误、未定义名字、未使用导入等，
+# 避免在建立基线阶段混入大规模风格重构。
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+    ".venv",
+    "venv",
+    "results",
+    "uploads",
+    "exports",
+    "SecLists",
+]
+
+[tool.ruff.lint]
+select = [
+    "E4",  # import 相关
+    "E7",  # 语句级问题
+    "E9",  # 运行时错误
+    "F",   # pyflakes
+]
+ignore = [
+    "E402",  # 允许延迟导入（app.py 中 Blueprint 注册顺序有依赖）
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F401"]
+
+# ── mypy（类型检查） ──────────────────────────────────────
+# M0 只建立配置与基线，不把 mypy 作为 M0 的验收门槛（M7 才要求通过）。
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = false
+no_implicit_optional = true
+exclude = [
+    "^\\.venv/",
+    "^venv/",
+    "^results/",
+    "^uploads/",
+    "^exports/",
+]
