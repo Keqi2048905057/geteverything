@@ -112,7 +112,7 @@ LOCAL_DB_CONFIG = {
 GO_BIN_WINDOWS = os.path.join(os.path.expanduser("~"), "go", "bin")
 GO_BIN_POSIX = os.path.join(os.path.expanduser("~"), "go", "bin")
 
-TARGET_CONFIG = {
+TARGET_CONFIG: dict = {
     # 默认目标必须为空：config.py 中的默认值曾指向外部域名，会在无参数调用时
     # 误扫外部资产。本机联调版要求目标全部由用户显式提供（方案第 2.3 节第 3 条）。
     "domains": [],

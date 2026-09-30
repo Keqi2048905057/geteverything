@@ -423,3 +423,17 @@ def test_get_job_detail_contains_steps_and_events(scope_id):
 
 def test_get_job_detail_unknown_returns_none(local_db):
     assert jobs_store.get_job_detail("job_missing") is None
+
+
+def test_get_job_or_raise_distinguishes_missing_job(scope_id):
+    """``get_job`` 可空、``get_job_or_raise`` 不可空 —— 两种语义都要有。
+
+    写路径（``create_job`` / ``cancel_job`` / ``finish_job``）刚写完就回读，
+    ``None`` 属于不可能状态；让它们返回 ``dict | None`` 会把 None 判断一路
+    传染给调用方，也把「任务真的不见了」降级成一次普通解引用。
+    """
+    job = _make_job(scope_id)
+
+    assert jobs_store.get_job_or_raise(job["id"])["id"] == job["id"]
+    with pytest.raises(ValueError, match="任务不存在"):
+        jobs_store.get_job_or_raise("job_missing")

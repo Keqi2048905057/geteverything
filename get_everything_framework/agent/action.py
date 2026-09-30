@@ -56,7 +56,11 @@ class AgentAction:
         self.debug = debug
         self.pending_plan = pending_plan
         self.uploaded_context = uploaded_context or {}
-        self.context = {
+        # 显式注解：这个会话上下文是一个**异构**字典（mode/target 是 str，
+        # last_menu 是 dict，strategy_context 是 dict 或 None）。不加注解时
+        # 字面量里全是 None，类型会被推成 ``dict[str, None]``，于是后面每一处
+        # 写字符串都变成"给 None 赋值"，读出来也不是 str。
+        self.context: Dict[str, Any] = {
             "mode": None,
             "org": None,
             "target": None,
@@ -75,7 +79,7 @@ class AgentAction:
         self.allowed_suffixes = self._load_set_env("AGENT_ALLOWED_SUFFIXES", defaults=set())
         self.conversation_history = self._normalize_history(conversation_history)
 
-        self.available_tools = {
+        self.available_tools: Dict[str, Dict[str, Any]] = {
             "subdomain": {
                 "description": "收集子域名",
                 "params": {"domain": "string", "tool": "amass|subfinder|dnsx", "upload_id": "string(optional)"},
@@ -184,8 +188,15 @@ class AgentAction:
         return self._execute_plan(plan.to_dict(), original_message=text)
 
     def _handle_pending_plan(self, text: str) -> Optional[Dict[str, Any]]:
+        # 调用方（:meth:`run`）只在 ``self.pending_plan`` 非空时进来；这里再判一次
+        # 是给「状态被外部清掉」留一条明确出口 —— 返回 ``None`` 表示「未处理」，
+        # 而不是让 ``deepcopy(None)`` 抛出 AttributeError。
+        pending_plan = self.pending_plan
+        if not pending_plan:
+            return None
+
         if is_confirm(text):
-            return self._execute_plan(deepcopy(self.pending_plan), original_message=text)
+            return self._execute_plan(deepcopy(pending_plan), original_message=text)
 
         if is_cancel(text):
             return self._cancel_pending_plan()
@@ -197,7 +208,7 @@ class AgentAction:
         )
         if is_meaningful_new_intent(new_intent):
             self._update_context_from_intent(new_intent)
-            old_plan = deepcopy(self.pending_plan)
+            old_plan = deepcopy(pending_plan)
 
             if new_intent.intent_type == "view_existing_results":
                 self.pending_plan = None
@@ -227,7 +238,7 @@ class AgentAction:
             )
 
         if is_plan_modification(text):
-            updated_plan = apply_user_intervention(deepcopy(self.pending_plan), text)
+            updated_plan = apply_user_intervention(deepcopy(pending_plan), text)
             self.pending_plan = updated_plan
             message = self._format_pending_plan_message(updated_plan)
             self._append_message("assistant", message)
@@ -238,12 +249,12 @@ class AgentAction:
                 plan_status="awaiting_confirmation",
             )
 
-        message = self._render_pending_plan_help(self.pending_plan)
+        message = self._render_pending_plan_help(pending_plan)
         self._append_message("assistant", message)
         return self._build_response(
             message,
-            focus_domain=self.pending_plan.get("target"),
-            pending_plan=self.pending_plan,
+            focus_domain=pending_plan.get("target"),
+            pending_plan=pending_plan,
             plan_status="awaiting_confirmation",
         )
 
@@ -490,7 +501,7 @@ class AgentAction:
             probe_mode = "direct_domain"
             target_count = 1
 
-        self._save_httpx_metadata(domain, rows)
+        self._save_httpx_metadata(domain, runner.last_items)
         return {
             "ok": True,
             "tool": "httpx",
@@ -499,7 +510,10 @@ class AgentAction:
             "target_count": target_count,
             "total": len(rows),
             "tech_detect": tech_detect,
-            "items": rows[:20],
+            # ``items`` 给的是**结构化元数据**（状态码 / 标题 / 技术栈 / CDN），
+            # 不是 run_scan 返回的 URL 字符串列表 —— 后者进了 ``last_items``
+            # 之外的字段就丢失了，而 :meth:`_summarize_httpx_items` 读的正是这里。
+            "items": runner.last_items[:20],
         }
 
     def _tool_export_results(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -704,7 +718,7 @@ class AgentAction:
                 "direct_domain": "直接探测目标域名本身",
                 "stored_subdomains": "基于已有子域名批量探测",
                 "existing_subdomains": "严格读取数据库中的已有子域名批量探测",
-            }.get(tool_result.get("probe_mode"), "批量探测")
+            }.get(str(tool_result.get("probe_mode") or ""), "批量探测")
             summary = self._summarize_httpx_items(tool_result.get("items", []))
             return (
                 f"对 `{tool_result.get('domain', '')}` 完成 httpx 探测，模式为{mode_text}，"

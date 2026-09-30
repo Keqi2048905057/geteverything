@@ -122,6 +122,20 @@ class BaseRunner:
         """
         return None
 
+    def run_scan(self, target):
+        """执行一次具体扫描（**子类必须实现**）。
+
+        基类只声明这个扩展点，不提供默认实现。为什么不在基类里 ``return []``：
+        「忘记实现」与「跑通但零结果」会变得无法区分 —— 前者会静默地
+        产生一个看起来正常但空的结果，正是 M4 要消灭的那类故障。
+        这里显式抛 :class:`NotImplementedError`，由 :meth:`run` 统一翻译成
+        带 ``error_code`` 的失败结果。
+
+        Raises:
+            NotImplementedError: 子类没有覆盖本方法。
+        """
+        raise NotImplementedError(f"{type(self).__name__} 未实现 run_scan()")
+
     def parse_output(self, stdout, stderr, artifacts=None):
         """把工具输出解析成观测列表。
 
@@ -739,16 +753,28 @@ def _kill_process_tree(process) -> None:
         except OSError:
             pass
     else:  # pragma: no cover - 平台分支
-        try:
-            child_pgid = os.getpgid(process.pid)
-            own_pgid = os.getpgid(0)
-        except (OSError, AttributeError):
-            child_pgid = own_pgid = None
-        if child_pgid is not None and child_pgid != own_pgid:
+        # ``os.getpgid`` / ``os.killpg`` 只存在于 POSIX；在 Windows 上按
+        # ``os.name == "nt"`` 走上面的 taskkill 分支之后，这里用 ``getattr``
+        # 取函数而不是直接 ``os.getpgid``：直接写会让**类型检查器**在
+        # Windows 的类型存根下报「模块没有该属性」，而这是跨平台代码的常态。
+        getpgid = getattr(os, "getpgid", None)
+        killpg = getattr(os, "killpg", None)
+        # ``signal.SIGKILL`` 在 Windows 的类型存根里同样不存在（Windows 没有
+        # 这个信号），所以一并 ``getattr``；取不到时退回 SIGTERM，绝不抛 AttributeError。
+        sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+        if getpgid is None or killpg is None:  # pragma: no cover - 防御性分支
+            pass
+        else:
             try:
-                os.killpg(child_pgid, signal.SIGKILL)
-            except (OSError, AttributeError):
-                pass
+                child_pgid = getpgid(process.pid)
+                own_pgid = getpgid(0)
+            except OSError:
+                child_pgid = own_pgid = None
+            if child_pgid is not None and child_pgid != own_pgid:
+                try:
+                    killpg(child_pgid, sigkill)
+                except OSError:
+                    pass
     try:
         process.kill()
     except OSError:

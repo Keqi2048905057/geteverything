@@ -49,7 +49,7 @@ class ShufflednsRunner(BaseRunner):
     }
 
     # wildcard IP 缓存: {domain: {ip1, ip2, ...}}
-    _WILDCARD_CACHE = {}
+    _WILDCARD_CACHE: dict = {}
 
     def __init__(self):
         super().__init__(SHUFFLEDNS_CONFIG, "shuffledns")

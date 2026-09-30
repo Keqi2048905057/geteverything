@@ -76,7 +76,12 @@ class HttpxRunner(BaseRunner):
         rows = self.store.get_results_by_domain(domain)
         return list(dict.fromkeys(subdomain for subdomain, _, _ in rows))
 
-    def _write_input_file(self, domain: str, candidates: List[str]) -> str:
+    def _write_input_file(
+        self,
+        domain: str,
+        candidates: List[str],
+        suffix: Optional[str] = None,
+    ) -> str:
         """
         创建 Httpx 临时输入文件。
 
@@ -85,6 +90,10 @@ class HttpxRunner(BaseRunner):
         Args:
             domain: 目标域名（用于文件名标识）
             candidates: 子域名候选字符串列表
+            suffix: 自定义文件名后缀；默认 ``_<domain>_httpx_input.txt``。
+                **必须保留这个参数**：基类 :meth:`BaseRunner._write_input_file`
+                带它，子类收窄签名会让「用基类类型调用子类实例」的代码
+                （runner 注册表就是这种用法）在类型层面不成立。
 
         Returns:
             临时文件的完整路径
@@ -92,7 +101,7 @@ class HttpxRunner(BaseRunner):
         temp_file = tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
-            suffix=f"_{domain}_httpx_input.txt",
+            suffix=suffix or f"_{domain}_httpx_input.txt",
             dir=OUTPUT_DIR,
             delete=False,
         )
@@ -330,7 +339,15 @@ class HttpxRunner(BaseRunner):
                 raise RuntimeError("httpx 扫描失败，请检查 httpx 可执行文件和当前 PATH。")
             raw = self._read_json_results(output_file)
             self.last_items = raw
-            return [r.get("url") for r in raw if r.get("url")]
+            # JSONL 里可能有个别行缺 ``url``（httpx 在探测失败时也会落一行）。
+            # 显式收成 ``List[str]``：``r.get("url")`` 的类型是 ``Any | None``，
+            # 直接返回会让 run_scan 的声明与实际不符，也会把 None 混进结果。
+            urls: List[str] = []
+            for item in raw:
+                url = item.get("url")
+                if isinstance(url, str) and url:
+                    urls.append(url)
+            return urls
         finally:
             if os.path.exists(input_file):
                 os.remove(input_file)

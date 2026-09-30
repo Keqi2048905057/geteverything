@@ -324,7 +324,7 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         jobs_store.mark_remaining_steps_skipped(job_id)
         jobs_store.finish_job(job_id, status=jobs_store.STATUS_CANCELLED)
         jobs_store.add_event(job_id, jobs_store.EVENT_JOB_CANCELLED, {"reason": "user_requested"})
-        return jobs_store.get_job(job_id)
+        return jobs_store.get_job_or_raise(job_id)
 
     status, error_code = aggregate_status(step_statuses)
     jobs_store.finish_job(
@@ -333,7 +333,7 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         error_code=error_code,
         error_message=None if error_code is None else _status_message(status),
     )
-    return jobs_store.get_job(job_id)
+    return jobs_store.get_job_or_raise(job_id)
 
 
 def _status_message(status: str) -> str:

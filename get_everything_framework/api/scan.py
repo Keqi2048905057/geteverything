@@ -19,6 +19,7 @@ from core.errors import BadRequestError, ScopeViolationError
 from core.mock import run_mock
 from core.policy import validate_job_targets  # 统一 Policy / Scope Engine（P0-2）
 from core.safety import MODE_MOCK, MODE_REAL, resolve_mode
+from core.scope import Scope  # Scope 模型（返回值类型标注用）
 from storage import ScanResultStore  # 扫描结果持久化存储
 # 工具加载与执行的核心函数
 from tool_runner import load_tools, run_single_tool, run_tools
@@ -30,7 +31,7 @@ def resolve_scoped_targets(
     domain: str | None,
     upload_id: str | None,
     mode: str | None,
-) -> tuple[list[str], "object", str]:
+) -> tuple[list[str], Scope, str]:
     """解析目标并强制通过 Scope 校验（方案第 2.3 节第 2、5 条）。
 
     具体判定全部委托给 :mod:`core.policy`（统一 Policy / Scope Engine），

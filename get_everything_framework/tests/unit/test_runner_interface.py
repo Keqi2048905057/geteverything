@@ -247,6 +247,46 @@ def test_run_catches_system_exit(output_dir):
     assert result.status == "failed"
 
 
+def test_base_runner_without_run_scan_fails_loudly(output_dir):
+    """子类忘记实现 ``run_scan`` 时必须报失败，不能被当成「跑通但零结果」。
+
+    基类以前**没有** ``run_scan``：调用 ``BaseRunner().run(...)`` 抛的是
+    ``AttributeError``（未实现），而「忘记覆盖」与「工具没发现东西」在
+    调用方看来都只能是空结果 —— 正是 M4 要消灭的那类静默失败。
+    现在基类显式声明并抛 ``NotImplementedError``，统一翻译成带 error_code 的失败。
+    """
+    result = BaseRunner({"path": sys.executable, "category": "subdomain"}, "not-implemented-tool").run("example.test")
+
+    assert result.status == "failed"
+    assert result.error_code == ErrorCode.UNKNOWN_ERROR
+    assert "run_scan" in (result.error_message or "")
+    assert result.values == []
+
+
+def test_write_input_file_accepts_suffix_across_runners(output_dir, monkeypatch):
+    """子类的 ``_write_input_file`` 必须保留基类的 ``suffix`` 参数。
+
+    runner 注册表按**基类类型**持有子类实例，任何收窄签名（例如 httpx / dnsx
+    原本只收 ``candidates``）都会让「用基类的方式调用」在类型层面不成立，
+    也让自定义后缀这类调用静默失效。
+    """
+    from modules.dnsx import DnsxRunner
+    from modules.httpx import HttpxRunner
+
+    # 这两个模块在导入时就绑定了 OUTPUT_DIR 字符串，必须各自替换模块属性。
+    monkeypatch.setattr("modules.dnsx.OUTPUT_DIR", output_dir, raising=False)
+    monkeypatch.setattr("modules.httpx.OUTPUT_DIR", output_dir, raising=False)
+
+    for runner in (DnsxRunner(), HttpxRunner()):
+        path = runner._write_input_file("example.test", ["a.example.test"], suffix="_custom.txt")
+        try:
+            assert path.endswith("_custom.txt")
+            with open(path, encoding="utf-8") as handle:
+                assert handle.read() == "a.example.test\n"
+        finally:
+            os.remove(path)
+
+
 def test_health_check_reports_missing_binary(output_dir):
     runner = _PythonToolRunner(_WRITE_TWO_LINES, config={"path": "definitely-not-installed-xyz"})
     health = runner.health_check()

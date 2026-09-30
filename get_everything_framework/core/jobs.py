@@ -350,7 +350,7 @@ def create_job(
             },
         )
 
-    return get_job(job_id)
+    return get_job_or_raise(job_id)
 
 
 # ── 读取 ──────────────────────────────────────────────────
@@ -361,6 +361,19 @@ def get_job(job_id: str) -> dict | None:
     db.ensure_schema()
     row = _fetchone("SELECT * FROM jobs WHERE id = ?", (job_id,))
     return _job_to_dict(row) if row else None
+
+
+def get_job_or_raise(job_id: str) -> dict:
+    """按 ID 读取任务，读不到就抛 ``ValueError``。
+
+    给「刚刚才写过这个 job」的写路径用（:func:`create_job`、``jobs.executor``）：
+    那里 ``None`` 属于不可能状态，直接抛错比把 ``| None`` 一路往上传染
+    更清楚 —— 调用方也就不必对「刚建好的任务」再做一次 None 判断。
+    """
+    job = get_job(job_id)
+    if job is None:  # pragma: no cover - 刚写入的行读不到，只可能是库被换掉了
+        raise ValueError(f"任务不存在: {job_id}")
+    return job
 
 
 def list_jobs(limit: int = 50, status: str | None = None) -> list[dict]:

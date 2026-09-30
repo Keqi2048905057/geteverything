@@ -180,6 +180,38 @@ def test_agent_unknown_tool_is_reported_not_executed(agent):
     assert "未知工具" in result["error"]
 
 
+# ── Bug 修复：httpx 步骤的 items 必须是元数据字典 ──────────
+
+
+def test_agent_httpx_returns_metadata_items(agent, monkeypatch):
+    """``_tool_httpx`` 的 ``items`` 必须是结构化元数据，而不是 URL 字符串。
+
+    回归用例：``run_scan`` 返回的是 URL ``str`` 列表，而 ``_summarize_httpx_items``
+    逐条调 ``item.get(...)``。以前 ``items`` 直接取了 ``rows``，于是「存活探测 →
+    整理回复」这条路径会以 ``AttributeError: 'str' object has no attribute 'get'``
+    收场 —— 而它只在真实跑出结果时才触发，零结果时反而看不出来。
+    """
+    metadata = [{"url": "https://a.example.test", "status_code": 200, "webserver": "nginx", "tech": ["Nginx"]}]
+
+    class _FakeHttpxRunner:
+        last_items = metadata
+
+        def run_scan(self, domain, candidates=None, tech_detect=False):
+            return [item["url"] for item in metadata]
+
+    monkeypatch.setattr("agent.action.HttpxRunner", _FakeHttpxRunner)
+    monkeypatch.setattr(agent, "_enforce_rate_limit", lambda action, domain: None)
+
+    result = agent._execute_tool("httpx", {"domain": "a.example.test"})
+
+    assert result["ok"] is True
+    assert result["total"] == 1
+    assert result["items"] == metadata
+    # 真正会炸的那一步：把结果渲染成对话回复。
+    text = agent._format_single_tool_result(result)
+    assert "常见 Web Server：nginx" in text
+
+
 def _make_upload(content: bytes = b"a.example.test\nb.example.test\n") -> str:
     """通过受控入口造一条真实上传记录，返回 upload_id。"""
     from werkzeug.datastructures import FileStorage

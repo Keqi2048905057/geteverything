@@ -62,7 +62,7 @@ class DnsxRunner(BaseRunner):
             return [domain]
         return candidates
 
-    def _write_input_file(self, domain, candidates):
+    def _write_input_file(self, domain, candidates, suffix=None):
         """
         创建 Dnsx 临时输入文件。
 
@@ -71,6 +71,9 @@ class DnsxRunner(BaseRunner):
         Args:
             domain: 目标域名（用于文件名标识）
             candidates: 子域名候选字符串列表
+            suffix: 自定义文件名后缀；默认 ``_<domain>_dnsx_input.txt``。
+                保留该参数以保持与基类 :meth:`BaseRunner._write_input_file`
+                一致的签名（runner 注册表按基类类型持有子类实例）。
 
         Returns:
             临时文件的完整路径
@@ -78,7 +81,7 @@ class DnsxRunner(BaseRunner):
         temp_file = tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
-            suffix=f"_{domain}_dnsx_input.txt",
+            suffix=suffix or f"_{domain}_dnsx_input.txt",
             dir=OUTPUT_DIR,
             delete=False,
         )
