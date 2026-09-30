@@ -76,6 +76,20 @@ def transaction(path: str | None = None):
         conn.close()
 
 
+def query(sql: str, params: tuple = (), path: str | None = None) -> list[sqlite3.Row]:
+    """执行一条只读查询并返回全部行（连接用完即关）。
+
+    给 ``core.assets`` 这类「只读展示层」用的便捷入口：它们不需要事务，
+    但需要保证连接被关闭 —— 手写 ``conn = connect(); try/finally: close()``
+    在每个读取函数里都会写一遍，容易漏。
+    """
+    conn = connect(path)
+    try:
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
 def init_schema(path: str | None = None) -> None:
     """创建本机应用库的全部表（幂等）。"""
     with transaction(path) as conn:
@@ -242,6 +256,65 @@ def init_schema(path: str | None = None) -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_created ON exports(created_at)")
+
+        # ── P1 资产 / 观测（方案第 8 节；DECISIONS-E 预授权） ────
+        # 两层结构：assets 存**去重后的唯一资产**，observations 存**每一次观测**。
+        # 这是为了终止「每个工具一张表」的老设计：同一台机器被 subfinder 与
+        # httpx 各发现一次，在 assets 里只有一行，在 observations 里有两行，
+        # 于是「谁发现的 / 什么时候发现的 / 当时的属性」都还能回答。
+        #
+        # 迁移口径（DECISIONS-E）：**只新增表，不改既有表、不动既有数据**。
+        # 旧库（results/scan_results.db）与本库的既有表一律不受影响。
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS assets (
+                id            TEXT PRIMARY KEY,
+                scope_id      TEXT,
+                canonical_key TEXT NOT NULL,
+                type          TEXT NOT NULL,
+                value         TEXT NOT NULL,
+                first_seen    TEXT NOT NULL,
+                last_seen     TEXT NOT NULL,
+                status        TEXT NOT NULL DEFAULT 'active',
+                confidence    TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        # 去重键 = ``(canonical_key, scope_id)`` 而**不是** canonical_key 单列：
+        # 同一台主机在两个 Scope 下是两条彼此独立的资产，若把 canonical_key
+        # 建成全局唯一，收紧一个 Scope 会连带影响另一个 Scope 的资产列表。
+        # ``IFNULL(scope_id, '')`` 让「不属于任何 Scope」的行也能参与唯一性
+        # （SQLite 的 UNIQUE 允许多个 NULL，直接建两列唯一索引会漏掉这个情况）。
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_unique "
+            "ON assets(canonical_key, IFNULL(scope_id, ''))"
+        )
+        # 另按 scope / type / last_seen 建索引，覆盖「资产列表页」的三种常见筛选。
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_scope ON assets(scope_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(type)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_last_seen ON assets(last_seen)")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS observations (
+                id              TEXT PRIMARY KEY,
+                asset_id        TEXT NOT NULL,
+                job_id          TEXT,
+                step_id         TEXT,
+                run_id          TEXT,
+                source_tool     TEXT,
+                observed_at     TEXT NOT NULL,
+                parser_version  TEXT,
+                raw_artifact_id TEXT,
+                data_json       TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_asset ON observations(asset_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_job ON observations(job_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_step ON observations(job_id, step_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_tool ON observations(source_tool)")
 
         _migrate_columns(conn)
 

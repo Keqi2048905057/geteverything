@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>资产 · Get Everything Framework</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">GEF</span>
+      <span class="brand-text">资产 / 观测</span>
+    </div>
+    <div class="topbar-right">
+      <a class="btn btn-ghost" href="{{ url_for('index') }}">← 任务</a>
+      <span id="health-badge" class="badge badge-unknown" title="正在检测 /health">健康检查中…</span>
+      {% if is_authenticated %}
+        <span class="badge badge-ok">已登录</span>
+      {% else %}
+        <span class="badge badge-warn">未登录</span>
+        <a class="btn btn-primary" href="{{ url_for('login_page') }}">登录</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <main class="layout layout-wide">
+    <section class="panel">
+      <h2>资产列表</h2>
+
+      {% if not is_authenticated %}
+        <p class="hint">
+          资产是「整理后的情报」（含已发现的子域与端口），属于本地管理员可见内容。
+          请先登录；未登录时接口返回 <code>401 unauthenticated</code>。
+        </p>
+      {% endif %}
+
+      <form class="form form-inline" id="assets-filter" autocomplete="off">
+        <label for="filter-scope">授权范围</label>
+        <select id="filter-scope" name="scope_id">
+          <option value="">全部范围</option>
+          {% for scope in scopes %}
+            <option value="{{ scope.id }}">{{ scope.name }}（{{ scope.id }}）</option>
+          {% endfor %}
+        </select>
+
+        <label for="filter-type">类型</label>
+        <select id="filter-type" name="type">
+          <option value="">全部类型</option>
+          {% for asset_type in asset_types %}
+            <option value="{{ asset_type }}">{{ asset_type }}</option>
+          {% endfor %}
+        </select>
+
+        <label for="filter-status">状态</label>
+        <select id="filter-status" name="status">
+          <option value="">全部状态</option>
+          {% for status in asset_statuses %}
+            <option value="{{ status }}">{{ status }}</option>
+          {% endfor %}
+        </select>
+
+        <label for="filter-search">值包含</label>
+        <input type="text" id="filter-search" name="search" placeholder="api.example.test">
+
+        <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>筛选</button>
+      </form>
+
+      <p class="hint" id="assets-summary">—</p>
+
+      <table class="jobs" id="assets-table" hidden>
+        <thead>
+          <tr>
+            <th>类型</th><th>值</th><th>状态</th><th>首次发现</th><th>最近发现</th><th>置信度</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <p class="hint" id="assets-empty" hidden>没有符合条件的资产。</p>
+      <div class="form-row">
+        <button type="button" class="btn btn-ghost" id="assets-prev" hidden>← 上一页</button>
+        <button type="button" class="btn btn-ghost" id="assets-next" hidden>下一页 →</button>
+      </div>
+
+      <p class="hint">
+        <strong>同一资产只落一行</strong>：不同工具（不同写法、不同大小写）发现的同一条资产会归并到一起，
+        但每次观测都单独留痕 —— 所以「谁发现的 / 何时发现 / 当时的属性」都能追。
+        资产接口读的是新库的 <code>assets</code> / <code>observations</code>，与
+        <code>/api/results</code>（旧的原始结果行）是两回事。
+      </p>
+    </section>
+
+    <section class="panel" id="asset-detail-panel" hidden>
+      <h2>资产详情 <span class="mono" id="asset-detail-id"></span></h2>
+      <div id="asset-detail-body"></div>
+      <p class="hint">
+        观测时间线倒序排列：最近一次在最上面。<code>raw_artifact_id</code> 是产生该观测的原始证据，
+        要读内容请到任务详情页（证据接口不下发服务器路径）。
+      </p>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='assets.js') }}"></script>
+</body>
+</html>

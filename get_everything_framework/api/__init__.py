@@ -26,6 +26,7 @@ from api import tools     # noqa: E402, F401
 from api import auth      # noqa: E402, F401
 from api import scopes    # noqa: E402, F401
 from api import jobs      # noqa: E402, F401
+from api import assets    # noqa: E402, F401
 from api import scan      # noqa: E402, F401
 from api import results   # noqa: E402, F401
 from api import upload    # noqa: E402, F401

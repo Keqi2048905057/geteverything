@@ -154,12 +154,52 @@
   现在 `python -m pytest` **零 warning**。
 - 导出下载与超大上传用例的 `ResourceWarning`（前者漏关响应，后者来自 Werkzeug 测试客户端的临时文件）。
 
+### P1 — 统一资产模型与 Diff（本轮，方案第 8、9、10 节）
+
+新增：
+
+- `core/canonical.py`：**`canonical_key` 规则**。七种类型（`subdomain` / `host` / `ip` /
+  `cidr` / `url` / `port` / `service`）的归一化：host 小写 + 去尾点 + IDNA + RFC1123 校验；
+  IP 压成最简形式；CIDR `strict=False`；URL 协议小写、默认端口丢弃、空路径补 `/`、
+  query 保留、fragment 丢弃、带凭据拒绝、非 `http(s)` 协议拒绝；`canonical_key = "type|value"`。
+- `core/assets.py`：**资产 / 观测两层模型**。
+  - `record_observation()` / `record_observations()`：同一资产只落一行 `assets`，
+    每次观测在 `observations` 留痕；`first_seen` 永不被覆盖，`last_seen` 每次推进。
+  - `ingest_step_observations()`：把已完成步骤的结构化观测落库（executor 调用）。
+  - `mark_stale_assets()` / `list_assets()` / `count_assets()` / `list_observations()` /
+    `asset_summary()` / `get_asset()` / `get_asset_by_key()`。
+  - `diff_jobs()`：**Diff Engine**，输出 `added` / `removed` / `changed` / `unchanged` + `counts`。
+- `core/db.py`：新增 `assets` / `observations` 两张表与索引；新增 `query()` 只读辅助函数
+  （**只新增表，未改任何既有表结构、未动既有数据**）。
+- `api/assets.py`：`GET /api/assets`、`/api/assets/summary`、`/api/assets/<id>`、
+  `/api/observations`（全部需管理员）。
+- `api/jobs.py`：`GET /api/jobs/<before>/diff/<after>`（Diff 端点）。
+- `web/templates/assets.html` + `web/static/assets.js`：**资产列表页**（无框架、无 CDN），
+  支持按范围/类型/状态/关键字筛选、分页、点开观测时间线。
+- `app.py`：`GET /assets` 页面路由；首页顶栏加入口。
+
+变更：
+
+- `core/jobs.py`：新增事件类型 `EVENT_ASSETS_INGESTED = "step.assets_ingested"`。
+- `jobs/executor.py`：每个步骤 `finish_step` 后调用 `ingest_step_observations()`，
+  并把 `written` / `skipped` / 前 5 条原因记成事件。
+  **落观测是派生产物：它失败不会让任务变成 failed。**
+- `api/__init__.py`：注册 `api.assets`。
+- `web/static/app.css`：资产页布局与状态配色。
+
+修复：
+
+- `core/assets.py` 初版把 `canonical_key` 建成**全局唯一**，导致同一资产在两个 Scope 下
+  「查不到又插不进」。改为唯一索引 `(canonical_key, IFNULL(scope_id,''))`
+  （`IFNULL` 是因为 SQLite 的 `UNIQUE` 允许多个 `NULL`，裸两列索引会漏掉无 Scope 的行）。
+- `core/assets.py` 引入的 10 条 mypy 报错（缺类型标注）已补回，**mypy 仍为 34**（M7 存量，无新债）。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 538 passed, 2 skipped, 0 warnings
-$ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待修，本轮未增减）
+$ python -m pytest           # 677 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待修，P1 未新增）
 ```
 
 ### 已知仍未处理（不属 M0～M4 范围）
@@ -170,6 +210,9 @@ $ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待�
 - `/api/jobs` 只有 `limit`，没有游标分页。
 - 单并发 worker（`SCAN_LIMITS["max_concurrency"] = 2` 目前未使用）。
 - `config.py:FEROXBUSTER_CONFIG` 的 `wordlist` 仍是开发机绝对路径。
-- 首页尚未展示 `httpx` 观测到的状态码/标题——那属于 M5 的资产页。
 - `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 `docs/DECISIONS.md` §3 待授权）。
 - Agent 尚未改走 Job Service（P0-6 未完成部分）。
+- **P1 遗留**：旧的 `/api/run` 同步扫描链路**不产生** `assets` 观测（只有 Job 链会），
+  两套模型尚未合流（方案第 11 节）；旧库历史数据也还没迁进新库（方案第 12 节，
+  按 DECISIONS-F 只允许脚本 + 临时库测试）；`mark_stale_assets()` 已就绪但**还没有任何计划任务调用它**；
+  Diff 端点可用但页面上还没有「对比」按钮。

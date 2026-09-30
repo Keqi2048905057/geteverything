@@ -7,6 +7,7 @@
 * ``GET  /api/jobs/{job_id}``       —— 任务详情（含 steps 与 events）
 * ``POST /api/jobs/{job_id}/cancel``—— 请求取消
 * ``POST /api/jobs/{job_id}/retry`` —— 重新排队
+* ``GET  /api/jobs/{a}/diff/{b}``   —— 两次任务的资产 Diff（方案第 10 节）
 
 硬性要求：
 
@@ -22,6 +23,7 @@ from flask import jsonify, request
 
 from api import api_bp
 from core import artifacts as artifacts_store
+from core import assets as assets_store
 from core import audit, jobs as jobs_store, uploads
 from core.auth import require_admin
 from core.errors import BadRequestError, NotFoundError
@@ -282,3 +284,34 @@ def read_artifact(artifact_id: str):
     if payload is None:
         raise NotFoundError(f"原始证据不存在: {artifact_id}")
     return jsonify({"ok": True, "artifact": payload})
+
+
+@api_bp.route("/jobs/<before_job_id>/diff/<after_job_id>", methods=["GET"])
+def diff_jobs(before_job_id: str, after_job_id: str):
+    """比较两次任务看到的资产（方案第 10 节 Diff Engine）。
+
+    返回 ``added`` / ``removed`` / ``changed`` / ``unchanged`` 四类，
+    每类是资产信息 + 本次观测到的属性。``changed`` 额外带 ``changes``，
+    形如 ``{"status_code": {"from": 200, "to": 403}}``。
+
+    Query 参数:
+        scope_id           —— 只比较该范围下的资产（可选）
+        include_unchanged  —— ``0`` / ``false`` 时不下发 unchanged 明细（默认下发）
+    """
+    require_admin()
+
+    for job_id in (before_job_id, after_job_id):
+        if jobs_store.get_job(job_id) is None:
+            raise NotFoundError(f"任务不存在: {job_id}")
+
+    scope_id = (request.args.get("scope_id") or "").strip() or None
+    raw_flag = (request.args.get("include_unchanged") or "").strip().lower()
+    include_unchanged = raw_flag not in {"0", "false", "no"}
+
+    result = assets_store.diff_jobs(
+        before_job_id,
+        after_job_id,
+        scope_id=scope_id,
+        include_unchanged=include_unchanged,
+    )
+    return jsonify({"ok": True, **result})

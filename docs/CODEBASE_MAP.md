@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固（2026-10-01）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff）（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -423,7 +423,13 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | katana | `katana_results` | `url` | url |
 | gospider | `gospider_results` | `url` | url |
 
-实测行数（当前工作副本）：`waybackurls_results=296`、`enscan_results=37`、`feroxbuster_results=12`、`dirsearch_results=9`、`amass_intel_results=2`、`scan_runs=28`，其余为 0。旧库里**没有** `subdomain_results`、`alive_results`、`jobs`、`assets`、`observations`、`artifacts`、`scopes`、`settings` 等表——`jobs` / `artifacts` / `scopes` 等属于**新库** `results/local.db`（§9.3）。
+实测行数（当前工作副本）：`waybackurls_results=296`、`enscan_results=37`、`feroxbuster_results=12`、`dirsearch_results=9`、`amass_intel_results=2`、`scan_runs=28`，其余为 0。旧库里**没有** `subdomain_results`、`alive_results`、`jobs`、`assets`、`observations`、`artifacts`、`scopes`、`settings` 等表——`jobs` / `artifacts` / `scopes` / `exports` 属于**新库** `results/local.db`（§9.3）；`assets` / `observations` 同样是新库的表，见 §9.12。
+
+> **注意两套资产模型并存**：`storage.py` 的 17 张工具专属表是「原始结果行」，
+> 只增不减、按 `(domain, 结果列)` 去重，回答不了「谁先发现的」；
+> `core/assets.py` 的 `assets` / `observations` 是 P1 新增的「唯一资产 + 观测时间线」。
+> 两者**没有自动同步**——目前只有 mock/real 任务的步骤会落 `assets`，
+> 旧的 `/api/run` 同步扫描链路**不会**产生资产（§9.12.6）。
 
 **表结构的三个硬约束（决定 bug 表现）**：
 1. **专属表没有 `category` 列**（分类信息硬编码在 `TOOL_DATABASES` 里），所以 `get_tool_results(category=...)` 在专属表分支无法按分类过滤，只能靠 `TOOL_DATABASES[meta]["category"]` 反查。
@@ -443,7 +449,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ---
 
-## 6. BUG 定位索引表（共 22 条症状）
+## 6. BUG 定位索引表（共 23 条症状；第 23 条为 P1 新增）
 
 | # | 典型症状 | 最可能的 3 个排查位置 | 该处典型失败模式 |
 |---|---|---|---|
@@ -469,6 +475,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 20 | Agent 对话「失忆」/ 多轮后上下文丢失 | ① `app.py:139,146`（`session["agent_history"]=...[-40:]`、`session["agent_steps"]=...[-50:]`）② `app.py:27` `app.secret_key = Config.SECRET_KEY`（默认 `"dev-secret-key"`）③ `agent/action.py:_trim_history`（`:785` 上限 30 条） | Flask session 是**签名 Cookie**（客户端存储）；`agent_history`/`agent_steps` 里含完整工具结果文本，很容易超过浏览器 4KB Cookie 上限 → Flask 静默丢弃 Cookie → 下一轮 `session.get("agent_history")` 变空。默认密钥还可被伪造 |
 | 21 | `/api/tools`、`/api/databases` 返回的记录数不对/很慢 | ① `api/tools.py:list_tools`（`:80-88` 每个工具都 `build_runner` 实例化）② `api/tools.py:_build_tool_payload`（`:35`）③ `storage.py:get_tool_databases`（`:527-541`，**不返回任何 count**） | 接口 docstring（`api/tools.py:52-66`）宣称返回 `record_count`，实现只返回 `tool_name/table/result_column/category`；真正的计数方法 `get_tool_database_overview`（`storage.py:543`）**在 API 层从未被调用**。另外 `build_runner` 会执行 `DnsxRunner/HttpxRunner/AlterxRunner/ShufflednsRunner` 的 `__init__`（各建一个 `ScanResultStore()`，触发建表） |
 | 22 | 子域爆破类工具（shuffledns/alterx/dnsx）总是零结果 | ① `config.py:SHUFFLEDNS_CONFIG`（`:145` wordlist=`SecLists/subdomains-top1million-5000.txt`）② `modules/shuffledns.py:_bruteforce_with_dnsx`（`:63` 文件不存在只 print 一句）③ `config.py:FEROXBUSTER_CONFIG`（`:200` wordlist 是硬编码绝对路径 `D:/c4/v2/backend/framework-main/SecLists/...`） | `SecLists/` 里**实际只有 `raft-small-directories.txt`**（实测），配置引用的两个字典文件都不存在：shuffledns 静默返回空、feroxbuster 会把不存在的路径当 `-w` 参数传给子进程而失败。`alterx`/`dnsx`/`httpx` 的候选来自 `store.get_results_by_domain()`，subfinder 没先跑过就永远是空 |
+| 23 | 任务跑完了，资产页却「一条都没有」/ 少了几条 | ① `jobs/executor.py:execute_job` 里的 `ingest_step_observations` 调用 ② `core/assets.py:CATEGORY_TO_TYPE`（`web`/`alive`/`dns` 的映射）③ 任务详情里的 `step.assets_ingested` 事件（含 `skipped` 与 `reasons`） | **先看事件，不要先看代码**：`step.assets_ingested` 的 `written`/`skipped`/`reasons` 直接说明这批观测落了几条、为什么跳过。三种常见原因：① 工具的 `Observation.category` 不在 `CATEGORY_TO_TYPE` 里（返回 `None` → 整条跳过，不猜类型）；② 步骤只有字符串结果且工具是 `httpx`/`naabu`/`nmap`（形态不确定 → 故意不落，见 §9.12.3）；③ `canonical.normalize()` 判定值非法（如把本地路径当 URL）。**注意落观测是派生产物**：它失败不会让任务变 failed，所以「任务 succeeded 但没资产」是合法状态，必须靠事件区分 |
 
 ---
 
@@ -596,11 +603,13 @@ get_everything_framework/
 │   ├── ids.py                带前缀的 UUID4（job_/step_/scope_/upload_/evt_…）
 │   ├── db.py                 本机应用库连接（WAL + busy_timeout + BEGIN IMMEDIATE 事务）
 │   ├── audit.py              audit_events 写入与查询
-│   ├── db schema 见 core/db.py:init_schema  scopes / audit_events / uploads / jobs / job_steps / job_events / artifacts
+│   ├── db schema 见 core/db.py:init_schema  scopes / audit_events / uploads / jobs / job_steps / job_events / artifacts / exports / assets / observations
 │   ├── scope.py              Scope 模型与目标校验（排除优先、拒全放行）
 │   ├── scope_store.py        Scope 持久化 + require()（无 Scope 即拒绝）
 │   ├── policy.py             P0-2：统一 Policy/Scope 引擎（Job 创建 / Step 执行前 / 解析后地址 / 重定向）
 │   ├── exports.py            P0-5：导出登记 + 公开出参（不含 path）+ 下载文件解析
+│   ├── canonical.py          P1：canonical_key 规则（subdomain/host/ip/cidr/url/port/service 的归一化）
+│   ├── assets.py             P1：资产/观测两层模型 + Obs 落库 + Diff Engine（added/removed/changed/unchanged）
 │   ├── uploads.py            受控上传：uploads/<id>/{raw.*,normalized.txt,meta.json}
 │   ├── mock.py               mock 执行结果（7 种场景，错误码对齐 §6.2）
 │   ├── safety.py             mock/real 模式解析 + GEF_ALLOW_REAL_SCAN 开关
@@ -614,12 +623,15 @@ get_everything_framework/
 │   ├── executor.py           执行逻辑（与进程无关，可直接单测调用）
 │   └── worker.py             独立 worker 进程：python -m jobs.worker
 ├── api/
-│   └── jobs.py               /api/jobs*（7 个接口）+ /api/jobs/<id>/artifacts + /api/artifacts/<id>
+│   ├── jobs.py               /api/jobs*（7 个接口）+ /api/jobs/<id>/artifacts + /api/artifacts/<id> + /api/jobs/<a>/diff/<b>
+│   └── assets.py             P1：/api/assets*（列表/统计/详情）+ /api/observations（全部需管理员）
 └── web/
     ├── templates/index.html  首页（Scope 下拉 + 创建任务 + 任务表）
     ├── templates/login.html  登录页
+    ├── templates/assets.html P1：资产列表页骨架（筛选下拉 + 表格 + 详情面板）
     ├── static/app.css
-    └── static/app.js         无框架无 CDN：轮询 /health 与 /api/jobs，渲染进度条
+    ├── static/app.js         无框架无 CDN：轮询 /health 与 /api/jobs，渲染进度条
+    └── static/assets.js      P1：调 /api/assets 渲染资产表与观测时间线（无框架无 CDN）
 ```
 
 ### 9.2 路由增改对照（第 1.1 节表格的现状）
@@ -652,6 +664,12 @@ get_everything_framework/
 | GET | `/api/export` | `api/results.py` | 无 | **P0-5 起**返回 `export_id` / `filename` / `download_url`，**不再返回 `path`** |
 | GET | `/api/export/{export_id}/download` | `api/results.py` | 无 | P0-5 新增；`send_file(as_attachment=True)`，未知/已清理的 id → 404 |
 | GET | `/api/exports` | `api/results.py` | 无 | P0-5 新增；导出记录列表（同样不含路径） |
+| GET | `/assets` | `app.py:assets_page()` | — | P1 新增；资产列表页。匿名可打开但只显示提示，**不下发 Scope 名称**；数据由 `static/assets.js` 调 `/api/assets` |
+| GET | `/api/assets` | `api/assets.py` | **需管理员** | P1 新增；支持 `?scope_id=&type=&status=&search=&limit=&offset=`，非法 type/status → 400 |
+| GET | `/api/assets/summary` | `api/assets.py` | **需管理员** | P1 新增；`by_type` 计数。与 `<asset_id>` 同前缀：Werkzeug 按「静态段优先」匹配，所以 `summary` 不会被当成资产 ID（`test_assets_summary_route_is_not_shadowed_by_asset_id` 锁住这一点） |
+| GET | `/api/assets/{id}` | `api/assets.py` | **需管理员** | P1 新增；资产详情 + 观测时间线（倒序） |
+| GET | `/api/observations` | `api/assets.py` | **需管理员** | P1 新增；**必须给 `asset_id` 或 `job_id`**，否则 400（拒绝无条件全表扫描） |
+| GET | `/api/jobs/{a}/diff/{b}` | `api/jobs.py` | **需管理员** | P1 新增；Diff Engine，返回 added/removed/changed/unchanged + `counts`；任一 job 不存在 → 404 |
 
 ### 9.3 双库架构（**最容易踩的坑**）
 
@@ -753,12 +771,15 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 538 passed, 2 skipped, 0 warnings
+$ python -m pytest           # 677 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 存量，P1 未新增）
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → **P0 加固 `538`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → **P1 资产/观测/Diff `677`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
+> P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
+> 补标注后回到 34 —— **34 是 M7 的历史存量，不是 P1 的新债**。
 
 | 测试文件 | 覆盖 |
 |---|---|
@@ -774,6 +795,8 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/unit/test_policy.py` | **P0-2**：统一 Policy 四个入口（缺失 400 / 越界 403 / 整体拒绝 / 解析后地址校验，注入 resolver 不查真实 DNS） |
 | `tests/unit/test_agent_boundary.py` | **P0-3**：Agent 拒绝任意 `file_path`、只收 `upload_id`、planner 不再下发 `file_path` |
 | `tests/unit/test_storage_connection.py` | **DECISIONS-I**：旧库连接必关（含异常路径）、`busy_timeout`、表结构未变、`-W error::ResourceWarning` 复现 |
+| `tests/unit/test_canonical.py` | **P1 §9**：七种类型的归一化规则、方案验收的三个 URL 折叠成一个 key、`guess_type` 不猜错 |
+| `tests/unit/test_assets.py` | **P1 §8/§10**：两层模型（一行资产 + N 条观测）、`first_seen` 不被覆盖、scope 参与唯一性、`%`/`_` 转义、状态迁移不删数据、Diff 验收（A B C → A C D）、category→type 映射、落库失败不改任务结果 |
 | `tests/integration/test_web_baseline.py` | 首页可渲染、登录/登出（M1） |
 | `tests/integration/test_m2_security.py` | 认证、受控上传、file_path 拒绝、审计（M2） |
 | `tests/integration/test_m2_scope_enforcement.py` | 无 Scope/越界拒绝、mock 不碰真实 runner（M2） |
@@ -782,6 +805,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/integration/test_m4_runner_result.py` | RunnerResult 端到端：零结果 vs 失败、artifact 不下发路径（M4） |
 | `tests/integration/test_export_contract.py` | **P0-5**：导出响应无 `path`、可下载、未知/已清理 id → 404、`safe_prefix` 穿越表、前缀逃不出导出目录 |
 | `tests/integration/test_api_auth_contract.py` | **P0-1/D**：锁定「哪些只读接口匿名、哪些必须 401」的当前契约 + 响应体不夹带服务器路径 |
+| `tests/integration/test_assets_api.py` | **P1**：资产接口全部 401（未登录）、「任务跑完 → 资产可查」端到端链路、`summary` 未被 `<asset_id>` 吃掉、`/api/observations` 拒绝无条件全表扫描、Diff 端点 404 与 `include_unchanged`、资产页骨架与匿名时不下发 Scope 名、响应无服务器路径 |
 
 ### 9.9 第 6 节 BUG 索引表的**现状修正**
 
@@ -986,3 +1010,158 @@ core/runner_result.py
 以及 `/api/tools` / `/api/results` 的响应体里**不夹带服务器路径**。
 将来任何一侧发生变化，这两个测试会失败——那时要同步改的是
 `docs/DECISIONS.md`、`SECURITY.md` 和 README 的鉴权列，而不是删除测试。
+
+### 9.12 P1：统一资产模型与 Diff（方案第 8、9、10 节）
+
+> 这一节是 P1 的第一批落地。**只新增表与模块**：`assets` / `observations`
+> 是两张新表，`jobs` 一个列都没加（DECISIONS-E 的「纯增量」约束）。
+> 旧的 `storage.py` 工具表、`/api/results` 接口**一行没动** —— 两套模型并存。
+
+#### 9.12.1 为什么需要这一层（`core/assets.py`）
+
+加固前是「**每个工具一张表**」：同一台机器被 subfinder 和 httpx 各发现一次，
+就是两条互不相干的记录，既回答不了「这个资产是谁先发现的」，也做不了可靠 diff。
+现在改成方案第 8 节的两层模型：
+
+```text
+assets（唯一资产，canonical_key 去重）
+   ↓ 1 : N
+observations（每次观测一行：谁 / 何时 / 当时什么属性）
+```
+
+| 表 | 列 | 关键约束 |
+|---|---|---|
+| `assets` | `id` / `scope_id` / `canonical_key` / `type` / `value` / `first_seen` / `last_seen` / `status` / `confidence` / `metadata_json` | 唯一索引是 **`(canonical_key, IFNULL(scope_id,''))`**，不是 `canonical_key` 单列 |
+| `observations` | `id` / `asset_id` / `job_id` / `step_id` / `run_id` / `source_tool` / `observed_at` / `parser_version` / `raw_artifact_id` / `data_json` | `step_id` 是 P1 额外加的（排查「哪个 job 的哪一步」） |
+
+> ⚠️ **`scope_id` 必须参与唯一性**：同一台主机在两个 Scope 下是两条彼此独立的资产。
+> 早先版本把 `canonical_key` 建成全局唯一，结果「A 范围的资产在 B 范围里查不到、
+> 却又插不进去」，`test_different_scope_means_different_asset` 专门守这一点。
+> 索引里用 `IFNULL(scope_id,'')` 而不是裸两列，是因为 SQLite 的 `UNIQUE`
+> 允许多个 `NULL`，裸索引会让「不属于任何 Scope」的行绕过去重。
+
+**`first_seen` 永不被覆盖**，`last_seen` 每次观测都推进 —— 那两列就是「首次/最近发现时间」。
+`metadata` 用 `setdefault` 合并：人工订正过的 `owner` 不会被后续重跑冲掉。
+
+**状态迁移不删数据**：`mark_stale_assets()` 只把 `status` 改成 `stale`，
+行还在、观测时间线也还在（方案明令禁止删历史数据）。
+
+#### 9.12.2 `canonical_key` 规则（`core/canonical.py`，方案第 9 节）
+
+```text
+canonical_key = f"{type}|{normalized_value}"      # 例：url|https://example.com/
+```
+
+| 类型 | 归一化要点 |
+|---|---|
+| `subdomain` / `host` | 小写、去尾点、IDNA 编码、RFC1123 标签校验（**允许** `_`，`_dmarc.example.com` 真实存在） |
+| `ip` | `ipaddress` 解析（IPv6 压成最简形式；`[::1]` 也接受） |
+| `cidr` | `strict=False`：`10.0.0.5/8` 收敛成 `10.0.0.0/8` 而不报错 |
+| `url` | 协议小写、host 小写+IDNA、**默认端口丢弃**、空路径补 `/`、query 保留、fragment 丢弃、带凭据直接拒绝、缺协议补 `http://`、非 `http(s)` 协议（含 `javascript:`）拒绝 |
+| `port` | 必须 `host:port`，端口 1–65535 |
+| `service` | 小写，允许 `-._+/`（如 `ssl/vpn`） |
+
+方案第 9 节的验收就是 `test_plan_acceptance_urls_collapse_to_one`：
+
+```text
+HTTPS://Example.COM/  ┐
+https://example.com   ├─→  同一个 canonical_key："url|https://example.com/"
+https://example.com:443/ ┘
+```
+
+`normalize()` 对未知类型抛 `CanonicalError`；`guess_type()` 只做**保守**猜测
+（`file:///etc/passwd` 返回 `None`，不硬塞成 URL）。
+
+#### 9.12.3 从任务步骤落观测（`ingest_step_observations`）
+
+`jobs/executor.py` 在 `finish_step` 之后调一次 `ingest_step_observations(step, outcome, scope_id=...)`：
+
+* **数据来源**优先 `outcome["observations"]`（M4 起 runner 给的结构化观测，
+  含 httpx 的 `status_code` / `title` / `technology`）；
+* 为空才退化到 `outcome["results"]`（旧签名的纯字符串列表），
+  并且**只对「明确知道字符串形态」的工具兜底**（`subfinder`/`amass`/`assetfinder`/
+  `oneforall`/`alterx`/`shuffledns` → `subdomain`，`dnsx` → `host`）；
+  `httpx`/`naabu`/`nmap` 等形态不确定的**一律跳过** —— 把 `1.2.3.4:80` 当 subdomain
+  存进去比不存更糟（`test_ingest_step_observations_skips_unknown_string_tools`）。
+
+> ⚠️ **`Observation.category` 不等于资产类型**。`category` 是旧代码就有的字段
+> （`storage.py:TOOL_DATABASES` 与各 runner config 在用），取值是 `web` / `alive` /
+> `dns` / `url` / `port` / `subdomain`；而资产类型是 `subdomain` / `host` / `ip` /
+> `cidr` / `url` / `port` / `service`。两者名字像、语义不同，所以有显式映射表
+> `CATEGORY_TO_TYPE`（`web`→`url`、`alive`/`dns`→`host`）。**直接拿 category 当 type
+> 会让 `web`/`alive`/`dns` 三种整体变成非法类型而被丢掉。** 未列出的 category 返回
+> `None` 并计入 `skipped`，不猜。
+
+**落观测失败绝不影响任务结果**：`ingest_step_observations` 内部吞掉所有异常，
+只把原因写进返回值；`executor` 把它记成 `step.assets_ingested` 事件
+（`written` / `skipped` / 前 5 条 `reasons`）。这样「资产页为什么少了几条」
+能在任务详情里直接看到。观测是**派生产物**，原始结果早已写进 `job_steps` 与 `artifacts`。
+
+#### 9.12.4 Diff Engine（`diff_jobs`，方案第 10 节）
+
+```text
+scan N  ─┐
+         ├─→ diff_jobs(before_job_id, after_job_id) → added / removed / changed / unchanged
+scan N+1 ┘
+```
+
+方案第 10 节的验收例子 `test_diff_plan_acceptance_added_removed_unchanged`：
+
+```text
+第一次 A B C            第二次 A C D
+────────────────        ────────────────
+added     = [D]
+removed   = [B]
+unchanged = [A, C]
+changed   = []
+counts    = {added:1, removed:1, changed:0, unchanged:2}
+```
+
+`changed` 只在**可 diff 属性**变化时产生，取值见 `DIFFABLE_ATTRIBUTES`：
+
+```text
+status_code / title / server / technology / url
+```
+
+> ⚠️ **`duration_ms` / `checked_at` 这类一次性字段必须排除**，否则每次扫描
+> 全表都是 `changed`，diff 直接废掉（`test_diff_ignores_volatile_attributes`）。
+> 单个属性最多列 `MAX_DIFF_ATTRIBUTE_ITEMS = 20` 项，防止 metadata 巨大时刷屏。
+> `_changed_attributes` 的语义是「后一次没有这个属性 → `to: None`」，
+> 所以 `200 → None` 是**真实的属性消失**，不是 bug。
+
+`scope_id` 过滤的口径：过滤后另一侧可能整批消失，**这时应该什么都不报**，
+而不是把范围外资产误报成 `removed`（`test_diff_respects_scope_filter` /
+`test_diff_without_scope_filter_sees_both_assets` 一对用例把两个方向都钉住）。
+
+#### 9.12.5 资产 API 与页面（DECISIONS-G）
+
+新增 `api/assets.py`（全部**需管理员**）与 `web/templates/assets.html` +
+`web/static/assets.js`（无框架、无 CDN，与 `app.js` 同一套做法）。
+
+* `GET /api/assets` —— 列表；非法 `type` / `status` → 400 并把 `supported` 放进 `details`；
+* `GET /api/assets/summary` —— 分类型计数；
+* `GET /api/assets/{id}` —— 详情 + 观测时间线；
+* `GET /api/observations` —— **必须给 `asset_id` 或 `job_id`**，否则 400（拒绝无条件全表扫描）；
+* `GET /api/jobs/{a}/diff/{b}` —— Diff，任一 job 不存在 → 404。
+
+> ⚠️ `/api/assets/summary` 与 `/api/assets/<asset_id>` 同前缀。Werkzeug 按
+> 「静态段优先」匹配，所以 `summary` **不会**被 `<asset_id>` 吃掉；
+> `test_assets_summary_route_is_not_shadowed_by_asset_id` 把这一点锁成断言 ——
+> 这个坑不写测试，将来改路由顺序时无声无息地坏掉。
+
+页面 `/assets` **不强制登录**（否则匿名用户连导航都点不进来），但：
+① 未登录时不下发 Scope 名称，只给提示；② 接口返回 401。
+资产是「整理后的情报」，比原始结果行更敏感，所以归在需要登录的一侧 ——
+与 `/api/results`（旧库、匿名只读）刻意区分开。
+
+#### 9.12.6 P1 之后仍未做的（对照执行方案）
+
+| 方案项 | 现状 |
+|---|---|
+| §8 两层模型 | ✅ 表 + 数据层 + 执行链接线 + API + 页面 |
+| §9 资产规范化 | ✅ 七种类型 + 全部规则写成测试 |
+| §10 Diff | ✅ 四类输出 + 属性变化 + 两个端点 |
+| §11 统一旧执行链 | ⬜ 未做：`api/scan.py` 同步扫描与 Job 链仍并存 |
+| §12 旧库数据迁进新库 | ⬜ 未做（DECISIONS-F：只允许脚本 + 临时库测试，真实迁移留给用户手动跑） |
+| `assets.status` 自动转 `stale` | ⚠️ 函数已就绪（`mark_stale_assets`），**但还没有任何计划任务/接口调它** |
+| Diff 在前端露出 | ⬜ 未做：`/api/jobs/{a}/diff/{b}` 已可用，页面还没有「对比」按钮 |

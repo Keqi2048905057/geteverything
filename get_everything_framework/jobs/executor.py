@@ -24,6 +24,7 @@ import os
 import time
 
 from core import artifacts as artifacts_store
+from core import assets as assets_store
 from core import jobs as jobs_store
 from core.errors import ErrorCode
 from core.mock import run_mock
@@ -289,6 +290,25 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
                 "error_code": outcome["error_code"],
             },
         )
+
+        # P1（方案第 8 节）：把这一步的结构化观测落进 assets / observations。
+        # **派生产物**——它失败绝不能影响任务结果（原始结果早已写进
+        # job_steps 与 artifacts），所以 ingest 内部自行吞掉异常，
+        # 失败原因只作为事件记下来，便于排查「资产页为什么少了几条」。
+        ingest = assets_store.ingest_step_observations(step, outcome, scope_id=scope_id)
+        if ingest["written"] or ingest["skipped"]:
+            jobs_store.add_event(
+                job_id,
+                jobs_store.EVENT_ASSETS_INGESTED,
+                {
+                    "step_id": step["id"],
+                    "tool_name": step["tool_name"],
+                    "written": ingest["written"],
+                    "skipped": ingest["skipped"],
+                    "reasons": ingest["reasons"][:5],
+                },
+            )
+
         step_statuses.append(outcome["step_status"])
 
         done += 1

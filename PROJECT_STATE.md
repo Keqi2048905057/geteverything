@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固进行中 · Phase M5 待开工（E 项已预授权）**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M5 剩余项待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → **P0 加固 🔄 → M5 ⬜ → M6 ⬜ → M7 ⬜**
-- 更新日期：2026-10-01（P0 加固轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅ → M5 剩余 ⬜ → M6 🔄 → M7 ⬜**
+- 更新日期：2026-10-02（P1 资产/观测/Diff 轮）
 
 ---
 
@@ -86,6 +86,22 @@
 - `/api/export` 改为**下载链接**（登记 + `download_url`），不再是服务器路径
 - 导出记录（`exports` 表 + `GET /api/exports`）
 
+**P1 = M5 首批：统一资产模型与 Diff（本轮，方案第 8、9、10 节）**
+- `core/canonical.py`：`canonical_key` 规则（七种类型；host 小写/IDNA、CIDR `strict=False`、
+  URL 默认端口丢弃 + query 保留 + fragment 丢弃 + 带凭据拒绝、非 `http(s)` 拒绝）
+- `core/assets.py`：**两层模型**（一行 `assets` + N 行 `observations`），
+  `first_seen` 永不被覆盖、`last_seen` 每次推进、`metadata` 只补缺失键、
+  `mark_stale_assets()` **只改状态不删数据**
+- `core/db.py`：`assets` / `observations` 新表 + 索引 + `query()` 辅助（**只新增，未改既有表**）
+- `jobs/executor.py`：每步 `finish_step` 后 `ingest_step_observations()` 落观测，
+  并记 `step.assets_ingested` 事件（含 `written` / `skipped` / `reasons`）
+- `diff_jobs()` + `GET /api/jobs/<a>/diff/<b>`：Diff Engine（added / removed / changed / unchanged）
+- `api/assets.py` + `web/templates/assets.html` + `web/static/assets.js`：资产列表页
+  （筛选 / 分页 / 观测时间线；未登录不下发 Scope 名称）
+- 测试：`test_canonical.py`（~60 例）、`test_assets.py`（~35 例，含方案第 10 节验收
+  「A B C → A C D」与方案第 9 节验收「三个 URL 折叠成一个 key」）、
+  `test_assets_api.py`（~22 例端到端）
+
 **流程与沉淀**
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
 - 给 Codex 的独立核查文档在桌面：`geteverything_项目汇总_给Codex检查.md`
@@ -97,22 +113,28 @@
 | 项 | 现状 | 差什么 |
 |---|---|---|
 | **`mode=real` 真实链路** | 代码层与真实子进程用例齐备（`tool_not_found` / `timeout` / `nonzero_exit` 都有测试）；状态机、错误码、超时、进程树清理都已验证 | **从未用真实工具打真实目标**（按硬约束刻意不做），「工具 + 真实目标」这条链路零实证 |
-| **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库 | 只在任务详情的证据面板里能看到，**没有专门的资产视图**（属 M5） |
+| **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库，**并已进资产页的观测时间线** | 资产页展示的是 `data_json` 原样 JSON，**没有按字段拆列**；任务详情页那一侧仍是原样 JSON |
 | **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
 | **M6 本机启动文档** | `CONTRIBUTING.md` 有环境搭建说明；`scripts/run_local.ps1` 可用 | 没有面向「新开发者 10 分钟启动」的完整文档；`scripts/check_env.py` 不存在 |
-| **M7 mypy** | 其余验收项（pytest / ruff）已达标 | **mypy 仍有 34 errors**，见下 |
+| **M7 mypy** | 其余验收项（pytest / ruff）已达标 | **mypy 仍有 34 errors**，见下（P1 一度新增 10 条，已补标注清零新增债） |
+| **P1 Diff 的前端** | `GET /api/jobs/<a>/diff/<b>` 已可用且有测试 | 页面上**没有「对比」按钮**，只能直接调接口 |
+| **P1 资产过期** | `mark_stale_assets(scope_id, last_seen_before=...)` 已实现且有用例 | **没有任何计划任务/接口调用它**，所以 `stale` / `gone` 目前永远是空的 |
 
 ---
 
 ## 未完成
 
-**M5 — 统一资产与变化检测**（下一阶段，尚未动工）
-- [ ] `assets` / `observations` 两张表（`artifacts` 已有）
-- [ ] 资产规范化
-- [ ] 首次发现 / 最近发现
-- [ ] 两次扫描之间生成 diff（新增 / 删除 / 变更）
-- [ ] 资产列表、筛选、详情页
-- [ ] 每条资产可追溯来源
+**M5 — 统一资产与变化检测**（首批已完成，剩余项如下）
+- [x] `assets` / `observations` 两张表（`artifacts` 已有）
+- [x] 资产规范化（`core/canonical.py`，七种类型）
+- [x] 首次发现 / 最近发现（`first_seen` 不被覆盖、`last_seen` 每次推进）
+- [x] 两次扫描之间生成 diff（新增 / 删除 / 变更 / 未变 + `counts`）
+- [x] 资产列表、筛选、详情页（`/assets` + `/api/assets*`）
+- [x] 每条资产可追溯来源（`observations.source_tool` / `job_id` / `step_id` / `observed_at`）
+- [ ] 旧的 `/api/run` 同步扫描链路也产资产（目前**只有 Job 链**产；方案第 11 节统一执行链）
+- [ ] 资产过期自动化（`mark_stale_assets()` 已就绪但无人调用）
+- [ ] Diff 在前端露出（「对比两次任务」按钮）
+- [ ] 观测的 `data_json` 按字段拆列展示（现在只渲染原样 JSON）
 
 **M6 — 导出、健康检查和本机运行脚本**
 - [x] `/health` 完整字段
@@ -123,7 +145,7 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（540 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（677 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [ ] SQLite 并发测试
 - [ ] 本地 fixture HTTP 测试
@@ -139,6 +161,7 @@
 - [x] `storage.py`（旧库）`with conn` 只提交不关闭（已修：`_connect()` 显式关闭 + `busy_timeout`）
 - [ ] 旧库仍无 WAL（只加了连接级 `busy_timeout`；WAL 属迁移范畴，未动）
 - [ ] `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 DECISIONS §3 待授权）
+- [ ] `/api/assets` 只有 `limit` / `offset`，没有游标分页（与 `/api/jobs` 同款问题）
 
 ---
 

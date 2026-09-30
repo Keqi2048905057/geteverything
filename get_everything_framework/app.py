@@ -20,7 +20,9 @@ from flask import Flask, redirect, render_template, request, session, url_for
 
 from agent import handle_agent_message
 from config import Config, MAX_UPLOAD_SIZE
+from core import assets as assets_store
 from core import auth as local_auth
+from core.canonical import ASSET_TYPES
 from core.errors import BadRequestError, ScopeViolationError
 from core.errors_handlers import register_error_handlers
 from core.security import resolve_secret_key, secret_key_is_ephemeral
@@ -263,6 +265,30 @@ def _load_scope_options() -> list[dict]:
     except Exception:
         # 首页不能因为 Scope 读取失败就 500；下拉框为空并给出提示即可。
         return []
+
+
+@app.route("/assets", methods=["GET"])
+def assets_page():
+    """资产列表页（P1，方案第 8 / 10 节）。
+
+    页面只负责渲染骨架与筛选下拉框，数据由 ``web/static/assets.js``
+    调 ``GET /api/assets`` 拉取 —— 与任务列表页同样走「服务端出骨架、
+    前端同源取数」的路子，不引入任何前端框架。
+
+    认证策略与任务列表一致：
+
+    * 页面本身**不强制登录**（否则匿名用户连导航都点不进来）；
+    * 但资产内容与筛选下拉框里的 Scope 名称只在已登录时下发，
+      未登录时页面只显示提示，接口返回 401。
+    """
+    is_authenticated = local_auth.is_authenticated()
+    return render_template(
+        "assets.html",
+        is_authenticated=is_authenticated,
+        scopes=_load_scope_options() if is_authenticated else [],
+        asset_types=ASSET_TYPES,
+        asset_statuses=assets_store.STATUSES,
+    )
 
 
 @app.route("/login", methods=["GET", "POST"])

@@ -129,6 +129,10 @@ EVENT_JOB_INTERRUPTED = "job.interrupted"
 EVENT_STEP_STARTED = "step.started"
 EVENT_STEP_FINISHED = "step.finished"
 
+#: P1（方案第 8 节）：某一步的结构化观测已落进 assets / observations。
+#: 记这条事件是为了让「资产页为什么少了几条」可以在任务详情里直接看到原因。
+EVENT_ASSETS_INGESTED = "step.assets_ingested"
+
 #: worker 默认租约时长（秒）。超过这个时间没续租，视为 worker 已死。
 DEFAULT_LEASE_SECONDS = 60
 

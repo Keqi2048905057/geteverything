@@ -14,6 +14,7 @@
     </div>
     <div class="topbar-right">
       <span id="health-badge" class="badge badge-unknown" title="正在检测 /health">健康检查中…</span>
+      <a class="btn btn-ghost" href="{{ url_for('assets_page') }}">资产</a>
       {% if is_authenticated %}
         <span class="badge badge-ok">已登录</span>
         <button type="button" id="logout-btn" class="btn btn-ghost">退出</button>

@@ -133,6 +133,62 @@ def test_execute_writes_progress_events(scope_id):
     assert [event["detail"]["progress"] for event in progress_events] == [50, 100]
 
 
+def test_execute_ingests_assets_from_steps(scope_id):
+    """P1（方案第 8 节）：任务跑完，资产与观测必须已落库。
+
+    mock 的 subfinder 结果形如 ``www.a.example.test``，经
+    ``ingest_step_observations`` 应落成 ``subdomain`` 资产；
+    同一资产在两个目标里重复出现时只留一行资产、两行观测。
+    """
+    from core import assets as assets_store
+
+    job = _make_job(scope_id, targets=["a.example.test", "b.example.test"], tools=["subfinder"])
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+    execute_job(job["id"])
+
+    found = assets_store.list_assets(scope_id=scope_id, limit=100)
+    assert found, "任务跑完却没有落任何资产"
+    assert all(item["type"] == "subdomain" for item in found)
+    # 每个资产都指向产生它的任务 —— 「能知道是谁发现的」。
+    for asset in found:
+        observations = assets_store.list_observations(asset_id=asset["id"])
+        assert observations
+        assert all(item["job_id"] == job["id"] for item in observations)
+        assert all(item["source_tool"] == "subfinder" for item in observations)
+
+
+def test_execute_records_assets_ingested_event(scope_id):
+    """落观测的结果要留事件，否则「资产页少了几条」无法在任务详情里排查。"""
+    job = _make_job(scope_id, targets=["c.example.test"], tools=["subfinder"])
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+    execute_job(job["id"])
+
+    ingest_events = [
+        event
+        for event in jobs_store.list_events(job["id"])
+        if event["event_type"] == jobs_store.EVENT_ASSETS_INGESTED
+    ]
+    assert ingest_events
+    assert ingest_events[0]["detail"]["written"] > 0
+
+
+def test_ingest_failure_does_not_fail_the_job(scope_id, monkeypatch):
+    """落观测失败时任务仍必须是 succeeded —— 观测是派生产物。"""
+    from core import assets as assets_store
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("模拟落观测失败")
+
+    monkeypatch.setattr(assets_store, "record_observations", _boom)
+
+    job = _make_job(scope_id, targets=["d.example.test"], tools=["subfinder"])
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+    result = execute_job(job["id"])
+
+    assert result["status"] == jobs_store.STATUS_SUCCEEDED
+    assert jobs_store.list_steps(job["id"])[0]["status"] == jobs_store.STEP_SUCCEEDED
+
+
 def test_execute_calls_renew_between_steps(scope_id):
     job = _make_job(scope_id, targets=["a.example.test", "b.example.test"])
     jobs_store.claim_next_job("w1", lease_seconds=300)
