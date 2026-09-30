@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · M5 剩余项待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M5 剩余项待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → M5 剩余 ⬜ → M6 🔄**
-- 更新日期：2026-10-02（M5 字典路径可移植性 + 缺失即显式失败轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M5 剩余 ⬜ → M6 🔄**
+- 更新日期：2026-10-02（P0-7 幂等键与重试退避 + §16 Windows CI 轮）
 
 ---
 
@@ -123,6 +123,23 @@
 - `web/static/app.css`：可点条目的虚线下划线与 hover 配色
 - 测试：+2 → **707 passed / 2 skipped**（服务端 `asset_id` 可用 + 前端确实接线）
 
+**P0-7 幂等键与重试退避（本轮，方案第 7 节 + §16）**
+- `core/db.py`：`jobs` 表**纯增量补列** `idempotency_key` / `next_attempt_at`（可空，
+  `ALTER TABLE ... ADD COLUMN`，既有行语义不变）；两个非唯一索引
+  `idx_jobs_idempotency` / `idx_jobs_next_attempt`（必须排在 `_migrate_columns()` 之后，
+  否则旧库升级 `no such column`）。授权见 `docs/DECISIONS.md` §3.1（用户弹窗逐项勾选）
+- `core/jobs.py`：`create_job_with_status()` 幂等（同键的 `queued`/`running` 任务复用，
+  返回同一个 `job_id` + `reused=True`，不重复插入/展开步骤/写事件；查重与插入同一
+  `BEGIN IMMEDIATE` 事务）；`retry_job()` 写退避窗口；`claim_next_job()` 加退避门槛
+  并在领走时清空窗口；新增 `normalize_idempotency_key()` / `retry_backoff_seconds()`
+- `api/jobs.py`：`POST /api/jobs` 接受可选 `idempotency_key`（非法值 400）+ 回 `reused`；
+  `retry` 回 `next_attempt_at`；幂等命中仍写审计（`detail.reused=true`）
+- `web/static/app.js`：详情页新增「最早可重试」；`jobSignature()` 纳入 `attempt` /
+  `next_attempt_at`（否则 retry 后页面不刷新）
+- `.github/workflows/ci.yml`（§16）：`lint-and-test` 改 `matrix.os: [ubuntu-latest, windows-latest]`
+  + `fail-fast: false`，两平台都跑 `ruff` + `pytest`，`mypy` 只在 ubuntu 跑
+- 测试：+24 → **739 passed / 2 skipped**（含旧库缺列的增量迁移用例）
+
 **流程与沉淀**
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
 - 给 Codex 的独立核查文档在桌面：`geteverything_项目汇总_给Codex检查.md`
@@ -169,7 +186,7 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（707 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（738 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [ ] SQLite 并发测试
 - [ ] 本地 fixture HTTP 测试
@@ -185,7 +202,8 @@
 - [ ] 单并发 worker：`SCAN_LIMITS["max_concurrency"] = 2` 是未使用的配置项
 - [x] `storage.py`（旧库）`with conn` 只提交不关闭（已修：`_connect()` 显式关闭 + `busy_timeout`）
 - [ ] 旧库仍无 WAL（只加了连接级 `busy_timeout`；WAL 属迁移范畴，未动）
-- [ ] `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 DECISIONS §3 待授权）
+- [x] `jobs` 表 `idempotency_key` / `backoff`（已按 DECISIONS §3.1 用户弹窗授权落地：
+  纯增量补列 + `retry_job()` 退避 + `claim_next_job()` 退避门槛）
 - [ ] `/api/assets` 只有 `limit` / `offset`，没有游标分页（与 `/api/jobs` 同款问题）
 
 ---
@@ -206,7 +224,7 @@
 | 7 | ~~`python -m pytest` 有 2 条 warning~~ **本轮已清零** | — | 见下节「已修的两条 warning」 |
 | 8 | `agent/client.py`、`agent/providers/*` 无任何调用方 | `agent/` | 「LLM 规划」实际由正则 + 模板决定，**不调用大模型**；「模型超时/返回格式错」类症状在当前路径不可达 |
 | 9 | Agent 仍可绕过 Job/Policy 直接调 `run_tools` / `HttpxRunner.run_scan` | `agent/action.py` | Agent 层已禁止任意 `file_path`（只能 `upload_id`），但**尚未改走 Job Service**；属 P0-6 未完成项 |
-| 10 | `jobs` 表无 `idempotency_key`、无 `backoff` | `core/db.py:init_schema` | 需新增列 = 改表结构；已登记 `docs/DECISIONS.md` §3 待授权。`MAX_ATTEMPTS` 与显式状态跃迁表本轮已补 |
+| 10 | ~~`jobs` 表无 `idempotency_key`、无 `backoff`~~ **本轮已补** | `core/jobs.py` | 已按 DECISIONS §3.1 授权**纯增量补列**：幂等键（同键未终结任务复用）+ 退避窗口（`next_attempt_at`）；`MAX_ATTEMPTS` 与显式状态跃迁表此前已补 |
 
 ### 已修的两条 warning（原 Known Failure #7 / DECISIONS-I）
 
@@ -288,17 +306,17 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（M5 字典可移植性轮）
+验证时间：2026-10-02（P0-7 幂等键与重试退避 + §16 Windows CI 轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 715 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+pytest: 739 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
 mypy:   Success: no issues found in 59 source files        ← M7 验收命令，仍为 0
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → **M5 字典可移植 `715`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → **P0-7 幂等/退避 `739`**
 
 ---
 
@@ -365,7 +383,7 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 715 passed, 2 skipped
+python -m pytest                                      # 期望 739 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
 ```
 

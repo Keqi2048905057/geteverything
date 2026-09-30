@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点）+ M5 字典可移植性（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -726,8 +726,18 @@ queued ──claim──> running ──┬──> succeeded   （全部步骤�
   保证同一个 job 只会被一个 worker 领到（`core/jobs.py`）；
 * **租约**：领取时写 `worker_id` + `lease_until`；执行中每个步骤结束续租。
   worker 被 kill → 租约过期 → 新 worker 启动时 `recover_stale_jobs()` 标为 `interrupted`（不会静默消失）。
-* **仍未实现**：`idempotency_key` 与 `backoff`（都需要给 `jobs` 新增列 = 改表结构，
-  已登记 `docs/DECISIONS.md` §3 待授权）。`cancel_requested` 与 `heartbeat` 已有。
+* **幂等键（P0-7a 新增）**：`create_job_with_status(..., idempotency_key=...)` 在同键的
+  **未终结**任务（`queued` / `running`）存在时直接复用那一个，返回 `(job, reused=True)`：
+  不重复插入、不重复展开步骤、不重复写 `job_created` 事件。「查重 + 插入」同在
+  `BEGIN IMMEDIATE` 事务内，并发重复提交不会各插一条。键由 `normalize_idempotency_key()`
+  规范化（空/空白 → 无键；非字符串或 > 200 字符 → `ValueError` → API 400）。
+  **键不是「永久只跑一次」**：任务落终态后键自动释放，否则「重试失败任务」会被永久挡住。
+* **重试退避（P0-7b 新增）**：`retry_job()` 写 `next_attempt_at = now + retry_backoff_seconds(attempt)`，
+  第 1 次不退避，之后 5 / 10 / 20 / 40… 封顶 300 秒；`claim_next_job()` 的领取条件加
+  `next_attempt_at IS NULL OR next_attempt_at <= now`，**领走时清空窗口**（窗口只用来推迟领取，
+  不是任务的长期属性）。退避中的任务仍是 `queued`（`/health` 的排队计数含它），
+  与「任务丢了」可区分 —— 排查「排队中却不执行」先看这里。
+* `cancel_requested` 与 `heartbeat` 已有。
 
 ### 9.5 三个执行入口的差别（**排查「任务没跑」先看这里**）
 
@@ -768,18 +778,18 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 | 敏感产物仍在 Git 索引 | **已解决**：自有仓库 `geteverything` 只保留一份干净历史，`results/`、`uploads/`、`SecLists/`、`scripts/*.exe` 均未入库 | — |
 | Scope 判定位置 | **P0-2 已统一**到 `core/policy.py`（见 §9.11） | — |
 | Agent 的执行边界 | **P0-3 部分**：已禁止任意 `file_path`，但仍直接调 `run_tools` / runner，未改走 Job Service | P0-6，需授权 |
-| `jobs` 表幂等与退避 | 无 `idempotency_key` / 无 `backoff`（需 ADD COLUMN = 改表结构） | 已登记 `docs/DECISIONS.md` §3 待授权 |
+| `jobs` 表幂等与退避 | **已解决（P0-7）**：`idempotency_key` / `next_attempt_at` 两列纯增量补列（`ALTER TABLE ... ADD COLUMN`，可空，既有行语义不变）+ 两个非唯一索引 | 授权见 `docs/DECISIONS.md` §3.1 |
 
 ### 9.8 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 715 passed, 2 skipped, 0 failures
+$ python -m pytest           # 739 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → **M5 字典可移植性 `715`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → **P0-7 幂等键/退避 + §16 Windows CI `739`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -792,7 +802,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/unit/test_smoke.py`、`test_repo_layout.py` | 导入与仓库布局（M0） |
 | `tests/unit/test_scope.py` | Scope 匹配语义与全放行拒绝（M1） |
 | `tests/unit/test_security_baseline.py` | SECRET_KEY 弱值、受控上传、`.env` 原子写（M2） |
-| `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry、**跃迁表 + max attempts**（M3 / P0-7）、**`get_job_or_raise` 与 `get_job` 的可空性差异**（M7） |
+| `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry、**跃迁表 + max attempts**（M3 / P0-7）、**幂等键（复用/释放/规范化/不重复写事件）与退避窗口（写窗口、挡领取、清窗口、封顶）**（P0-7）、**旧库纯增量补列的迁移用例**、**`get_job_or_raise` 与 `get_job` 的可空性差异**（M7） |
 | `tests/unit/test_jobs_executor.py` | mock/real 分流、进度、取消边界、**真实子进程 kill/重启**、**执行期 Scope 复检**（M3 / P0-2） |
 | `tests/unit/test_runner_result.py` | 命令预览脱敏、`RunnerResult` 组装、artifact 落盘/读取（M4） |
 | `tests/unit/test_runner_interface.py` | **真实子进程**：成功/零结果/未安装/非零/127/超时/SystemExit/残留文件清理（M4）；**基类未实现 `run_scan` 必须报失败**、**子类 `_write_input_file` 保留 `suffix`**（M7） |
@@ -999,8 +1009,11 @@ core/runner_result.py
 测试：`tests/unit/test_jobs_store.py` 的 `test_can_transition`（16 组参数化）
 与 `test_finish_job_rejects_*` / `test_retry_respects_max_attempts`。
 
-**未做的部分**：`idempotency_key`、`backoff` 需要给 `jobs` 加列（改表结构），
-已登记 `docs/DECISIONS.md` §3 等授权。`cancel_requested` 与 `heartbeat` 原本就有。
+**P0-7 补齐的部分**：`idempotency_key`（同键未终结任务复用，`create_job_with_status`）
+与 `next_attempt_at`（重试退避窗口，`retry_job` 写入 / `claim_next_job` 作为领取门槛）。
+两列都由 `core/db.py` 的 `_COLUMN_MIGRATIONS` 纯增量补列，授权见 `docs/DECISIONS.md` §3.1。
+`MAX_ATTEMPTS = 5` + 退避 = 方案第 7 节要求的「retry 必须有上限和退避」两件都齐了。
+`cancel_requested` 与 `heartbeat` 原本就有。
 
 #### 9.11.5 旧结果库连接生命周期（DECISIONS-I）
 
@@ -1374,6 +1387,95 @@ $ python -m pytest -q                                      # 705 passed, 2 skipp
 
 ```text
 $ python -m pytest -q -p no:warnings   # 715 passed, 2 skipped, 0 failures, 0 errors
+$ python -m ruff check .               # All checks passed!
+$ python -m mypy app.py core api jobs storage.py modules  # Success: no issues found in 59 source files
+$ node --check web/static/app.js       # 通过
+$ git diff --check                     # 退出码 0
+```
+
+### 9.15 P0-7：任务幂等键与重试退避（方案第 7 节）+ §16 Windows CI
+
+授权：`docs/DECISIONS.md` §3.1（用户在弹窗中逐项勾选），口径与 DECISIONS-E 同规格 ——
+**只 `ADD COLUMN`，不动既有列、不删既有数据**。
+
+#### 9.15.1 表结构：两列纯增量 + 两个非唯一索引
+
+| 列 | 语义 | 可空 |
+|---|---|---|
+| `jobs.idempotency_key` | 调用方提供的幂等键；同一键只允许存在一个**未终结**任务 | ✅（NULL = 没传键） |
+| `jobs.next_attempt_at` | 重试退避的「最早可领取时间」 | ✅（NULL = 立即可领） |
+
+两处都要写：`core/db.py` 的 `CREATE TABLE`（新库）**和** `_COLUMN_MIGRATIONS`（旧库
+`ALTER TABLE ... ADD COLUMN`），否则「新库有列、旧库没有」这种状态会一直存在。
+
+两个坑（都在 `core/db.py`）：
+
+1. **索引语句必须排在 `_migrate_columns()` 之后**。旧库升级时列是刚 ALTER 出来的，
+   顺序反了就是 `no such column: idempotency_key` —— 升级路径必须只有
+   「纯增量、不会失败」的 DDL。
+2. **刻意不用 `UNIQUE`**。唯一性由 `core/jobs.create_job_with_status()` 在
+   `BEGIN IMMEDIATE` 事务里保证（「查重 + 插入」同事务，写者之间本就串行）；
+   部分唯一索引收益很小，却会给旧库引入一个「历史脏数据导致建索引失败」的风险面。
+
+#### 9.15.2 幂等语义（`create_job_with_status`）
+
+* 命中条件 = 同键 **且** `status IN (queued, running)`。任务落终态后键**自动释放** ——
+  否则「重试一个失败任务」会被幂等键永久挡住，键就从「防重复提交」变成了
+  「永久只跑一次」，语义过强。
+* 命中时**不插入、不展开步骤、不写 `job_created` 事件**，直接返回那个 job
+  （`reused=True`）。步骤快照重复展开会让 `done_steps / total_steps` 的分母算错。
+* `normalize_idempotency_key()`：空串 / 纯空白 / `None` → `None`（视为没传键）；
+  非字符串或 > `MAX_IDEMPOTENCY_KEY_LENGTH`（200）→ `ValueError` → API 400。
+  **不做静默截断**：超长键多半是调用方把整份请求体塞进来了，属于用法错误。
+* `create_job()` 保留原签名（`-> dict`），内部委托给 `create_job_with_status()`，
+  既有调用方与测试无需改动。
+
+#### 9.15.3 退避语义（`retry_job` + `claim_next_job`）
+
+* `retry_backoff_seconds(attempt)`：第 1 次（首次执行）0 秒，之后
+  `min(5 * 2 ** (attempt - 2), 300)` → 5 / 10 / 20 / 40… 封顶 300 秒。
+* `retry_job()`：任务**立刻**变成 `queued`（界面能马上看到），同时写
+  `next_attempt_at`；退避秒数一并记进 `job_retry_requested` 事件，事后可解释。
+* `claim_next_job()`：领取条件加 `next_attempt_at IS NULL OR next_attempt_at <= now`；
+  **领走时把窗口清空** —— 窗口只用来「推迟领取」，不是任务的长期属性，
+  留着会让事后的任务详情误导成「它还在退避」。
+* 退避中的任务仍是 `queued`：`/health` 的排队计数**含**它，但 worker 领不到。
+  排查「状态是排队中却迟迟不执行」时，先看 `next_attempt_at`。
+* 一个任务在退避不会阻塞后面的任务（领取条件是逐行的，没有队头阻塞）。
+
+#### 9.15.4 API 与前端
+
+| 位置 | 变化 |
+|---|---|
+| `POST /api/jobs` | 接受可选 `idempotency_key`（非法值 400）；响应新增 `reused`（不传键时为 `false`，形状稳定） |
+| `POST /api/jobs/<id>/retry` | 响应新增 `next_attempt_at` |
+| 审计 | 幂等命中仍写一条 `job_created`（`detail.reused = true`）—— 否则「少了一个任务」事后无从解释 |
+| `web/static/app.js` | 详情面板新增「最早可重试」一行；`jobSignature()` 纳入 `attempt` / `next_attempt_at`，否则 retry 后轮询拿到的变化不会触发重绘 |
+
+#### 9.15.5 §16 CI 的 Windows runner
+
+`lint-and-test` 改为 `matrix.os: [ubuntu-latest, windows-latest]` +
+`fail-fast: false`，两个平台都跑 `ruff check .` 与 `pytest -q`；`mypy` 步骤加
+`if: matrix.os == 'ubuntu-latest'`（类型检查结果与平台无关，Windows 再跑一遍
+只是把 CI 时间翻倍）。**不涉及任何密钥，不改仓库 Settings。**
+
+`fail-fast: false` 不是可选项：本项目的 `modules/base.py` 就踩过
+「POSIX 下杀进程树会连调用方一起 SIGKILL」的**平台专有缺陷**
+（见 §9.10），一个平台挂掉连带取消另一个，会让「Windows 特有缺陷」被
+「Linux 失败」掩盖成一次笼统的 job 失败。
+
+#### 9.15.6 回归测试（新增 24 例，715 → 739）
+
+| 文件 | 钉住的行为 |
+|---|---|
+| `tests/unit/test_jobs_store.py` | 幂等：复用同一 `job_id`、步骤不重复展开、`running` 期间键仍生效、终态释放键、不同键互不影响、空白键等于无键、非字符串/超长被拒、幂等命中不重复写事件；退避：窗口在将来、窗口内领不到但仍在排队计数、窗口推旧即可领、退避任务不阻塞后续任务、退避函数指数增长并封顶、领走清窗口、新任务无窗口；迁移：手工造「P0-7 之前」的 `jobs` 表，`init_schema` 后两列补齐且既有行原样保留 |
+| `tests/integration/test_m3_jobs_api.py` | 同键只产生一个任务并回 `reused=true`、不传键时 `reused=false`、非字符串/超长键 400、幂等命中可在审计里追溯 |
+| `tests/unit/test_assets.py` | `test_new_tables_do_not_touch_legacy_schema` 原先断言 `"idempotency_key" not in job_columns`（写于 P0-7 授权之前），改为断言「两列存在且可空 + 既有列 `attempt` 一个都不能少」 |
+
+验证（本轮实测）：
+
+```text
+$ python -m pytest -q -p no:warnings   # 739 passed, 2 skipped, 0 failures, 0 errors
 $ python -m ruff check .               # All checks passed!
 $ python -m mypy app.py core api jobs storage.py modules  # Success: no issues found in 59 source files
 $ node --check web/static/app.js       # 通过

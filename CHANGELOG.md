@@ -324,11 +324,67 @@ feroxbuster/dirsearch 把不存在的路径原样当 `-w` 塞进子进程，
 范围说明：**没有下载或分发任何字典**，`SecLists/` 仍然缺失 —— 修的是「路径怎么解析、
 缺失怎么报」，不是「字典从哪来」。也不涉及表结构、鉴权、Scope/Policy。
 
+### P0-7 — 任务幂等键与重试退避（本轮，方案第 7 节）
+
+来源：`GetEverything_DSH执行方案_Flask版.md` 第 7 节「必须增加/确认：idempotency key /
+retry count / max attempts / backoff」——其中 `max attempts` 已在 M3 落地，
+本轮补齐**幂等键**与**退避**两项，以及 §16 的 Windows CI。
+
+授权：`docs/DECISIONS.md` §3.1 —— 用户在弹窗中逐项勾选授权，口径与 E 项同规格
+（**只 `ADD COLUMN`，不动既有列、不删既有数据**）。
+
+变更：
+
+- `core/db.py`：`jobs` 表新增 `idempotency_key TEXT` 与 `next_attempt_at TEXT`
+  （同时写进 `CREATE TABLE` 与 `_COLUMN_MIGRATIONS`，旧库靠
+  `ALTER TABLE ... ADD COLUMN` 升上来）。新增两个**非唯一**索引
+  `idx_jobs_idempotency` / `idx_jobs_next_attempt`；它们必须排在
+  `_migrate_columns()` **之后**，否则旧库升级时会 `no such column`。
+  刻意不用 `UNIQUE`：唯一性由 `BEGIN IMMEDIATE` 事务内的「查重 + 插入」保证，
+  避免给旧库升级引入「历史脏数据导致建索引失败」的风险面。
+- `core/jobs.py`：
+  - `create_job_with_status()`：同键的**未终结**（`queued` / `running`）任务直接复用，
+    返回 `(job, reused=True)`，不重复插入、不重复展开步骤、不重复写 `job_created` 事件；
+    「查重 + 插入」同一事务，并发重复提交不会各插一条。`create_job()` 仍是原签名。
+  - `normalize_idempotency_key()`：空串 / 纯空白 / `None` → `None`（视为没传键），
+    非字符串或超过 200 字符 → `ValueError`。
+  - `retry_job()`：写 `next_attempt_at = now + retry_backoff_seconds(attempt)`；
+    第 1 次不退避，之后 5 / 10 / 20 / 40… 秒，封顶 300 秒。
+  - `claim_next_job()`：领取条件加 `next_attempt_at IS NULL OR <= now`，
+    领走时清空窗口（窗口只用来「推迟领取」，不是任务的长期属性）。
+  - `_job_to_dict()`：两列按列名存在性读取，旧库缺列时退化为 `None`。
+- `api/jobs.py`：`POST /api/jobs` 接受可选 `idempotency_key`（非法值 400），
+  响应新增 `reused`；`POST /api/jobs/<id>/retry` 响应新增 `next_attempt_at`。
+  幂等命中仍写一条审计（`detail.reused = true`），否则「少了一个任务」事后无从解释。
+- `web/static/app.js`：任务详情新增「最早可重试」一行；`jobSignature()` 纳入
+  `attempt` 与 `next_attempt_at`（否则 retry 后详情页看不到变化）。
+- `.github/workflows/ci.yml`（§16）：`lint-and-test` 改用
+  `matrix.os: [ubuntu-latest, windows-latest]` 且 `fail-fast: false`；
+  两个平台都跑 `ruff check .` + `pytest -q`，`mypy` 步骤只在 ubuntu 上跑。
+  **未涉及任何密钥，未改仓库 Settings。**
+
+新增测试（+24，715 → 739）：
+
+- 幂等：同键复用同一个 `job_id`、步骤不重复展开、键在 `running` 期间仍生效、
+  任务落终态后键释放、不同键互不影响、空/空白键等于没传键、非字符串与超长被拒、
+  幂等命中不重复写 `job_created` 事件。
+- 退避：retry 后 `next_attempt_at` 在将来、窗口内领不到（但仍在 `queued` 计数里）、
+  窗口推旧后立刻能领、退避中的任务不阻塞后面的任务、退避函数指数增长并封顶、
+  领走时清空窗口、新任务 `next_attempt_at` 为空即可领。
+- 迁移：`test_idempotency_and_backoff_columns_are_additive_on_legacy_db`
+  手工造一个「P0-7 之前」的 `jobs` 表，`init_schema` 后两列补齐且既有行原样保留。
+- API：`reused` 字段、同键只产生一个任务、非字符串/超长键 400、幂等命中可审计。
+
+顺带修正被掩盖的断言：`tests/unit/test_assets.py` 的
+`test_new_tables_do_not_touch_legacy_schema` 原先断言
+`"idempotency_key" not in job_columns` —— 该断言写于 P0-7 授权之前，
+本轮改为断言「两列存在且可空」，并保留「既有列 `attempt` 一个都不能少」。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 715 passed, 2 skipped, 0 failures
+$ python -m pytest           # 739 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 ```
 
@@ -342,7 +398,8 @@ $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues 
 - `config.py:FEROXBUSTER_CONFIG` 的 `wordlist` 已是仓库相对路径（M5 修）；但仓库**不分发**
   `SecLists/`，所以默认字典在本机仍不存在 —— 此时任务会以 `config_error` 明确失败，
   而不是静默零结果。要真跑目录爆破需自行下载字典或用 `FEROXBUSTER_WORDLIST` 指向本机字典。
-- `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 `docs/DECISIONS.md` §3 待授权）。
+- `jobs` 表已有 `idempotency_key` / `next_attempt_at`（P0-7 落地，见上）；
+  但**没有清理策略**：幂等键会随任务长期留在库里，暂不做过期回收。
 - Agent 尚未改走 Job Service（P0-6 未完成部分）。
 - **P1 遗留**：旧的 `/api/run` 同步扫描链路**不产生** `assets` 观测（只有 Job 链会），
   两套模型尚未合流（方案第 11 节，改的是调用链，属架构级改动，已登记 `docs/DECISIONS.md` §3）；

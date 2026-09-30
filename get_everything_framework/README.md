@@ -158,15 +158,23 @@ curl http://127.0.0.1:5000/api/tools
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
-| POST | `/api/jobs` | 需登录 | 创建任务（必填 `scope_id`，目标须在 Scope 内） |
+| POST | `/api/jobs` | 需登录 | 创建任务（必填 `scope_id`，目标须在 Scope 内；可选 `idempotency_key`） |
 | GET | `/api/jobs` | 需登录 | 任务列表 |
 | GET | `/api/jobs/<job_id>` | 需登录 | 任务详情（含进度与错误码） |
 | POST | `/api/jobs/<job_id>/cancel` | 需登录 | 请求取消 |
-| POST | `/api/jobs/<job_id>/retry` | 需登录 | 重试（interrupted / failed） |
+| POST | `/api/jobs/<job_id>/retry` | 需登录 | 重试（interrupted / failed）；返回 `next_attempt_at`（退避窗口） |
 | GET | `/api/jobs/<job_id>/steps` | 需登录 | 步骤与结构化观测 |
 | GET | `/api/jobs/<job_id>/events` | 需登录 | 任务事件流 |
 | GET | `/api/jobs/<job_id>/artifacts` | 需登录 | 原始证据登记（不含服务器路径） |
 | GET | `/api/artifacts/<artifact_id>` | 需登录 | 读取**截断 + 脱敏**后的证据文本 |
+
+> **幂等（P0-7a）**：带 `idempotency_key` 重复 `POST /api/jobs` 时，只要上一个同键任务
+> **还没终结**（`queued` / `running`），就返回**同一个** `job_id` 且响应里 `reused=true`。
+> 键的语义是「防重复提交」，**不是「永久只跑一次」**——任务落到终态后同一个键可以再次创建。
+>
+> **重试退避（P0-7b）**：`retry` 后任务立刻回到 `queued`，但要等 `next_attempt_at`
+> 之后 worker 才会领它（5 / 10 / 20 / 40… 秒，封顶 300 秒）。所以「排队中却迟迟不执行」
+> 通常是退避窗口未到，任务详情页会显示「最早可重试」。
 
 ### 结果查询与导出
 

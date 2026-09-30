@@ -61,7 +61,6 @@
 - `[本轮] P0-7b — 重试退避（backoff）需要 next_attempt_at 列 + worker 领取条件改动 — 同上：改表结构 + 改认领 SQL 语义 — 建议：与 P0-7a 合并预授权后再做；当前已实现 max attempts（5 次）作为兜底。`
 - `[本轮] P1 §11 — 统一旧执行链（Legacy API → Adapter → Job Service → New Runner）—— 现状是 api/scan.py 同步扫描与 Job 链并存，两套模型不产同一份资产 — 合流要改的是「调用链拓扑」，不是单点实现，按第 4 节属大型重构 — 建议：单开一项预授权，并明确「旧同步接口保留、只是内部改走 Job Service」这一验收口径。`
 - `[本轮] P1 §13 — SQLAlchemy + Alembic 替换手写 SQL + 迁移 —— 引入新依赖并重写整个数据访问层，风险等级与第 4 节的「SQLite → PostgreSQL」同类 — 建议：本机联调版明确不做；若要做请单独排期并接受迁移期双写。`
-- `[本轮] P1 §16 — CI 增加 Windows runner（当前只有 ubuntu-latest）—— 涉及仓库 Settings 与 CI 配额，且会延长每次 PR 的等待时间 — 建议：先只在 workflow 里加 windows-latest 的 ruff+pytest，不涉及密钥。`
 - `[本轮] P0-6 — Agent 改走 Job Service（不再直接调 run_tools / HttpxRunner.run_scan）—— 改的是「调用链拓扑」，按第 4 节属大型重构 — 建议：单开一项预授权，验收口径为「Agent 只产出计划，执行一律经 Job/Policy 链」，并保留 Agent 层现有的 upload_id 白名单。`
 
 ### 3.1 用户本轮（2026-10-02，弹窗确认）已授权的项
@@ -78,6 +77,30 @@
 | **推送** | ❌ **不 push**：本轮结束时本地提交即可，等用户回来确认。 | 用户弹窗选项「不 push（推荐）」 |
 | **未跟踪文件** | ✅ 仅 `docs/DECISIONS.md` 纳入 Git；`.dsh/skills/geteverythingskill/` 与两份 `GetEverything_*_Flask版.md` 方案文档**继续不跟踪**。 | 用户弹窗多选结果 |
 | **P0-6** | ❌ **本轮未授权**（用户未勾选），继续留在第 3 节。 | 同上 |
+
+> **本轮已完成（P0-7a / P0-7b，按上表 3.1 口径）**：
+> `core/db.py` 对 `jobs` 表**纯增量补列** `idempotency_key` / `next_attempt_at`
+> （写进 `CREATE TABLE` 与 `_COLUMN_MIGRATIONS`，`ALTER TABLE ... ADD COLUMN`，
+> 两列可空、既有行语义不变），并补了两个**非唯一**索引
+> `idx_jobs_idempotency` / `idx_jobs_next_attempt`（刻意不用 UNIQUE：唯一性由
+> `BEGIN IMMEDIATE` 事务内的「查重 + 插入」保证，避免给旧库升级引入
+> 「历史脏数据导致建索引失败」的风险面；索引语句放在 `_migrate_columns` **之后**，
+> 否则旧库升级会 `no such column`）。
+> `core/jobs.py`：`create_job_with_status()` 幂等（同键的未终结任务返回同一个
+> `job_id`，`reused=True`；键只挡 `queued`/`running`，任务落终态后键自动释放）、
+> `retry_job()` 写 `next_attempt_at` 退避窗口、`claim_next_job()` 增加退避门槛
+> 并在领走时清空窗口；新增 `normalize_idempotency_key()` 与
+> `retry_backoff_seconds()`。`api/jobs.py` 接受可选 `idempotency_key`
+> 并回 `reused`。
+> **未动**：既有列、既有数据、Scope/Policy 判定、认证授权、状态机跃迁表。
+> **可回滚**：`ALTER TABLE jobs DROP COLUMN` 在 SQLite 3.35+ 可用，
+> 或直接忽略这两列（全为 NULL 即等价于改造前）。
+
+> **本轮已完成（P1 §16，按上表 3.1 口径）**：`.github/workflows/ci.yml` 的
+> `lint-and-test` 改为 `matrix.os: [ubuntu-latest, windows-latest]`
+> （`fail-fast: false`），两个平台都跑 `ruff check .` + `pytest -q`；
+> `mypy` 步骤只在 ubuntu 上跑（Windows 上的 mypy 结果与 Linux 一致，
+> 没必要让 CI 时间翻倍）。**未涉及任何密钥、未改仓库 Settings**。
 
 > **本轮已完成（DECISIONS-F，「限脚本」范围内）**：`core/migrate.py` +
 > `scripts/migrate_legacy_results.py` + `tests/unit/test_migrate_legacy.py`。
