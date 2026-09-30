@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零）（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点）（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -774,12 +774,12 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 705 passed, 2 skipped, 0 failures
+$ python -m pytest           # 707 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → **M7 类型收口 `705`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → **M7 类型收口 + Diff 可点 `707`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -812,7 +812,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/integration/test_m4_runner_result.py` | RunnerResult 端到端：零结果 vs 失败、artifact 不下发路径（M4） |
 | `tests/integration/test_export_contract.py` | **P0-5**：导出响应无 `path`、可下载、未知/已清理 id → 404、`safe_prefix` 穿越表、前缀逃不出导出目录 |
 | `tests/integration/test_api_auth_contract.py` | **P0-1/D**：锁定「哪些只读接口匿名、哪些必须 401」的当前契约 + 响应体不夹带服务器路径 |
-| `tests/integration/test_assets_api.py` | **P1**：资产接口全部 401（未登录）、「任务跑完 → 资产可查」端到端链路、`summary` 未被 `<asset_id>` 吃掉、`/api/observations` 拒绝无条件全表扫描、Diff 端点 404 与 `include_unchanged`、资产页骨架与匿名时不下发 Scope 名、响应无服务器路径 |
+| `tests/integration/test_assets_api.py` | **P1**：资产接口全部 401（未登录）、「任务跑完 → 资产可查」端到端链路、`summary` 未被 `<asset_id>` 吃掉、`/api/observations` 拒绝无条件全表扫描、Diff 端点 404 与 `include_unchanged`、**diff 条目必带可用的 `asset_id`**、资产页骨架与匿名时不下发 Scope 名、**静态脚本已把 diff 条目接成点击**、响应无服务器路径 |
 
 ### 9.9 第 6 节 BUG 索引表的**现状修正**
 
@@ -1183,6 +1183,13 @@ include_unchanged=False   → unchanged=[] + counts.unchanged = 真实数量  �
 > 「（按设置未取明细，共 N 条）」而不是「无」—— 否则用户会把
 > 「没要明细」读成「两次完全一致」。
 
+**Diff 条目可点进资产详情**：每条明细都带 `asset_id`，脚本据此给条目加上
+`diff-item-clickable` 并绑定点击 → 复用列表页的 `openDetail()`（详情面板在页面另一头，
+打开后会 `scrollIntoView`，否则点了像没反应）。`asset_id` 为空时不加标记，保持死文本。
+这一层由两个断言夹住：服务端侧 `test_diff_items_always_carry_asset_id`
+（且详情接口真认这个 id），前端侧 `test_assets_js_wires_diff_items_to_asset_detail`
+（静态脚本无构建链，漏接线没有别的方式能发现）。
+
 #### 9.12.6 旧库 → 新库的迁移（`core/migrate.py` + `scripts/migrate_legacy_results.py`）
 
 方案第 12 节「数据库收口」落到可执行层。口径先钉死（方案原文）：
@@ -1239,7 +1246,7 @@ python scripts/migrate_legacy_results.py --apply       # 真正写入
 | §17 mypy | ✅ **0 errors**（M7 已完成，见 §9.13） |
 | §18 真实本地 E2E | ⬜ 未做（硬约束：不打真实外部目标） |
 | `assets.status` 自动转 `stale` | ⚠️ 函数已就绪（`mark_stale_assets`），**但还没有任何计划任务/接口调它** |
-| Diff 条目可点进资产详情 | ⬜ 未做：清单已渲染 `data-asset-id`，但还没接点击跳转 |
+| Diff 条目可点进资产详情 | ✅ 已接（`data-asset-id` + `diff-item-clickable` → `openDetail()`），两侧各有断言 |
 
 ### 9.13 M7：mypy 清零（方案第 17 节）
 

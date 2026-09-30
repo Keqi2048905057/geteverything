@@ -262,7 +262,12 @@
         return resp.json();
       })
       .then(function (data) {
-        if (data.asset) renderDetail(data.asset);
+        if (data.asset) {
+          renderDetail(data.asset);
+          // 从 diff 清单点进来时，详情面板在页面另一头：不滚过去就等于没反应。
+          var panel = document.getElementById("asset-detail-panel");
+          if (panel && panel.scrollIntoView) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
       })
       .catch(function (err) {
         var body = document.getElementById("asset-detail-body");
@@ -376,7 +381,13 @@
       var list = el("ul", "diff-list");
       items.forEach(function (item) {
         var node = el("li", "mono", diffItemLine(item));
-        node.setAttribute("data-asset-id", item.asset_id || "");
+        var assetId = item.asset_id || "";
+        node.setAttribute("data-asset-id", assetId);
+        if (assetId) {
+          // 有 asset_id 才能点进详情：让它看起来可点，不然用户不会去试。
+          node.classList.add("diff-item-clickable");
+          node.title = "点击查看该资产的观测时间线";
+        }
         list.appendChild(node);
       });
       body.appendChild(list);
@@ -446,6 +457,18 @@
         if (target && target.classList && target.classList.contains("asset-detail")) {
           openDetail(target.getAttribute("data-asset-id"));
         }
+      });
+    }
+
+    // diff 清单里的条目同样可以点进资产详情（新增/消失/变更/未变四类都算）。
+    var diffBody = document.getElementById("diff-body");
+    if (diffBody) {
+      diffBody.addEventListener("click", function (event) {
+        var node = event.target;
+        while (node && node !== diffBody && !(node.classList && node.classList.contains("diff-item-clickable"))) {
+          node = node.parentNode;
+        }
+        if (node && node !== diffBody) openDetail(node.getAttribute("data-asset-id"));
       });
     }
 

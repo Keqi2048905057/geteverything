@@ -181,6 +181,26 @@ def test_diff_endpoint_can_omit_unchanged(admin_client, scope_id):
     assert body["counts"] == full["counts"], "关掉明细不该改变任何计数"
 
 
+def test_diff_items_always_carry_asset_id(admin_client, scope_id):
+    """每条 diff 明细都要带 ``asset_id`` —— 前端靠它跳资产详情。
+
+    这条锁的是「页面上能点」这个能力的前置条件：``asset_id`` 为 ``None`` 的条目
+    即使渲染出来也只能是死文本，而它恰恰是 ``data-asset-id`` 的唯一来源。
+    """
+    before = _run_job(scope_id, ["i.example.test"])
+    after = _run_job(scope_id, ["j.example.test"])
+
+    body = admin_client.get(f"/api/jobs/{before['id']}/diff/{after['id']}").get_json()
+    items = body["added"] + body["removed"] + body["changed"] + body["unchanged"]
+    assert items, "两次不同目标的任务至少要产出 added / removed"
+    for item in items:
+        assert item["asset_id"], f"diff 条目缺少 asset_id: {item!r}"
+        # 详情接口必须真的认这个 id，否则前端点进去是 404。
+        detail = admin_client.get(f"/api/assets/{item['asset_id']}")
+        assert detail.status_code == 200
+        assert detail.get_json()["asset"]["id"] == item["asset_id"]
+
+
 def test_diff_endpoint_marks_changed_attributes(admin_client, scope_id):
     """属性变化必须出现在 ``changes`` 里（status_code / title …）。"""
     job = _run_job(scope_id, ["g.example.test"])
@@ -301,3 +321,19 @@ def test_assets_page_diff_scope_select_lists_scopes_when_authenticated(admin_cli
     body = admin_client.get("/assets").get_data(as_text=True)
     assert 'id="diff-scope"' in body
     assert scope_id in body
+
+
+def test_assets_js_wires_diff_items_to_asset_detail(client):
+    """页面已渲染 ``data-asset-id``，但必须有脚本把它接成点击跳转。
+
+    否则「Diff 条目可点进资产详情」就只是注释里的一句承诺 ——
+    静态脚本没有构建链、也没有别的测试能发现它漏了。
+    """
+    resp = client.get("/static/assets.js")
+    assert resp.status_code == 200
+    script = resp.get_data(as_text=True)
+
+    assert "diff-item-clickable" in script, "diff 条目没有可点的标记"
+    assert "openDetail" in script and "asset-detail-panel" in script
+    # 点击清单里的条目要能取到 asset_id 并打开详情。
+    assert "diff-body" in script

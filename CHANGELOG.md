@@ -179,6 +179,8 @@
   （选基线与对比任务 + 可选限定范围 + 「含未变」开关），结果按
   新增 / 消失 / 变更 / 未变 四段渲染，`changed` 直接显示
   `status_code: 200 → 403` 这类属性差异。任务下拉默认选中最近两次。
+  **对比清单里的条目可以点进资产详情**（脚本给带 `asset_id` 的条目加 `diff-item-clickable`
+  并复用 `openDetail()`，详情面板会滚入视口）。
 - `app.py`：`GET /assets` 页面路由；首页顶栏加入口。
 - `core/migrate.py` + `scripts/migrate_legacy_results.py`：**旧库 → 新库的只读迁移**。
   旧库以 `mode=ro` 打开，一个字节都不改；观测 ID 由旧库行身份哈希而来（**确定性**，
@@ -257,11 +259,31 @@
 会多出 7 条 openai 存根相关的报错。本轮**没有**为这 7 条去改 provider 层的组织方式
 （属改运行语义，且该层不可达）。
 
+### P1 补充 — Diff 条目可点进资产详情（本轮）
+
+`docs/CODEBASE_MAP.md` 第 9.12.7 节最后一条遗留：清单已渲染 `data-asset-id`，
+但没人接点击，于是「能点进详情」只是注释里的一句承诺。
+
+变更：
+
+- `web/static/assets.js`：`renderDiff` 给**带 `asset_id`** 的条目加 `diff-item-clickable`
+  与 `title`（为空的保持死文本）；`bind()` 在 `#diff-body` 上做事件委托，
+  命中后复用列表页的 `openDetail()`；`openDetail` 成功渲染后
+  `scrollIntoView` 到详情面板 —— 面板在页面另一头，不滚过去点了像没反应。
+- `web/static/app.css`：`.diff-list li.diff-item-clickable` 的虚线下划线与 hover 配色。
+
+新增测试（+2，705 → 707）：
+
+- `test_diff_items_always_carry_asset_id`：每条 diff 明细都带 `asset_id`，
+  且 `/api/assets/<id>` 真的认它（否则前端点进去是 404）。
+- `test_assets_js_wires_diff_items_to_asset_detail`：静态脚本确实接线了 ——
+  无前端构建链时，漏接线没有任何别的方式能发现。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 705 passed, 2 skipped, 0 failures
+$ python -m pytest           # 707 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 ```
 
@@ -279,4 +301,4 @@ $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues 
   两套模型尚未合流（方案第 11 节，改的是调用链，属架构级改动，已登记 `docs/DECISIONS.md` §3）；
   旧库历史数据已有迁移脚本但**未执行真实迁移**（DECISIONS-F：等用户手动 `--apply`；
   且本机旧库当前 17 张表全为 0 行）；`mark_stale_assets()` 已就绪但**还没有任何计划任务调用它**；
-  对比结果目前只按四类清单展示，点条目还不能跳到对应资产详情。
+  观测的 `data_json` 在页面上仍按原样 JSON 渲染，没有按字段拆列。

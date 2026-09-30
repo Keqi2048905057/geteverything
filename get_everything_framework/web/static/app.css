@@ -422,6 +422,17 @@ ul.artifacts li {
   word-break: break-all;
 }
 
+/* 有 asset_id 的 diff 条目可以点进资产详情；没 id 的（理论上不该有）保持不可点。 */
+.diff-list li.diff-item-clickable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.diff-list li.diff-item-clickable:hover {
+  color: var(--accent, #58a6ff);
+}
+
 /* 「含未变」是复选项，不需要 .form-inline 里 select/input 的最小宽度。 */
 .form-inline .check-inline {
   display: inline-flex;
