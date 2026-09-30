@@ -11,8 +11,15 @@ permissions:
 
 jobs:
   lint-and-test:
-    name: ruff + pytest
-    runs-on: ubuntu-latest
+    name: ruff + pytest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # 一个平台挂掉不要连带取消另一个 —— 否则「Windows 特有缺陷」会被 Linux 的
+      # 失败掩盖成「整个 job 失败」，看不到真正的原因（见 CODEBASE_MAP §9.10 第 3 条：
+      # 本地 Windows 全绿、CI 上 POSIX 进程组误杀调用方的那个缺陷）。
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     defaults:
       run:
         working-directory: get_everything_framework
@@ -40,3 +47,10 @@ jobs:
 
       - name: 运行测试
         run: pytest -q
+
+      - name: 类型检查
+        # 只在 ubuntu 上跑一次：mypy 结果与平台无关，Windows 再跑一遍纯属浪费配额。
+        # 范围与本地验收命令一致（方案第 17 节）；agent/providers/* 不在范围内，
+        # 原因见 docs/CODEBASE_MAP.md §9.13 末。
+        if: matrix.os == 'ubuntu-latest'
+        run: mypy app.py core api jobs storage.py modules
