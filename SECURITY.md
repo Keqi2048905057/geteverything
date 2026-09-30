@@ -42,7 +42,8 @@
 | 待修复 | `/api/tools`、`/api/results`、`/api/export` 仍可匿名读取 |
 | 待修复 | `/api/export` 返回服务器文件路径，会泄露本机目录结构 |
 | 待修复 | `storage.py` 旧结果库无 WAL、无 `busy_timeout`，并发写会 `database is locked` |
-| 待修复 | `modules/` 中多数 runner 尚未接入统一接口，失败仍可能被降级为空结果 |
+| 待修复 | `config.py` 中 `FEROXBUSTER_CONFIG` 的 `wordlist` 是开发机绝对路径，换机器会失败 |
+| 待修复 | `scripts/*.exe` 等工具二进制不进仓库，需自行按 `README.md` 准备，缺失时报 `tool_not_found` |
 
 ## 使用约定
 
