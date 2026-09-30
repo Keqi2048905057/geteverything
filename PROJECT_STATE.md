@@ -14,8 +14,8 @@
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 剩余 ⬜ → M6 🔄**
-- 更新日期：2026-10-02（M7 mypy 清零轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 剩余 ⬜ → M6 🔄**
+- 更新日期：2026-10-02（M7 mypy 清零 + Diff 条目可点轮）
 
 ---
 
@@ -115,7 +115,13 @@
 - **顺带修掉一个真机缺陷**：`_tool_httpx` 的 `items` 取成了 `run_scan` 的 URL 字符串列表，
   导致「存活探测」在有结果时抛 `AttributeError: 'str' object has no attribute 'get'`
   （零结果时反而不炸，本地极易漏掉）
-- 测试：+4 → **705 passed / 2 skipped**
+- 测试：+4 → **705 passed / 2 skipped**（M7 类型收口本身）
+
+**P1 补充：Diff 条目可点进资产详情（本轮）**
+- `web/static/assets.js`：带 `asset_id` 的 diff 条目加 `diff-item-clickable` 并做事件委托，
+  点击复用列表页的 `openDetail()`；详情面板渲染后 `scrollIntoView`（面板在页面另一头）
+- `web/static/app.css`：可点条目的虚线下划线与 hover 配色
+- 测试：+2 → **707 passed / 2 skipped**（服务端 `asset_id` 可用 + 前端确实接线）
 
 **流程与沉淀**
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
@@ -132,7 +138,7 @@
 | **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
 | **M6 本机启动文档** | `CONTRIBUTING.md` 有环境搭建说明；`scripts/run_local.ps1` 可用 | 没有面向「新开发者 10 分钟启动」的完整文档；`scripts/check_env.py` 不存在 |
 | **M7 mypy** | ✅ **已完成（本轮）**：`mypy app.py core api jobs storage.py modules` → `Success: no issues found in 59 source files` | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
-| **P1 Diff 的前端** | ✅ **已完成**：`/assets` 页底部有「两次任务对比」表单（基线与对比任务下拉、可选限定范围、「含未变」开关），四类分段渲染 + 属性差异（`status_code: 200 → 403`） | 结果条目还不能点进资产详情 |
+| **P1 Diff 的前端** | ✅ **已完成**：`/assets` 页底部有「两次任务对比」表单（基线与对比任务下拉、可选限定范围、「含未变」开关），四类分段渲染 + 属性差异（`status_code: 200 → 403`）；**清单条目可点进资产详情**（带 `asset_id` 的条目可点，详情面板会滚入视口） | — |
 | **P1 资产过期** | `mark_stale_assets(scope_id, last_seen_before=...)` 已实现且有用例 | **没有任何计划任务/接口调用它**，所以 `stale` / `gone` 目前永远是空的 |
 
 ---
@@ -151,6 +157,7 @@
 - [ ] 旧的 `/api/run` 同步扫描链路也产资产（目前**只有 Job 链**产；方案第 11 节统一执行链）
 - [ ] 资产过期自动化（`mark_stale_assets()` 已就绪但无人调用）
 - [x] Diff 在前端露出（`/assets` 页底部的「两次任务对比」表单，四类分段渲染 + 属性差异）
+- [x] Diff 条目点进资产详情（带 `asset_id` 的条目可点 → 复用 `openDetail()` 并滚入视口）
 - [ ] 观测的 `data_json` 按字段拆列展示（现在只渲染原样 JSON）
 
 **M6 — 导出、健康检查和本机运行脚本**
@@ -162,7 +169,7 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（705 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（707 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [ ] SQLite 并发测试
 - [ ] 本地 fixture HTTP 测试
@@ -284,12 +291,12 @@
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 705 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+pytest: 707 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
 mypy:   Success: no issues found in 59 source files        ← M7 验收命令，本轮由 34 errors 清零
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → **M7 `705`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → **M7 `707`**
 
 ---
 
@@ -299,8 +306,8 @@ node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建
 > 下面给的是**最近一次不含本文件改动的提交**，并附上自检命令。以 `git log -1` 为准。
 
 ```text
-26c72460b60ff60d3dd20972b6f3b3ffc632a182   ← 最近一次代码提交（M7 mypy 清零）
-26c7246  fix: M7 类型收口——mypy 34 errors 清零（未改 mypy 配置） (2026-10-02)
+32d404583c9717e48c6b74f2a3a4308ce143d1e3   ← 最近一次代码提交（Diff 条目可点进资产详情）
+32d4045  feat: Diff 条目可点进资产详情（P1 遗留最后一条前端） (2026-10-02)
 ```
 
 自检：
@@ -310,11 +317,13 @@ git log -1 --format="%H %s"     # 以这条输出为准
 git status -sb                  # ## main...origin/main [ahead N] = 本地已提交、尚未 push
 ```
 
-与 `origin/main` **不同步**：本地 **ahead 5**（M0～M4 之后的 5 个里程碑提交尚未 push；
-夜间无人值守期间不做 `git push`，等你确认后再推）。累计 11 个提交：
+与 `origin/main` **不同步**：本地 **ahead 7**（M0～M4 之后的 7 个里程碑提交尚未 push；
+夜间无人值守期间不做 `git push`，等你确认后再推）。累计 13 个提交：
 
 | 提交 | 说明 |
 |---|---|
+| `32d4045` | feat: Diff 条目可点进资产详情（P1 遗留最后一条前端） |
+| `9eb68f1` | docs: 同步 M7 mypy 清零（代码地图 + CHANGELOG + 状态板） |
 | `26c7246` | fix: M7 类型收口——mypy 34 errors 清零（未改 mypy 配置） |
 | `fa8d1c7` | feat: P1 §10 Diff 前端露出 + 修正「未变」计数被明细开关清零 |
 | `63e630f` | feat: P1 §12 旧库 → 新库的只读迁移脚本（含幂等与时间归一） |
@@ -336,7 +345,7 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
 
 1. **先推进 C 之前的确认**：把上表 A～I 里你能定的定掉，**E 是关键路径**（已按 DECISIONS-E 落地，可回看）。
 2. **M5 剩余**（§11 统一执行链需授权，见 `docs/DECISIONS.md` §3）：资产过期自动化、观测 `data_json` 按字段拆列、
-   Diff 条目点进资产详情、旧库真实迁移（等你手动 `--apply`）。
+   旧库真实迁移（等你手动 `--apply`）。
 3. **顺手可做（不需要决策）**：
    - 修 `config.py` 里 `FEROXBUSTER_CONFIG.wordlist` 的开发机绝对路径；
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
@@ -351,7 +360,7 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 705 passed, 2 skipped
+python -m pytest                                      # 期望 707 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
 ```
 
