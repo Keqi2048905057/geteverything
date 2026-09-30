@@ -22,7 +22,8 @@
 - `.gitignore`：补齐运行期产物、缓存与本地密钥的忽略规则。
 
 排除在版本控制之外（文件仍在磁盘上）：`results/`（含 `scan_results.db`）、`uploads/`、
-`SecLists/`、`scripts/*.exe`。
+`SecLists/`、`scripts/*.exe`。（注：`SecLists/` 在**当前工作树里并不存在** —— 它只被
+`.gitignore` 忽略；默认字典因此缺失，`M5` 起以 `config_error` 明确报出而不是静默空结果。）
 
 ### M1 — 首页可用与静态基线（已完成）
 
@@ -279,11 +280,55 @@
 - `test_assets_js_wires_diff_items_to_asset_detail`：静态脚本确实接线了 ——
   无前端构建链时，漏接线没有任何别的方式能发现。
 
+### M5 补充 — 字典路径可移植 + 缺失即显式失败（本轮）
+
+来源：`PROJECT_STATE.md` Known Failure #5 / `SECURITY.md` / `docs/CODEBASE_MAP.md` 第 6 节第 22 条
+（三处记的其实是同一个缺陷）。
+
+问题：`config.py` 的两个 `wordlist` 在本机**都不存在** ——
+`FEROXBUSTER_CONFIG` 是开发机绝对路径 `D:/c4/v2/backend/framework-main/SecLists/...`，
+`SHUFFLEDNS_CONFIG` 指向仓库并不分发的 `SecLists/`。而失败形态是错的：
+shuffledns 只打一行提示就 `return []`（与「跑通但零结果」不可区分），
+feroxbuster/dirsearch 把不存在的路径原样当 `-w` 塞进子进程，
+相对路径还依赖当前工作目录。
+
+变更：
+
+- `config.py`：两个 `wordlist` 改为仓库相对路径，并支持 `SHUFFLEDNS_WORDLIST` /
+  `FEROXBUSTER_WORDLIST` 覆盖（写法同 `HTTPX_PATH`）。`DIRSEARCH_CONFIG.wordlist`
+  保持 `None`（不加 `-w`、用工具自带字典，是合法形态）。
+- `core/errors.py`：新增 `ErrorCode.CONFIG_ERROR = "config_error"`，收进 `ErrorCode.ALL`。
+  **加法**：方案第 6.2 节的 10 个工具错误码一个都没改。
+- `modules/base.py`：新增 `_resolve_path()`（相对路径按项目根解析，**与 cwd 无关**）、
+  `require_path()`、`require_wordlist()`；缺失即抛 `RunnerInputError`，绝不进入命令行。
+- `modules/shuffledns.py` / `modules/url_tools.py`：三个 runner 在**构造命令行之前**
+  走 `require_wordlist()`；`build_command` 输出解析后的绝对路径。
+- `web/static/app.js`：`ERROR_CODE_LABELS` 补 `config_error` 中文标签。
+- 文档：`README.md`（字典两种写法对照表 + 缺失即失败）、`.env.example`（两个覆盖变量）、
+  `docs/CODEBASE_MAP.md`（§9.14 新增、第 6 节 #22、第 7 节 #7/#9、§9.9、§9.8 基线）。
+
+新增测试（+8，707 → 715）：
+
+- `test_wordlist_configs_are_portable`：两个默认字典都不是开发机绝对路径。
+- `test_every_configured_wordlist_path_resolves_under_project_root`：扫全部 `*_CONFIG`。
+- `test_missing_wordlist_refuses_before_spawning_subprocess`（feroxbuster / dirsearch 各 1 例）：
+  `config_error` 且 `_execute` 一次都没被调用。
+- `test_missing_wordlist_error_does_not_leak_into_unknown_error`。
+- `test_shuffledns_missing_wordlist_is_a_failure_not_an_empty_result`：dnsx 不被调用。
+- `test_absent_wordlist_is_not_an_error`：`wordlist=None` 不算配置错误。
+- `test_error_code_config_error_is_declared_and_labelled`：常量表与前端标签表同步。
+
+顺带修正被掩盖的断言：`test_dirsearch_build_command` 原先断言字典路径**原样透传**
+（`"words.txt"`），正是缺陷本身；现在断言解析后的绝对路径。
+
+范围说明：**没有下载或分发任何字典**，`SecLists/` 仍然缺失 —— 修的是「路径怎么解析、
+缺失怎么报」，不是「字典从哪来」。也不涉及表结构、鉴权、Scope/Policy。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 707 passed, 2 skipped, 0 failures
+$ python -m pytest           # 715 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 ```
 
@@ -294,7 +339,9 @@ $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues 
 - `storage.py`（旧库）仍无 WAL；已加连接级 `busy_timeout`，但 WAL 需重建库文件，属迁移范畴。
 - `/api/jobs` 只有 `limit`，没有游标分页。
 - 单并发 worker（`SCAN_LIMITS["max_concurrency"] = 2` 目前未使用）。
-- `config.py:FEROXBUSTER_CONFIG` 的 `wordlist` 仍是开发机绝对路径。
+- `config.py:FEROXBUSTER_CONFIG` 的 `wordlist` 已是仓库相对路径（M5 修）；但仓库**不分发**
+  `SecLists/`，所以默认字典在本机仍不存在 —— 此时任务会以 `config_error` 明确失败，
+  而不是静默零结果。要真跑目录爆破需自行下载字典或用 `FEROXBUSTER_WORDLIST` 指向本机字典。
 - `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 `docs/DECISIONS.md` §3 待授权）。
 - Agent 尚未改走 Job Service（P0-6 未完成部分）。
 - **P1 遗留**：旧的 `/api/run` 同步扫描链路**不产生** `assets` 观测（只有 Job 链会），

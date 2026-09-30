@@ -55,6 +55,7 @@
     network_error: "网络错误",
     rate_limited: "被限流",
     partial_success: "部分成功",
+    config_error: "配置指向的文件缺失（例如字典未下载）",
     unknown_error: "未知错误",
   };
 

@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点）（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点）+ M5 字典可移植性（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -474,7 +474,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 19 | httpx 一执行就把整批任务打挂 | ① `modules/httpx.py:177`（无候选 `raise RuntimeError`）② `modules/httpx.py:211`（`_execute` 返回 False 时 `raise RuntimeError`）③ `tool_runner.py:137`（`runner.run_scan(target)` **无 try/except**） | 与其它 Runner "失败返回 `[]`" 的约定不一致；在 `/api/run` 批量路径上会直接冒泡成 500，**后续目标/工具全部不再执行**；只有在 Agent 路径被 `agent/action.py:366` 的 `except Exception` 兜住 |
 | 20 | Agent 对话「失忆」/ 多轮后上下文丢失 | ① `app.py:139,146`（`session["agent_history"]=...[-40:]`、`session["agent_steps"]=...[-50:]`）② `app.py:27` `app.secret_key = Config.SECRET_KEY`（默认 `"dev-secret-key"`）③ `agent/action.py:_trim_history`（`:785` 上限 30 条） | Flask session 是**签名 Cookie**（客户端存储）；`agent_history`/`agent_steps` 里含完整工具结果文本，很容易超过浏览器 4KB Cookie 上限 → Flask 静默丢弃 Cookie → 下一轮 `session.get("agent_history")` 变空。默认密钥还可被伪造 |
 | 21 | `/api/tools`、`/api/databases` 返回的记录数不对/很慢 | ① `api/tools.py:list_tools`（`:80-88` 每个工具都 `build_runner` 实例化）② `api/tools.py:_build_tool_payload`（`:35`）③ `storage.py:get_tool_databases`（`:527-541`，**不返回任何 count**） | 接口 docstring（`api/tools.py:52-66`）宣称返回 `record_count`，实现只返回 `tool_name/table/result_column/category`；真正的计数方法 `get_tool_database_overview`（`storage.py:543`）**在 API 层从未被调用**。另外 `build_runner` 会执行 `DnsxRunner/HttpxRunner/AlterxRunner/ShufflednsRunner` 的 `__init__`（各建一个 `ScanResultStore()`，触发建表） |
-| 22 | 子域爆破类工具（shuffledns/alterx/dnsx）总是零结果 | ① `config.py:SHUFFLEDNS_CONFIG`（`:145` wordlist=`SecLists/subdomains-top1million-5000.txt`）② `modules/shuffledns.py:_bruteforce_with_dnsx`（`:63` 文件不存在只 print 一句）③ `config.py:FEROXBUSTER_CONFIG`（`:200` wordlist 是硬编码绝对路径 `D:/c4/v2/backend/framework-main/SecLists/...`） | `SecLists/` 里**实际只有 `raft-small-directories.txt`**（实测），配置引用的两个字典文件都不存在：shuffledns 静默返回空、feroxbuster 会把不存在的路径当 `-w` 参数传给子进程而失败。`alterx`/`dnsx`/`httpx` 的候选来自 `store.get_results_by_domain()`，subfinder 没先跑过就永远是空 |
+| 22 | 子域爆破类工具（shuffledns/alterx/dnsx）总是零结果 | ① `config.py:SHUFFLEDNS_CONFIG` / `FEROXBUSTER_CONFIG` 的 `wordlist` ② `modules/shuffledns.py:_bruteforce_with_dnsx`（字典不存在曾只 print 一句就 `return []`）③ `modules/base.py:require_wordlist`（M5 起统一校验） | **M5 已修**：仓库不分发 `SecLists/`，所以两个默认字典**在本机并不存在**——原先 shuffledns 静默返回空、feroxbuster 把不存在的路径当 `-w` 传进子进程。现在：字典路径按**项目根**解析（与 cwd 无关）+ 环境变量可覆盖；**配置了字典却不存在 → `error_code=config_error` 的显式失败，且不启动子进程**。剩下「真零结果」的正常原因：`alterx`/`dnsx`/`httpx` 的候选来自 `store.get_results_by_domain()`，subfinder 没先跑过就永远是空 |
 | 23 | 任务跑完了，资产页却「一条都没有」/ 少了几条 | ① `jobs/executor.py:execute_job` 里的 `ingest_step_observations` 调用 ② `core/assets.py:CATEGORY_TO_TYPE`（`web`/`alive`/`dns` 的映射）③ 任务详情里的 `step.assets_ingested` 事件（含 `skipped` 与 `reasons`） | **先看事件，不要先看代码**：`step.assets_ingested` 的 `written`/`skipped`/`reasons` 直接说明这批观测落了几条、为什么跳过。三种常见原因：① 工具的 `Observation.category` 不在 `CATEGORY_TO_TYPE` 里（返回 `None` → 整条跳过，不猜类型）；② 步骤只有字符串结果且工具是 `httpx`/`naabu`/`nmap`（形态不确定 → 故意不落，见 §9.12.3）；③ `canonical.normalize()` 判定值非法（如把本地路径当 URL）。**注意落观测是派生产物**：它失败不会让任务变 failed，所以「任务 succeeded 但没资产」是合法状态，必须靠事件区分 |
 | 24 | 对比两次任务时「未变」总是 0，看起来像两次扫描毫无交集 | ① `core/assets.py:diff_jobs` 里 `counts["unchanged"]` 与 `unchanged` 明细的关系 ② 页面「含未变」复选框（`#diff-include-unchanged`）③ `web/static/assets.js:renderDiff` 对空明细的措辞 | `include_unchanged=False`（勾掉「含未变」）**只应影响明细、不应影响计数**。曾经两者一起清零，于是「扫到了但没变化」与「什么都没扫到」变得不可区分。先看 `counts.unchanged`：**它非 0 而明细为空，说明是这次没要明细，不是两次没有交集**（前端会显示「按设置未取明细，共 N 条」）。真正的 0 才是「两次任务的资产集合完全不相交」 |
 | 25 | Agent 回复里出现 `AttributeError: 'str' object has no attribute 'get'`（只在**真有存活结果**时） | ① `agent/action.py:_tool_httpx` 的 `items` 字段 ② `agent/action.py:_summarize_httpx_items`（逐条 `item.get(...)`）③ `modules/httpx.py:run_scan` 的返回值语义 | 同一个 `rows` 变量在两条链上有两种形态：`run_scan` 返回 **URL 字符串列表**（旧签名，兼容用），而元数据在 `runner.last_items`（dict 列表）。`items` 错取了 `rows`，于是 `_summarize_httpx_items` 收到一堆 `str` 就炸。**零结果时不炸** —— 所以「本地跑不通、真机上必炸」是它的典型表现。`results` 里的 `total` 也就会与 `items` 长度对不上 |
@@ -501,9 +501,9 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ### 7.2 路径与外部依赖
 
-7. **硬编码绝对路径**：`config.py:200` `wordlist="D:/c4/v2/backend/framework-main/SecLists/raft-small-directories.txt"` —— 作者本机路径，换机器必失败。
-8. **`HTTPX_CONFIG` 命令名疑似笔误**：`config.py:171` `os.getenv("HTTPX_PATH", "http-x")`，默认值不是 `httpx`。
-9. **配置引用的字典文件不存在**：`config.py:145` 的 `SecLists/subdomains-top1million-5000.txt`；仓库 `SecLists/` 只有 `raft-small-directories.txt`。
+7. **硬编码绝对路径**：`config.py` 的 `FEROXBUSTER_CONFIG.wordlist` 曾写死作者本机路径 `D:/c4/v2/backend/framework-main/SecLists/raft-small-directories.txt`，换机器必失败。▶ **M5 已解决**：改为仓库相对路径 `SecLists/raft-small-directories.txt`，并支持 `FEROXBUSTER_WORDLIST` 环境变量覆盖（见 §9.10 末「字典配置」）。
+8. **`HTTPX_CONFIG` 命令名疑似笔误**：`config.py` `os.getenv("HTTPX_PATH", "http-x")`，默认值不是 `httpx`。
+9. **配置引用的字典文件不存在**：`config.py` 的 `SecLists/subdomains-top1million-5000.txt` 与 `SecLists/raft-small-directories.txt` **两个都指向仓库里并不存在的文件**（仓库不分发 `SecLists/`，见 README）。▶ **M5 已解决（行为部分）**：路径改为**按项目根解析**的相对路径 + 环境变量覆盖；文件确实缺失时不再静默返回空结果，而是 `error_code=config_error` 的显式失败。字典本身仍**不随仓库分发**，需自行下载或用环境变量指向本机字典。
 10. **`GO_BIN_WINDOWS`/`GO_BIN_POSIX` 是死常量**（`config.py:91-92`），从未用于注入 PATH；`scripts/*.exe` 也不会被自动发现。
 11. **`modules/shuffledns.py` 硬编码 `"dnsx"` 命令名**（`:89,109,147`）而不读 `self.config["path"]`，无法通过配置切换二进制；并且它**根本没有调用 `shuffledns` 二进制**，类名/工具名与实际行为不符。
 12. **`modules/enscan.py` 依赖 `cwd=results/` + 前后 glob 差集**（`:53,58,77`）识别产物：并发运行或其它工具往 `results/` 写 `.json` 时会认错文件；文件已存在但被覆盖时 `new_files` 为空 → 静默 `[]`。
@@ -774,12 +774,12 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 707 passed, 2 skipped, 0 failures
+$ python -m pytest           # 715 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → **M7 类型收口 + Diff 可点 `707`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → **M5 字典可移植性 `715`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -797,7 +797,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/unit/test_runner_result.py` | 命令预览脱敏、`RunnerResult` 组装、artifact 落盘/读取（M4） |
 | `tests/unit/test_runner_interface.py` | **真实子进程**：成功/零结果/未安装/非零/127/超时/SystemExit/残留文件清理（M4）；**基类未实现 `run_scan` 必须报失败**、**子类 `_write_input_file` 保留 `suffix`**（M7） |
 | `tests/unit/test_runners_m4.py` | subfinder / httpx / dnsx 的 `build_command` + `parse_output`（M4） |
-| `tests/unit/test_runners_m4_rollout.py` | **其余 14 个 runner** 的接口覆盖 + 解析 + 横切自检（M4 铺开） |
+| `tests/unit/test_runners_m4_rollout.py` | **其余 14 个 runner** 的接口覆盖 + 解析 + 横切自检（M4 铺开）；**M5**：字典配置可移植（不是开发机绝对路径、必落在项目根内）、字典缺失时 `config_error` 且**不启动子进程**、`wordlist=None` 不算错、新错误码常量与前端标签同步 |
 | `tests/unit/test_policy.py` | **P0-2**：统一 Policy 四个入口（缺失 400 / 越界 403 / 整体拒绝 / 解析后地址校验，注入 resolver 不查真实 DNS） |
 | `tests/unit/test_agent_boundary.py` | **P0-3**：Agent 拒绝任意 `file_path`、只收 `upload_id`、planner 不再下发 `file_path`；**M7**：httpx 步骤的 `items` 必须是元数据字典（回归 `'str' object has no attribute 'get'`） |
 | `tests/unit/test_storage_connection.py` | **DECISIONS-I**：旧库连接必关（含异常路径）、`busy_timeout`、表结构未变、`-W error::ResourceWarning` 复现 |
@@ -829,6 +829,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | #34「无 create_app()」 | 已加 `create_app()`，但仍保留模块级单例 `app`（测试与 waitress 共用） |
 | #2 第 1 条「残留输出文件」 | **已解决**（M4）：`_execute` / `_execute_stdout` 执行前先删同名旧文件；删不掉时写 `stale_output_warning` 到 `last_execution`，不再把上次输出当本次结果 |
 | #2 第 5 条「SQLite 并发」 | **旧库已缓解**（P0）：`storage.py` 连接必关 + 连接级 `busy_timeout=5000`；仍无 WAL。新库（`core/db.py`）本来就是 WAL + `busy_timeout` |
+| #22「子域爆破类工具总是零结果」 | **已解决（配置与失败形态）**（M5）：字典路径改为按项目根解析的仓库相对路径 + 环境变量覆盖；配置了字典却不存在时抛 `config_error` 且不启动子进程。**字典本身仍不随仓库分发**，需自行下载或改环境变量（§9.14） |
 
 ### 9.10 M4：统一结果与错误模型（**「失败被吞成空结果」的终点**）
 
@@ -874,8 +875,8 @@ core/runner_result.py
 | 爬虫 | `gospider` | stdout | |
 | | `katana` | `-o <file>` | |
 | | `waybackurls` | stdout | |
-| 目录 | `feroxbuster` | `-o <file>` | `--json` 时按行解析 JSON 取 `url`，坏行跳过 |
-| | `dirsearch` | `-o <file>` | `wordlist` 为空则不加 `-w` |
+| 目录 | `feroxbuster` | `-o <file>` | `--json` 时按行解析 JSON 取 `url`，坏行跳过；字典按项目根解析，缺失即 `config_error` |
+| | `dirsearch` | `-o <file>` | `wordlist` 为空则不加 `-w`；配了却不存在同样是 `config_error` |
 | 端口 | `naabu` | `-o <file>` | |
 | | `nmap` | `-oN <file>` | 正因如此 `OUTPUT_FLAGS` 才需要认 `-oN/-oX/-oG/-oA` |
 
@@ -1305,4 +1306,78 @@ $ python -m pytest -q                                      # 705 passed, 2 skipp
 > （`Cannot assign to a type`、`Module has no attribute "api_base"` 等）。
 > 本轮**没有**为了让这 7 条变绿去改 provider 层的组织方式 —— 那属于「改运行语义」，
 > 且这一层当前不可达。`agent/providers/tests/test_*.py` 下的本地校验脚本同理。
+
+### 9.14 M5：字典路径可移植 + 缺失即显式失败（第 6 节第 22 条、第 7 节第 7/9 条）
+
+> 这一轮只动了「配置里的字典路径怎么解析、缺失时怎么报」，**没有改技术栈、
+> 没有改表结构、没有下载或分发任何字典**。
+
+#### 9.14.1 问题
+
+`config.py` 里两个 `wordlist` 指向的文件在本机都**不存在**：
+
+| 配置 | 原值 | 问题 |
+|---|---|---|
+| `FEROXBUSTER_CONFIG` | `D:/c4/v2/backend/framework-main/SecLists/raft-small-directories.txt` | 开发机绝对路径，换机器必失败（`PROJECT_STATE.md` Known Failure #5） |
+| `SHUFFLEDNS_CONFIG` | `SecLists/subdomains-top1million-5000.txt` | 仓库**不分发** `SecLists/`（README 已声明），文件本身缺失 |
+
+而且两条失败路径的**表现形态**都不对：
+
+* `shuffledns._bruteforce_with_dnsx` 只打一行 `[!] 字典文件不存在` 就 `return []`
+  —— 与「跑通但零结果」完全不可区分（`AGENTS.md` 高频坑 #1）；
+* `feroxbuster` / `dirsearch` 把不存在的路径原样当 `-w` 塞进子进程；
+* 相对路径还依赖**当前工作目录**，worker / CLI / pytest 的 cwd 不同就会指向不同文件。
+
+#### 9.14.2 改法（三层，都只做加法）
+
+1. **配置层**：两个 `wordlist` 改为仓库相对路径，并支持环境变量覆盖
+   （`SHUFFLEDNS_WORDLIST` / `FEROXBUSTER_WORDLIST`，写法与 `HTTPX_PATH`、
+   `GEF_PROCESS_TIMEOUT` 一致）。`DIRSEARCH_CONFIG.wordlist` 保持 `None`
+   —— 那是「不加 `-w`、用工具自带字典」的合法形态。
+2. **基类层**：`BaseRunner` 新增两个方法，是**唯一的路径解释口径**：
+   * `_resolve_path(path)`：相对路径按 `config._BASE_DIR`（项目根）解析，绝对路径原样返回；
+   * `require_path(path, *, label, flag=None)`：文件不存在即抛 `RunnerInputError`；
+   * `require_wordlist()`：读 `self.config["wordlist"]`；空 → `None`（不加 `-w`），
+     配了却不存在 → 抛错。返回的是**解析后的绝对路径**。
+3. **调用层**：`shuffledns.run_scan`、`feroxbuster.run_scan`、`dirsearch.run_scan`
+   在**构造命令行之前**调用 `require_wordlist()`；两个目录扫描 runner 的
+   `build_command` 用 `self._resolve_path(wordlist)` 输出绝对路径。
+
+#### 9.14.3 新增错误码 `config_error`
+
+「配置指向的外部资源缺失」既不是 `tool_not_found`（工具没装）也不是
+`invalid_target`（目标非法），因此新增 `ErrorCode.CONFIG_ERROR = "config_error"`。
+它是**加法**：方案第 6.2 节的 10 个工具错误码一个都没改，`ErrorCode.ALL`
+同步收录，前端 `web/static/app.js:ERROR_CODE_LABELS` 也补了中文标签
+（有测试同时钉住常量表与前端标签表，避免两边漂移）。
+
+`RunnerInputError` → `result_from_exception` 这条既有通道原样复用
+（先例是 `modules/httpx.py` 的「没有候选目标」，`no_results` + `status="success"`）；
+区别在于字典缺失是**使用者的配置问题**，所以 `status` 保持默认的 `failed`。
+
+#### 9.14.4 回归测试（`tests/unit/test_runners_m4_rollout.py`，新增 6 例 / 9 个用例）
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `test_wordlist_configs_are_portable` | 两个默认字典都不是开发机绝对路径；相对路径必须落在项目根之内 |
+| `test_every_configured_wordlist_path_resolves_under_project_root` | 扫**全部** `*_CONFIG` 常量，任何 `wordlist` 解析后都在项目根内 |
+| `test_missing_wordlist_refuses_before_spawning_subprocess`（feroxbuster / dirsearch） | 文件缺失 → `config_error`，且 `_execute` **一次都没被调用**；经 `run()` 是结构化失败 |
+| `test_missing_wordlist_error_does_not_leak_into_unknown_error` | 错误码原样透出，不被兜底成 `unknown_error` |
+| `test_shuffledns_missing_wordlist_is_a_failure_not_an_empty_result` | shuffledns 不再 print + 空列表；dnsx **不被调用** |
+| `test_absent_wordlist_is_not_an_error` | `wordlist=None` 不算配置错误（dirsearch 默认形态） |
+| `test_error_code_config_error_is_declared_and_labelled` | `ErrorCode.ALL` 与 `app.js` 标签表都含 `config_error` |
+
+同时改了两处**原本会掩盖缺陷**的断言：`test_dirsearch_build_command` 原先断言
+`cmd[...] == "words.txt"`（相对路径原样透传），现在断言解析后的绝对路径。
+
+验证（本轮实测）：
+
+```text
+$ python -m pytest -q -p no:warnings   # 715 passed, 2 skipped, 0 failures, 0 errors
+$ python -m ruff check .               # All checks passed!
+$ python -m mypy app.py core api jobs storage.py modules  # Success: no issues found in 59 source files
+$ node --check web/static/app.js       # 通过
+$ git diff --check                     # 退出码 0
+```
+
 

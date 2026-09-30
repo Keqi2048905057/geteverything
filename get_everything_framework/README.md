@@ -302,6 +302,17 @@ curl -OJ "http://127.0.0.1:5000/api/export/exp_<...>/download"
 > 或把 `config.py` 里各工具的 `wordlist` 指向你本机已有的字典。
 > `.gitignore` 已忽略该目录，下载后不会误提交。
 
+字典路径有两种合法形态，**都按项目根解析**（与启动时的当前工作目录无关）：
+
+| 方式 | 写法 | 适用 |
+|------|------|------|
+| 仓库相对路径 | `wordlist="SecLists/raft-small-directories.txt"`（默认值） | 字典就放在仓库的 `SecLists/` 下 |
+| 环境变量覆盖 | `SHUFFLEDNS_WORDLIST=D:\dicts\subdomains.txt` | 字典在别处，且不想改 `config.py` |
+
+`dirsearch` 的 `wordlist` 允许为 `None`：此时不加 `-w`，由工具使用自带字典。
+**配置了字典但文件不存在时会直接失败**（`error_code=config_error`），不会再像历史版本那样
+打完一行提示就返回空结果 —— 「字典没配好」和「跑通但零结果」必须能分开。
+
 #### 爬虫收集
 
 - **gospider** — 快速 Web 爬虫

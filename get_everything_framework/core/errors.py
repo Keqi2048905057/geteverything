@@ -27,6 +27,10 @@ class ErrorCode:
 
     # 非工具类错误码：本机联调版在 API 层直接使用。
     NO_RESULTS = "no_results"
+    # 配置指向的外部资源缺失（当前只有一处：字典文件不存在）。
+    # 语义上既不是「工具没装」（tool_not_found）也不是「目标非法」
+    # （invalid_target），而是**使用者的配置问题**，必须能单独报出来。
+    CONFIG_ERROR = "config_error"
     UNAUTHENTICATED = "unauthenticated"
     BAD_REQUEST = "bad_request"
     NOT_FOUND = "not_found"
@@ -45,6 +49,7 @@ class ErrorCode:
         PARTIAL_SUCCESS,
         UNKNOWN_ERROR,
         NO_RESULTS,
+        CONFIG_ERROR,
         UNAUTHENTICATED,
         BAD_REQUEST,
         NOT_FOUND,

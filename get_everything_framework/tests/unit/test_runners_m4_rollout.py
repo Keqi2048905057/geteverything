@@ -19,9 +19,12 @@ monkeypatch 掉），只验证：
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
+from core.errors import ErrorCode
+from core.runner_result import RunnerInputError
 from modules.registry import RUNNER_REGISTRY
 
 
@@ -432,6 +435,7 @@ def test_feroxbuster_parse_output_text_mode(results_dir, monkeypatch):
 
 
 def test_dirsearch_build_command(results_dir):
+    from config import _BASE_DIR
     from modules.url_tools import DirsearchRunner
 
     runner = DirsearchRunner()
@@ -440,7 +444,9 @@ def test_dirsearch_build_command(results_dir):
 
     assert cmd[cmd.index("-u") + 1] == "https://example.test"
     assert cmd[cmd.index("-o") + 1] == "out.txt"
-    assert cmd[cmd.index("-w") + 1] == "words.txt"
+    # 相对字典路径按**项目根**解析成绝对路径：worker / CLI 的工作目录不一定是
+    # 项目根，原样转发会让工具在别处找不到字典（M5 修的换机器可移植性问题）。
+    assert cmd[cmd.index("-w") + 1] == os.path.join(_BASE_DIR, "words.txt")
 
 
 def test_dirsearch_build_command_omits_empty_wordlist(results_dir):
@@ -519,6 +525,144 @@ def test_nmap_parse_output_reads_file(results_dir):
 
     assert values == ["80/tcp open http", "443/tcp open https"]
     assert error is None
+
+
+# ── 字典配置：换机器可移植 + 缺失即拒绝 ─────────────────────
+
+
+def test_wordlist_configs_are_portable():
+    """``config.py`` 里的字典必须是相对的仓库路径或本机环境变量，不是开发机绝对路径。
+
+    历史值 ``D:/c4/v2/backend/framework-main/SecLists/raft-small-directories.txt``
+    只在作者机器上存在，换机器必然失败（PROJECT_STATE.md Known Failure #5）；
+    而且失败长成「跑通但零结果」的样子，排查成本极高。
+    """
+    from config import _BASE_DIR, FEROXBUSTER_CONFIG, SHUFFLEDNS_CONFIG
+    from modules.base import BaseRunner
+
+    runner = BaseRunner({}, "portability-probe")
+    for label, config in (("shuffledns", SHUFFLEDNS_CONFIG), ("feroxbuster", FEROXBUSTER_CONFIG)):
+        wordlist = config["wordlist"]
+        assert wordlist, f"{label} 的 wordlist 不该为空"
+        resolved = runner._resolve_path(wordlist)
+        assert Path(resolved).is_absolute(), f"{label} 的字典没被解析成绝对路径"
+        # 相对路径必须落在项目根之内，绝不允许再出现别的开发机绝对路径。
+        if not os.path.isabs(wordlist):
+            inside = Path(os.path.normcase(resolved)).is_relative_to(Path(os.path.normcase(_BASE_DIR)))
+            assert inside, f"{label} 的相对字典没落在项目根: {resolved}"
+
+
+def test_every_configured_wordlist_path_resolves_under_project_root():
+    """``config.py`` 里所有 ``wordlist`` 都要落在项目根之内。
+
+    直接扫配置常量而不是构造 runner：部分 runner 的 ``__init__`` 会打开数据库，
+    而这个用例只想钉住路径本身。
+    """
+    import config
+
+    from modules.base import BaseRunner
+
+    runner = BaseRunner({}, "portability-probe")
+    seen = []
+    for name in sorted(dir(config)):
+        if not name.endswith("_CONFIG"):
+            continue
+        value = getattr(config, name)
+        if not isinstance(value, dict) or not value.get("wordlist"):
+            continue
+        seen.append(name)
+        resolved = runner._resolve_path(value["wordlist"])
+        assert os.path.isabs(resolved)
+        assert resolved.startswith(config._BASE_DIR), f"{name} 的字典跑到项目根之外: {resolved}"
+
+    # 三处声明字典的工具都要被覆盖到，避免用例空转。
+    assert {"SHUFFLEDNS_CONFIG", "FEROXBUSTER_CONFIG"} <= set(seen)
+
+
+@pytest.mark.parametrize("tool_name", ["feroxbuster", "dirsearch"])
+def test_missing_wordlist_refuses_before_spawning_subprocess(tool_name, results_dir, monkeypatch):
+    """配置写了字典但文件不存在 → ``config_error``，且**不启动子进程**。
+
+    这是 M4「不许把失败降级成空结果」在字典这条路径上的落地：历史实现要么把
+    坏路径直接塞进 ``-w``，要么打一行提示就 ``return []``。
+    """
+    runner = RUNNER_REGISTRY[tool_name]()
+    runner.config = dict(runner.config, wordlist=os.path.join(results_dir, "nope.txt"))
+    calls = []
+
+    def boom(cmd, domain):
+        calls.append(cmd)
+        return True
+
+    monkeypatch.setattr(runner, "_execute", boom)
+
+    with pytest.raises(RunnerInputError) as excinfo:
+        runner.run_scan("example.test")
+
+    assert excinfo.value.error_code == ErrorCode.CONFIG_ERROR
+    assert calls == [], f"{tool_name} 在字典缺失时仍然启动了子进程"
+
+    # 走统一入口 run() 时必须变成结构化失败，而不是裸异常或空结果。
+    result = runner.run("example.test")
+    assert result.error_code == ErrorCode.CONFIG_ERROR
+    assert result.is_failure
+    assert result.data == []
+
+
+def test_missing_wordlist_error_does_not_leak_into_unknown_error(results_dir, monkeypatch):
+    """错误码要原样透出（不能被 ``run()`` 兜底成 ``unknown_error``）。"""
+    runner = RUNNER_REGISTRY["feroxbuster"]()
+    runner.config = dict(runner.config, wordlist=os.path.join(results_dir, "nope.txt"))
+    monkeypatch.setattr(runner, "_execute", lambda cmd, domain: True)
+
+    result = runner.run("example.test")
+
+    assert result.error_code == ErrorCode.CONFIG_ERROR
+    assert "字典" in (result.error_message or "")
+
+
+def test_shuffledns_missing_wordlist_is_a_failure_not_an_empty_result(results_dir, monkeypatch):
+    """shuffledns 的历史实现是 ``print`` + ``return []``：必须改成显式失败。"""
+    from modules.shuffledns import ShufflednsRunner
+
+    runner = ShufflednsRunner()
+    runner.config = dict(runner.config, wordlist=os.path.join(results_dir, "nope.txt"))
+    dnsx_calls = []
+
+    monkeypatch.setattr(runner, "_run_dnsx", lambda *a, **kw: dnsx_calls.append(a) or (0, "", ""))
+
+    with pytest.raises(RunnerInputError) as excinfo:
+        runner.run_scan("example.test")
+
+    assert excinfo.value.error_code == ErrorCode.CONFIG_ERROR
+    assert dnsx_calls == [], "字典缺失时不该调用 dnsx"
+
+    result = runner.run("example.test")
+    assert result.error_code == ErrorCode.CONFIG_ERROR
+    assert result.is_failure
+
+
+def test_absent_wordlist_is_not_an_error(results_dir, monkeypatch):
+    """``wordlist=None`` 是合法形态（dirsearch 用自己的默认字典），不算配置错误。"""
+    runner = RUNNER_REGISTRY["dirsearch"]()
+    runner.config = dict(runner.config, wordlist=None)
+
+    assert runner.require_wordlist() is None
+
+    monkeypatch.setattr(runner, "_execute", lambda cmd, domain: False)
+    # 走到 _execute 才返回，说明没有在字典校验上被拦下来。
+    assert runner.run_scan("example.test") == []
+
+
+def test_error_code_config_error_is_declared_and_labelled():
+    """新增错误码必须同时出现在常量表与前端标签表里，避免前端显示成裸字符串。"""
+    from core.errors import ErrorCode
+
+    assert ErrorCode.CONFIG_ERROR == "config_error"
+    assert "config_error" in ErrorCode.ALL
+
+    app_js = Path(__file__).resolve().parents[2] / "web" / "static" / "app.js"
+    assert "config_error" in app_js.read_text(encoding="utf-8")
 
 
 # ── 统一行为的横切验证 ────────────────────────────────────

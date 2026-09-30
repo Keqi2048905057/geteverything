@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 剩余项待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · M5 剩余项待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 剩余 ⬜ → M6 🔄**
-- 更新日期：2026-10-02（M7 mypy 清零 + Diff 条目可点轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → M5 剩余 ⬜ → M6 🔄**
+- 更新日期：2026-10-02（M5 字典路径可移植性 + 缺失即显式失败轮）
 
 ---
 
@@ -178,7 +178,8 @@
 
 **其他待办（不在里程碑内，但已知）**
 - [x] `README.md` 未同步 M1～M4（已重写鉴权表、`upload_id`、导出下载示例）
-- [ ] `config.py` 中 `FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径，换机器必失败
+- [x] `config.py` 中 `FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径（已修：改为仓库相对路径 +
+  `FEROXBUSTER_WORDLIST` 覆盖；字典缺失时以 `config_error` 明确失败，不再静默零结果）
 - [ ] `/api/tools` / `/api/results` / `/api/export` / `/api/exports` 等只读接口仍匿名可读（见 DECISIONS-D，已用测试锁定现状）
 - [ ] `/api/jobs` 只有 `limit`，没有游标分页
 - [ ] 单并发 worker：`SCAN_LIMITS["max_concurrency"] = 2` 是未使用的配置项
@@ -200,7 +201,7 @@
 | 2 | ~~`/api/export` 返回服务器文件路径~~ **本轮已修** | `api/results.py` + `core/exports.py` | 现在只返回 `export_id` / `filename` / `download_url`；有契约测试锁定 |
 | 3 | `/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports` 匿名可读 | `api/tools.py`、`api/results.py` | 未授权即可读到扫描结果与库元信息；**按 DECISIONS-D 故意保持**，已用 `test_api_auth_contract.py` 锁定现状 |
 | 4 | 旧库并发写 `database is locked` | `storage.py` | **已缓解**：连接级 `busy_timeout=5000`；仍无 WAL（WAL 属迁移范畴，未动） |
-| 5 | `FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径 | `config.py:236` | 换机器后 feroxbuster 直接失败 |
+| 5 | ~~`FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径~~ **已修** | `config.py` | 改为仓库相对路径 + `FEROXBUSTER_WORDLIST` 覆盖，路径统一按项目根解析；字典缺失时 `error_code=config_error`（**仍不分发字典**，需自行下载或指环境变量） |
 | 6 | `HTTPX_CONFIG.path` 默认 `"http-x"` | `config.py` | 本机靠 `E:\GoWorkspace\bin\http-x.cmd` 包装脚本指向 `httpx.exe` 才能跑；裸环境会 `tool_not_found` |
 | 7 | ~~`python -m pytest` 有 2 条 warning~~ **本轮已清零** | — | 见下节「已修的两条 warning」 |
 | 8 | `agent/client.py`、`agent/providers/*` 无任何调用方 | `agent/` | 「LLM 规划」实际由正则 + 模板决定，**不调用大模型**；「模型超时/返回格式错」类症状在当前路径不可达 |
@@ -287,16 +288,17 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（M7 mypy 清零轮）
+验证时间：2026-10-02（M5 字典可移植性轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 707 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
-mypy:   Success: no issues found in 59 source files        ← M7 验收命令，本轮由 34 errors 清零
+pytest: 715 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+mypy:   Success: no issues found in 59 source files        ← M7 验收命令，仍为 0
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
+git diff --check: 退出码 0
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → **M7 `707`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → **M5 字典可移植 `715`**
 
 ---
 
@@ -349,7 +351,8 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
 2. **M5 剩余**（§11 统一执行链需授权，见 `docs/DECISIONS.md` §3）：资产过期自动化、观测 `data_json` 按字段拆列、
    旧库真实迁移（等你手动 `--apply`）。
 3. **顺手可做（不需要决策）**：
-   - 修 `config.py` 里 `FEROXBUSTER_CONFIG.wordlist` 的开发机绝对路径；
+   - ~~修 `config.py` 里 `FEROXBUSTER_CONFIG.wordlist` 的开发机绝对路径~~ —— **已修（M5，
+     连同「字典缺失不再静默空结果」一起）**；
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
    - M7 剩两项：SQLite 并发测试、本地 fixture HTTP 测试，以及一份测试报告。
 4. **改完代码记得**：刷新 `docs/CODEBASE_MAP.md` 对应章节与 `last-mapped`，更新 `CHANGELOG.md`，
@@ -362,7 +365,7 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 707 passed, 2 skipped
+python -m pytest                                      # 期望 715 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
 ```
 

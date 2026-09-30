@@ -25,11 +25,12 @@ import subprocess
 import tempfile
 import time
 
-from config import OUTPUT_DIR, SCAN_LIMITS
+from config import _BASE_DIR, OUTPUT_DIR, SCAN_LIMITS
 
 from core.errors import ErrorCode
 from core.runner_result import (
     Observation,
+    RunnerInputError,
     RunnerResult,
     ToolHealth,
     result_from_exception,
@@ -143,6 +144,53 @@ class BaseRunner:
         解析发生在 :meth:`run_scan` 内部，因此这里只作为扩展点。
         """
         return []
+
+    # ── 外部配置资源校验（字典等） ──────────────────────────
+
+    def _resolve_path(self, path: str) -> str:
+        """把配置里的相对路径解析到项目根，绝对路径原样返回。
+
+        ``config.py`` 里的路径是「相对于项目根」写的（``_BASE_DIR``），
+        而 worker / pytest / CLI 的当前工作目录都不一定是项目根，
+        因此这里统一按项目根解析，避免同一条配置在不同入口下指向不同文件。
+        """
+        if os.path.isabs(path):
+            return path
+        return os.path.normpath(os.path.join(_BASE_DIR, path))
+
+    def require_path(self, path, *, label: str, flag: str | None = None) -> None:
+        """校验配置里声明的外部文件存在；缺失时**在启动子进程之前**拒绝执行。
+
+        历史行为是「打一行 ``[!] 文件不存在`` 然后 ``return []``」——调用方
+        拿到的是与「跑通但零结果」完全一样的空列表（``AGENTS.md`` 高频坑 #1）。
+        这里改成抛 :class:`RunnerInputError`，由 :meth:`run` 翻译成带
+        ``error_code`` 的结构化失败，前端能直接看到「字典没配好」而不是空结果。
+
+        Raises:
+            RunnerInputError: 路径指向的文件不存在（``config_error``）。
+        """
+        resolved = self._resolve_path(path)
+        if os.path.isfile(resolved) or os.path.isdir(resolved):
+            return
+        where = f"（{flag}）" if flag else ""
+        raise RunnerInputError(
+            ErrorCode.CONFIG_ERROR,
+            f"{self.tool_name} 的{label}{where}指向的文件不存在: {path}"
+            f"（已按项目根解析为 {resolved}，请下载字典或把它指向本机已有文件）",
+        )
+
+    def require_wordlist(self) -> str | None:
+        """校验配置中的 ``wordlist``，返回**解析后**的绝对路径。
+
+        ``wordlist`` 未配置或为空时返回 ``None``（表示「不加 ``-w``」，
+        这是 dirsearch 的合法形态，不是错误）；配置了却不存在则抛
+        :class:`RunnerInputError`，绝不让一个不存在的路径进入子进程命令行。
+        """
+        wordlist = self.config.get("wordlist")
+        if not wordlist:
+            return None
+        self.require_path(wordlist, label="字典 wordlist", flag="-w")
+        return self._resolve_path(wordlist)
 
     def run(self, target, options=None, context=None) -> RunnerResult:
         """执行一次扫描并返回结构化结果（**推荐入口**）。

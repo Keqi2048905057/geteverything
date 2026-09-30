@@ -178,7 +178,9 @@ ASSETFINDER_CONFIG = build_tool_config(
 
 SHUFFLEDNS_CONFIG = build_tool_config(
     "shuffledns", "subdomain",
-    wordlist="SecLists/subdomains-top1million-5000.txt",
+    # 相对路径按项目根（``_BASE_DIR``）解析，不按当前工作目录；
+    # 换机器时用 ``SHUFFLEDNS_WORDLIST`` 指向本机已有的字典即可。
+    wordlist=os.getenv("SHUFFLEDNS_WORDLIST", "SecLists/subdomains-top1million-5000.txt"),
 )
 
 ALTERX_CONFIG = build_tool_config("alterx", "subdomain")
@@ -233,7 +235,10 @@ WAYBACKURLS_CONFIG = build_tool_config("waybackurls", "url")
 
 FEROXBUSTER_CONFIG = build_tool_config(
     "feroxbuster", "url",
-    wordlist="D:/c4/v2/backend/framework-main/SecLists/raft-small-directories.txt",
+    # 历史值是开发机绝对路径 ``D:/c4/v2/.../raft-small-directories.txt``，
+    # 换机器必然失败（PROJECT_STATE.md Known Failure #5）。改为仓库相对路径，
+    # 并用 ``FEROXBUSTER_WORDLIST`` 允许指向本机已有字典。
+    wordlist=os.getenv("FEROXBUSTER_WORDLIST", "SecLists/raft-small-directories.txt"),
     json_output=True,
 )
 

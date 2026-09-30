@@ -85,10 +85,17 @@ class ShufflednsRunner(BaseRunner):
             return None, "", ""
 
     def _bruteforce_with_dnsx(self, wordlist, domain):
-        """读字典 → 拼出 <word>.<domain> 候选 → dnsx 解析"""
-        if not os.path.exists(wordlist):
-            print(f"[!] 字典文件不存在: {wordlist}")
-            return []
+        """读字典 → 拼出 <word>.<domain> 候选 → dnsx 解析
+
+        Raises:
+            RunnerInputError: 字典文件不存在。历史实现只打一行 ``[!] 字典文件
+                不存在`` 然后 ``return []``，调用方拿到的是与「跑通但零结果」
+                完全一样的空列表 —— 正是 M4 要消灭的那类静默故障。
+        """
+        # 字典不存在属于**配置问题**，必须在启动 dnsx 之前就报出来。
+        self.require_path(wordlist, label="字典 wordlist")
+        # 相对路径按项目根解析（worker / CLI 的工作目录不一定是项目根）。
+        wordlist = self._resolve_path(wordlist)
 
         # 读字典, 拼成完整子域
         candidates = []
@@ -280,7 +287,9 @@ class ShufflednsRunner(BaseRunner):
     def run_scan(self, domain):
         """执行 shuffledns 混合模式扫描"""
         # 1. 字典爆破
-        wordlist = self.config.get("wordlist")
+        # 配置里写了字典却不存在时，require_wordlist() 会在这里就抛
+        # RunnerInputError（config_error），而不是静默跳过爆破继续往下走。
+        wordlist = self.require_wordlist()
         brute_results = []
         if wordlist:
             brute_results = self._bruteforce_with_dnsx(wordlist, domain)

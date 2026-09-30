@@ -145,9 +145,11 @@ class FeroxbusterRunner(BaseRunner):
         ]
         if self.config.get("json_output"):
             cmd.append("--json")
-        wordlist = self.config.get("wordlist")
+        wordlist = options.get("wordlist") or self.config.get("wordlist")
         if wordlist:
-            cmd.extend(["-w", wordlist])
+            # 字典路径按项目根解析：调用方（worker / CLI）的工作目录不一定是
+            # 项目根，直接用配置里的相对路径会让 feroxbuster 在别处找不到文件。
+            cmd.extend(["-w", self._resolve_path(wordlist)])
         cmd.extend(self.config.get("extra_args", []))
         return cmd
 
@@ -176,8 +178,11 @@ class FeroxbusterRunner(BaseRunner):
         return list(dict.fromkeys(urls))
 
     def run_scan(self, domain):
+        # 字典缺失时在**启动子进程之前**拒绝执行：历史实现会把一个不存在的
+        # ``-w`` 路径直接交给 feroxbuster，失败又被降级成空结果。
+        wordlist = self.require_wordlist()
         output_file = self._build_output_file(domain)
-        cmd = self.build_command(domain, {"output_file": output_file})
+        cmd = self.build_command(domain, {"output_file": output_file, "wordlist": wordlist})
 
         if not self._execute(cmd, domain):
             return []
@@ -202,9 +207,9 @@ class DirsearchRunner(BaseRunner):
             "-o",
             output_file,
         ]
-        wordlist = self.config.get("wordlist")
+        wordlist = options.get("wordlist") or self.config.get("wordlist")
         if wordlist:
-            cmd.extend(["-w", wordlist])
+            cmd.extend(["-w", self._resolve_path(wordlist)])
         cmd.extend(self.config.get("extra_args", []))
         return cmd
 
@@ -218,8 +223,11 @@ class DirsearchRunner(BaseRunner):
         return [line.strip() for line in (stdout or "").splitlines() if line.strip()], None
 
     def run_scan(self, domain):
+        # 未配字典（``wordlist=None``）是合法形态：dirsearch 会用自己的默认字典；
+        # 配了却不存在则必须报错，不能把一个坏路径塞进命令行换个空结果回来。
+        wordlist = self.require_wordlist()
         output_file = self._build_output_file(domain)
-        cmd = self.build_command(domain, {"output_file": output_file})
+        cmd = self.build_command(domain, {"output_file": output_file, "wordlist": wordlist})
 
         if not self._execute(cmd, domain):
             return []
