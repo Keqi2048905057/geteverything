@@ -448,6 +448,12 @@ class BaseRunner:
            其它平台用进程组）；
         3. 再 ``communicate()`` 一次把残留输出读干净，然后如实抛
            ``TimeoutExpired``，让上层记成 ``timeout`` 而不是「神秘地卡住」。
+
+        POSIX 下必须让子进程**另起进程组**（``start_new_session=True``）：
+        默认情况下子进程与 worker 同属一个进程组，此时 ``_kill_process_tree``
+        里的 ``os.killpg(os.getpgid(child))`` 会把 worker 自己也一起 ``SIGKILL``
+        掉。Windows 不支持 ``start_new_session``（会被忽略），那边靠
+        ``taskkill /T`` 按进程树清理，不依赖进程组。
         """
         process = subprocess.Popen(
             cmd,
@@ -456,6 +462,7 @@ class BaseRunner:
             text=True,
             encoding="utf-8",
             errors="replace",
+            start_new_session=os.name != "nt",
         )
         try:
             stdout, stderr = process.communicate(timeout=timeout)
@@ -706,6 +713,12 @@ def _kill_process_tree(process) -> None:
     会留下真正在跑的工具当孤儿（它会一直占着 stdout/stderr 管道，导致
     ``communicate()`` 永不返回）。``taskkill /T`` 按进程树清理，是 Windows
     上唯一可靠的做法；POSIX 下则用进程组。
+
+    POSIX 分支有一处致命陷阱：只有当子进程处在一个**独立于 worker 的**进程组时，
+    ``killpg`` 才是安全的。若两者同组（Popen 没传 ``start_new_session=True``，
+    或调用方自己造了 Popen），``killpg`` 会连 worker 一起 ``SIGKILL``。
+    这里显式比一次进程组，跨平台都无法绕过 —— 宁可只杀直接子进程，
+    也不能把调用方自己杀掉。
     """
     if process.poll() is not None:
         return
@@ -720,9 +733,15 @@ def _kill_process_tree(process) -> None:
             pass
     else:  # pragma: no cover - 平台分支
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            child_pgid = os.getpgid(process.pid)
+            own_pgid = os.getpgid(0)
         except (OSError, AttributeError):
-            pass
+            child_pgid = own_pgid = None
+        if child_pgid is not None and child_pgid != own_pgid:
+            try:
+                os.killpg(child_pgid, signal.SIGKILL)
+            except (OSError, AttributeError):
+                pass
     try:
         process.kill()
     except OSError:

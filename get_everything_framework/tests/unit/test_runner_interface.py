@@ -14,8 +14,10 @@
 """
 
 import os
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -363,6 +365,81 @@ def test_resolve_command_wraps_cmd_files_with_comspec(tmp_path):
     assert resolved[1] == "/c"
     assert resolved[2] == str(script)
     assert resolved[3:] == ["-d", "example.test"]
+
+
+# ── 杀进程树不能把调用方自己杀掉（POSIX 进程组陷阱） ─────────
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 进程组语义")
+def test_run_subprocess_detaches_child_process_group(output_dir):
+    """子进程必须另起进程组，否则杀它时会把 worker 一起 SIGKILL。
+
+    POSIX 下 ``Popen`` 默认让子进程继承父进程的进程组，此时
+    ``os.killpg(os.getpgid(child), SIGKILL)`` 的杀伤范围包含 worker 自己。
+    这条断言直接盯住 ``start_new_session=True`` 这个前提。
+    """
+    import modules.base as base_module
+
+    captured = {}
+    original_popen = base_module.subprocess.Popen
+
+    class _Recording:
+        def __init__(self, *args, **kwargs):
+            captured.update(kwargs)
+            self._inner = original_popen(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    base_module.subprocess.Popen = _Recording
+    try:
+        _PythonToolRunner(_WRITE_TWO_LINES).run("example.test")
+    finally:
+        base_module.subprocess.Popen = original_popen
+
+    assert captured.get("start_new_session") is True, (
+        "POSIX 下必须 start_new_session=True，否则 _kill_process_tree 的 killpg 会自杀"
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 进程组语义")
+def test_kill_process_tree_never_kills_own_process_group(output_dir, tmp_path):
+    """回归测试：与调用方同组的子进程，只能被 ``kill()``，不能走 ``killpg``。
+
+    旧实现无条件 ``killpg(os.getpgid(child))``，而同组时这会连调用方一起
+    ``SIGKILL``。所以这里**不能**直接在 pytest 进程里验证 —— 一旦实现退回
+    旧行为，被杀的会是 pytest 自己，测试不是失败而是整个进程消失。
+    改为把这段逻辑放进一个独立子进程跑，再看它的退出状态：
+    正常退出 = 安全；被信号杀死 = 缺陷回来了。
+    """
+    probe = tmp_path / "pgid_probe.py"
+    probe.write_text(
+        "import os, subprocess, sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from modules.base import _kill_process_tree\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "assert os.getpgid(child.pid) == os.getpgid(0), 'probe 前置条件：同组'\n"
+        "before = os.getpid()\n"
+        "_kill_process_tree(child)\n"
+        "child.wait(timeout=10)\n"
+        "assert os.getpid() == before\n"
+        "print('SURVIVED')\n",
+        encoding="utf-8",
+    )
+    project_root = str(Path(__file__).resolve().parents[2])
+
+    completed = subprocess.run(
+        [sys.executable, str(probe), project_root],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert completed.returncode == 0, (
+        f"探针进程非正常退出（returncode={completed.returncode}，"
+        f"负数即被信号杀死）：{completed.stderr[-500:]}"
+    )
+    assert "SURVIVED" in completed.stdout
 
 
 def _count_marker_processes() -> int:
