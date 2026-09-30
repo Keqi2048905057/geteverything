@@ -49,14 +49,20 @@ def test_config_has_no_hardcoded_default_secret():
 
 
 def test_resolve_secret_key_is_stable_within_process(monkeypatch):
-    """同进程内必须返回同一个密钥，否则会话会随机失效。"""
+    """同进程内必须返回同一个密钥，否则会话会随机失效。
+
+    这个用例**故意**让 ``SECRET_KEY`` 为空，因此一定会触发
+    「已生成一次性密钥」的告警 —— 用 ``pytest.warns`` 显式断言它，
+    既锁定了这条安全提示确实存在，也不再让它污染测试输出。
+    """
     import config
 
     monkeypatch.setattr(config.Config, "SECRET_KEY", "", raising=False)
     import core.security as security
 
     monkeypatch.setattr(security, "_EPHEMERAL_SECRET", None, raising=False)
-    first = resolve_secret_key()
+    with pytest.warns(RuntimeWarning, match="一次性会话密钥"):
+        first = resolve_secret_key()
     second = resolve_secret_key()
     assert first == second
     assert len(first) >= MIN_SECRET_LENGTH

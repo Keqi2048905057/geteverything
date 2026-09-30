@@ -6,11 +6,43 @@
 import csv
 import json
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
 from config import EXPORT_DIR
 from storage import ScanResultStore
+
+# 文件名前缀白名单：只保留字母/数字/点/下划线/连字符。
+# ``prefix`` 直接来自查询参数（如 ``?domain=...``），若原样拼进文件名，
+# ``?domain=../../evil`` 就能把文件写到 EXPORT_DIR 之外（路径穿越）。
+_UNSAFE_PREFIX_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+# 连续的点也要折叠：``..`` 在 Windows/Unix 的文件名里都仍有穿越语义。
+_DOT_RUN = re.compile(r"\.{2,}")
+MAX_PREFIX_LENGTH = 64
+
+
+def safe_prefix(value: str | None, default: str = "results") -> str:
+    """把任意字符串清洗为可安全用作文件名前缀的值。
+
+    规则（顺序执行，缺一不可）：
+
+    1. 只保留 ``[A-Za-z0-9._-]``，其余字符替换为 ``_``；
+    2. 把连续的点 ``..`` 折叠成单个 ``.``；
+    3. 去掉首尾的 ``.`` 与 ``_``（避免隐藏文件与 ``..`` 残留）；
+    4. 为空时回落到 ``default``；过长则截断到 :data:`MAX_PREFIX_LENGTH`。
+
+    Args:
+        value: 原始前缀（通常来自未受信任的查询参数）。
+        default: 清洗后为空时使用的兜底值。
+
+    Returns:
+        str: 可安全拼接进文件名的前缀。
+    """
+    text = _UNSAFE_PREFIX_CHARS.sub("_", str(value or "").strip())
+    text = _DOT_RUN.sub(".", text)
+    text = text.strip("._")[:MAX_PREFIX_LENGTH]
+    return text or default
 
 
 def ensure_export_dir() -> None:
@@ -91,12 +123,15 @@ def export_results(rows: List[Dict[str, Any]], fmt: str = "csv", prefix: str = "
     Raises:
         ValueError: 不支持的导出格式。
     """
+    if fmt not in ("csv", "json"):
+        # 先校验格式再落盘：非法 fmt 会直接拼出一个奇怪扩展名的文件。
+        raise ValueError("暂不支持该导出格式")
+
     ensure_export_dir()
 
-    # 使用时间戳生成唯一文件名
+    # 使用时间戳生成唯一文件名；prefix 来自调用方，必须先清洗（防路径穿越）。
     ts = time.strftime("%Y%m%d_%H%M%S")
-    fmt = (fmt or "csv").lower().strip()
-    filename = f"{prefix}_{ts}.{fmt}"
+    filename = f"{safe_prefix(prefix)}_{ts}.{fmt}"
     path = os.path.join(EXPORT_DIR, filename)
 
     if fmt == "json":
@@ -104,13 +139,10 @@ def export_results(rows: List[Dict[str, Any]], fmt: str = "csv", prefix: str = "
             json.dump(rows, handle, ensure_ascii=False, indent=2)
         return path
 
-    if fmt == "csv":
-        # 从数据中动态提取所有字段名
-        fieldnames = sorted({key for row in rows for key in row.keys()}) if rows else ["domain", "tool_name", "category", "value", "created_at"]
-        with open(path, "w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-        return path
-
-    raise ValueError("暂不支持该导出格式")
+    # 从数据中动态提取所有字段名
+    fieldnames = sorted({key for row in rows for key in row.keys()}) if rows else ["domain", "tool_name", "category", "value", "created_at"]
+    with open(path, "w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path

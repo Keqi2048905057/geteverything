@@ -53,19 +53,35 @@ def build_passive_plan(target: Optional[str] = None) -> AgentPlan:
 
 
 def build_uploaded_file_plan(intent: UserIntent, uploaded_file: Optional[Dict[str, Any]]) -> AgentPlan:
+    """基于受控上传记录生成批量目标计划（P0-3）。
+
+    只接受 ``upload_id``：任意 ``file_path`` 已被明令废弃（方案 P0-3）。
+    上传记录里若只有旧的 ``file_path``（本版本不会再有），一律拒绝并提示重传。
+    """
     if not uploaded_file:
         return strategy_message("我没有找到最近上传的目标文件，请先上传 .txt 或 .csv 目标列表。")
 
+    upload_id = str(uploaded_file.get("upload_id") or "").strip()
+    if not upload_id:
+        if uploaded_file.get("file_path"):
+            return strategy_message(
+                "检测到旧版上传记录（含任意 file_path）。为安全起见已停用该路径，"
+                "请通过 POST /api/upload 重新上传目标文件以获取 upload_id。"
+            )
+        return strategy_message("上传记录缺少 upload_id，请重新上传目标文件。")
+
+    target_count = uploaded_file.get("target_count")
+    count_text = f"{target_count} 个" if target_count else "若干"
     return AgentPlan(
-        target=f"上传文件：{uploaded_file['file_path']}",
+        target=f"上传文件：{upload_id}",
         strategy="批量目标子域名收集",
         requires_confirmation=True,
         steps=[
             PlanStep(
                 id="subdomain",
                 tool="subdomain",
-                args={"file_path": uploaded_file["file_path"], "tool": "subfinder"},
-                description=f"对上传文件中的 {uploaded_file['target_count']} 个目标执行子域名收集",
+                args={"upload_id": upload_id, "tool": "subfinder"},
+                description=f"对上传文件中的 {count_text}目标执行子域名收集",
             )
         ],
     )

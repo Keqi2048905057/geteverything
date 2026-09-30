@@ -106,9 +106,28 @@ def test_upload_returns_controlled_id_not_path(admin_client):
 
 
 def test_upload_over_limit_is_rejected(admin_client):
-    """M2 验收：上传 2 MB 以上文件被拒绝（Flask MAX_CONTENT_LENGTH → 413）。"""
-    oversized = b"example.test\n" * 200_000  # ≈ 2.8 MB
-    resp = _upload(admin_client, content=oversized)
+    """M2 验收：上传 2 MB 以上文件被拒绝（Flask MAX_CONTENT_LENGTH → 413）。
+
+    这里**手工拼 multipart 字节串**而不是把 dict 交给测试客户端：
+    Werkzeug 的 ``stream_encode_multipart`` 在 body 超过 500KB 时会创建一个
+    ``TemporaryFile("wb+")`` 且从不关闭（``EnvironBuilder.close()`` 只关
+    ``self.files``），于是 pytest 会报一条 ``unclosed file`` 的
+    ``ResourceWarning``。那条告警来自测试工具本身、不是项目代码，
+    但要定位它得先排除掉：直接发 bytes 时走 ``BytesIO``，不落盘。
+    """
+    boundary = "----GetEverythingBoundary"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="targets.txt"\r\n'
+        "Content-Type: text/plain\r\n\r\n"
+    ).encode() + b"example.test\n" * 200_000 + f"\r\n--{boundary}--\r\n".encode()  # ≈ 2.8 MB
+    assert len(body) > 2 * 1024 * 1024  # 确实超过 2 MB 上限
+
+    resp = admin_client.post(
+        "/api/upload",
+        data=body,
+        content_type=f"multipart/form-data; boundary={boundary}",
+    )
     assert resp.status_code == 413
     assert resp.get_json()["ok"] is False
 

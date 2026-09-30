@@ -130,66 +130,119 @@ curl http://127.0.0.1:5000/api/tools
 
 所有接口统一前缀 `/api`，数据格式 JSON。完整文档可调用 `GET /api/tools` 自行探查。
 
+**鉴权现状（重要）**：除 `/health` 外，**修改/执行类**接口都要求本地管理员
+身份（请求头 `X-Local-Token: <Token>`，或先 `POST /api/auth/login` 建立会话）。
+以下三个**只读**接口目前仍然**匿名可读**，这是有意保持的现状，属已知项：
+`GET /api/tools`、`GET /api/results`、`GET /api/export`。
+它们的契约由 `tests/integration/test_export_contract.py` 锁定；若要收口鉴权，
+需先改动该测试并同步 `SECURITY.md`。
+
 ### 工具与数据库
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/tools` | 列出所有可用扫描工具及其数据库信息 |
-| GET | `/api/databases` | 列出所有工具数据库表的元信息 |
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/api/tools` | 匿名可读（已知项） | 列出所有可用扫描工具及其数据库信息 |
+| GET | `/api/databases` | 匿名可读（已知项） | 列出所有工具数据库表的元信息 |
 
 ### 扫描执行
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/run` | 批量扫描（多工具编排，支持 domain 或 file_path） |
-| POST | `/api/tool/<tool_name>/run` | 单工具扫描（指定目标域名） |
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| POST | `/api/run` | 需登录 | 批量扫描（多工具编排，目标用 `domain` 或受控 `upload_id`） |
+| POST | `/api/tool/<tool_name>/run` | 需登录 | 单工具扫描（指定目标域名） |
+
+> `file_path` 已废弃：传任意服务器路径一律 400，必须先用 `POST /api/upload`
+> 拿到受控 `upload_id`。
+
+### 任务（Job，M3 起为异步执行）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| POST | `/api/jobs` | 需登录 | 创建任务（必填 `scope_id`，目标须在 Scope 内） |
+| GET | `/api/jobs` | 需登录 | 任务列表 |
+| GET | `/api/jobs/<job_id>` | 需登录 | 任务详情（含进度与错误码） |
+| POST | `/api/jobs/<job_id>/cancel` | 需登录 | 请求取消 |
+| POST | `/api/jobs/<job_id>/retry` | 需登录 | 重试（interrupted / failed） |
+| GET | `/api/jobs/<job_id>/steps` | 需登录 | 步骤与结构化观测 |
+| GET | `/api/jobs/<job_id>/events` | 需登录 | 任务事件流 |
+| GET | `/api/jobs/<job_id>/artifacts` | 需登录 | 原始证据登记（不含服务器路径） |
+| GET | `/api/artifacts/<artifact_id>` | 需登录 | 读取**截断 + 脱敏**后的证据文本 |
 
 ### 结果查询与导出
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/results` | 通用结果查询（domain/tool/category 多维过滤） |
-| GET | `/api/tool/<tool_name>/results` | 单工具专属表查询 |
-| GET | `/api/export` | 导出 CSV / JSON 文件 |
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/api/results` | 匿名可读（已知项） | 通用结果查询（domain/tool/category 多维过滤） |
+| GET | `/api/tool/<tool_name>/results` | 匿名可读（已知项） | 单工具专属表查询 |
+| GET | `/api/export` | 匿名可读（已知项） | 生成导出文件，返回 `export_id` + `download_url`（**不返回服务器路径**） |
+| GET | `/api/export/<export_id>/download` | 匿名可读（已知项） | 下载导出文件（流式，`Content-Disposition: attachment`） |
+| GET | `/api/exports` | 匿名可读（已知项） | 导出记录列表（可追溯：格式 / 行数 / 大小 / sha256） |
 
 ### 配置管理
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/settings` | 读取系统配置（API Key 脱敏） |
-| POST | `/api/settings` | 保存配置到 `.env` |
-| GET | `/api/settings/enscan` | 读取 ENScan 数据源 Cookie |
-| POST | `/api/settings/enscan` | 保存 ENScan Cookie 到 `config.yaml` |
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| GET | `/api/settings` | 需登录 | 读取系统配置（API Key 脱敏） |
+| POST | `/api/settings` | 需登录 | 保存配置到 `.env` |
+| GET | `/api/settings/enscan` | 需登录 | 读取 ENScan 数据源 Cookie |
+| POST | `/api/settings/enscan` | 需登录 | 保存 ENScan Cookie 到 `config.yaml` |
+
+### 授权范围（Scope）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| POST | `/api/scopes` | 需登录 | 创建授权范围（域名 / CIDR / 排除项 / `active_scan`） |
+| GET | `/api/scopes` | 需登录 | 列出授权范围 |
+| GET | `/api/scopes/<scope_id>` | 需登录 | 查看单个授权范围 |
 
 ### 目标管理
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/upload` | 上传目标文件（`.txt`/`.csv`/`.xlsx`/`.json`），返回归一化路径可直接喂给 `/api/run` |
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| POST | `/api/upload` | 需登录 | 上传目标文件（`.txt`/`.csv`/`.xlsx`/`.json`），返回受控 `upload_id` |
 
 ### 调用示例
+
+**创建授权范围（Scope）：**
+```bash
+curl -X POST http://127.0.0.1:5000/api/scopes \
+  -H "Content-Type: application/json" \
+  -H "X-Local-Token: <你的 Token>" \
+  -d '{"name":"本地测试范围","allowed_domains":["example.test"],"active_scan":false}'
+```
 
 **批量扫描：**
 ```bash
 curl -X POST http://127.0.0.1:5000/api/run \
   -H "Content-Type: application/json" \
-  -d '{"domain": "example.com", "tools": ["subfinder", "dnsx"]}'
+  -H "X-Local-Token: <你的 Token>" \
+  -d '{"domain": "example.test", "tools": ["subfinder", "dnsx"], "scope_id": "<scope_id>"}'
 ```
 
 **结果查询：**
 ```bash
-curl "http://127.0.0.1:5000/api/results?domain=example.com&category=subdomain&limit=100"
+curl "http://127.0.0.1:5000/api/results?domain=example.test&category=subdomain&limit=100"
 ```
 
-**目标文件上传 + 扫描：**
+**目标文件上传 + 扫描（受控 upload_id，不再有 file_path）：**
 ```bash
-# 1. 上传
-curl -F "file=@targets.txt" http://127.0.0.1:5000/api/upload
+# 1. 上传，返回 {"upload_id": "upload_<uuid4hex>", "target_count": N, ...}
+curl -H "X-Local-Token: <你的 Token>" -F "file=@targets.txt" http://127.0.0.1:5000/api/upload
 
-# 2. 拿到 file_path 后调用 /api/run
-curl -X POST http://127.0.0.1:5000/api/run \
+# 2. 用 upload_id 创建任务
+curl -X POST http://127.0.0.1:5000/api/jobs \
   -H "Content-Type: application/json" \
-  -d '{"file_path": "uploads/1234567_normalized.txt", "tools": ["subfinder"]}'
+  -H "X-Local-Token: <你的 Token>" \
+  -d '{"scope_id": "<scope_id>", "upload_id": "upload_<uuid4hex>", "tools": ["subfinder"], "mode": "mock"}'
+```
+
+**导出并下载（响应里没有服务器路径）：**
+```bash
+# 1. 生成导出：{"export_id": "exp_...", "download_url": "/api/export/exp_.../download", ...}
+curl "http://127.0.0.1:5000/api/export?format=csv&domain=example.test"
+
+# 2. 直接下载
+curl -OJ "http://127.0.0.1:5000/api/export/exp_<...>/download"
 ```
 
 ---

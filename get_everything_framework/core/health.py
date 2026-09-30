@@ -93,12 +93,18 @@ def database_health(db_path: str | None = None) -> str:
     if not path or not os.path.exists(path):
         return "missing"
     uri = "file:" + path.replace("\\", "/").replace("?", "%3f").replace("#", "%23") + "?mode=ro"
+    conn = None
     try:
-        with sqlite3.connect(uri, uri=True, timeout=2) as conn:
-            conn.execute("SELECT 1").fetchone()
+        conn = sqlite3.connect(uri, uri=True, timeout=2)
+        conn.execute("SELECT 1").fetchone()
         return "ok"
     except sqlite3.Error:
         return "error"
+    finally:
+        # 只用 ``with sqlite3.connect(...)`` 不会关闭连接，健康检查会被
+        # 反复调用，句柄泄漏最终会耗尽文件描述符。
+        if conn is not None:
+            conn.close()
 
 
 def worker_health(heartbeat_path: str | None = None) -> str:

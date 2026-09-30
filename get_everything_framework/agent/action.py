@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from exporter import export_results, gather_export_rows
+from core import exports as exports_store
+from core import uploads
 from modules.httpx import HttpxRunner
 from storage import ScanResultStore, TOOL_DATABASES
 from tool_runner import run_tools
@@ -76,7 +78,7 @@ class AgentAction:
         self.available_tools = {
             "subdomain": {
                 "description": "收集子域名",
-                "params": {"domain": "string", "tool": "amass|subfinder|dnsx", "file_path": "string(optional)"},
+                "params": {"domain": "string", "tool": "amass|subfinder|dnsx", "upload_id": "string(optional)"},
                 "handler": self._tool_subdomain,
             },
             "summary": {
@@ -125,7 +127,7 @@ class AgentAction:
 
         intent = analyze_intent(
             text,
-            has_uploaded_file=bool(self.uploaded_context.get("file_path")),
+            has_uploaded_file=bool(self.uploaded_context.get("upload_id")),
             context_state=self.context,
         )
 
@@ -190,7 +192,7 @@ class AgentAction:
 
         new_intent = analyze_intent(
             text,
-            has_uploaded_file=bool(self.uploaded_context.get("file_path")),
+            has_uploaded_file=bool(self.uploaded_context.get("upload_id")),
             context_state=self.context,
         )
         if is_meaningful_new_intent(new_intent):
@@ -348,13 +350,20 @@ class AgentAction:
         message = self._format_execution_summary(plan, tool_results)
         self.pending_plan = None
         self._append_message("assistant", message)
-        export_path = next((item.get("path") for item in tool_results if item.get("tool") == "export_results" and item.get("ok")), None)
+        export_url = next(
+            (
+                item.get("download_url")
+                for item in tool_results
+                if item.get("tool") == "export_results" and item.get("ok")
+            ),
+            None,
+        )
         return self._build_response(
             message,
             focus_domain=focus_domain if self._is_domain(focus_domain) else None,
             pending_plan=None,
             plan_status="completed",
-            export_path=export_path,
+            export_url=export_url,
         )
 
     def _execute_tool(self, action: str, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -369,27 +378,37 @@ class AgentAction:
 
     def _tool_subdomain(self, args: Dict[str, Any]) -> Dict[str, Any]:
         scan_tool = str(args.get("tool", "subfinder")).strip().lower()
-        file_path = str(args.get("file_path", "")).strip()
         domain = str(args.get("domain", "")).strip().lower() or None
+        upload_id = str(args.get("upload_id", "")).strip()
 
         if scan_tool not in {"amass", "subfinder", "dnsx"}:
             raise ValueError("tool 仅支持 amass/subfinder/dnsx")
 
-        if file_path:
+        # P0-3：Agent 不再接受任意 file_path。文件目标只能来自受控 upload_id，
+        # 由 core.uploads 解析成归一化清单路径（与 POST /api/run 同一入口）。
+        if args.get("file_path"):
+            raise ValueError(
+                "file_path 已废弃：请先上传目标文件拿到 upload_id，再让 Agent 使用该 upload_id"
+            )
+
+        if upload_id:
+            # resolve_targets_file 会校验 upload_id 合法且文件存在，失败抛 BadRequestError。
+            file_path = uploads.resolve_targets_file(upload_id)
             report = run_tools(file_path=file_path, tools=[scan_tool], store=self.store)
             return {
                 "ok": True,
                 "tool": "subdomain",
                 "domain": None,
                 "scan_tool": scan_tool,
-                "file_path": file_path,
+                # 只回受控 ID：解析出的服务器路径留在服务端，不进对话/会话。
+                "upload_id": upload_id,
                 "target_count": len(report.get("targets", [])),
                 "total_found": report["total_found"],
                 "total_inserted": report["total_inserted"],
             }
 
         if not domain:
-            raise ValueError("缺少 domain 或 file_path 参数")
+            raise ValueError("缺少 domain 或 upload_id 参数")
 
         self._validate_domain(domain)
         self._enforce_rate_limit("subdomain", domain)
@@ -491,7 +510,9 @@ class AgentAction:
         limit = self._safe_limit(args.get("limit"), default=1000)
         rows = gather_export_rows(self.store, domain=domain, tool_name=tool_name, category=category, limit=limit)
         path = export_results(rows, fmt=fmt, prefix=domain or "all_results")
-        return {"ok": True, "tool": "export_results", "domain": domain, "format": fmt, "count": len(rows), "path": path}
+        # P0-5：对外只给 export_id / download_url，绝不把服务器路径写进响应。
+        record = exports_store.register_export(path, fmt=fmt, row_count=len(rows))
+        return {"ok": True, "tool": "export_results", "domain": domain, "format": fmt, "count": len(rows), **record}
 
     def _attach_storage_info(self, result: Dict[str, Any], action: str, args: Dict[str, Any]) -> Dict[str, Any]:
         tool_name = str(result.get("tool") or action).strip().lower()
@@ -639,9 +660,20 @@ class AgentAction:
         ]
         for index, result in enumerate(tool_results, start=1):
             lines.append(f"{index}. {self._format_single_tool_result(result)}")
-        export_path = next((item.get("path") for item in tool_results if item.get("tool") == "export_results" and item.get("ok")), None)
-        if export_path:
-            lines.extend(["", f"导出文件：`{export_path}`"])
+        # P0-5：只提示可下载标识，不把服务器路径写进对话。
+        export_record = next(
+            (item for item in tool_results if item.get("tool") == "export_results" and item.get("ok")),
+            None,
+        )
+        if export_record:
+            lines.extend(
+                [
+                    "",
+                    f"导出文件：`{export_record.get('filename')}`"
+                    f"（export_id `{export_record.get('export_id')}`，"
+                    f"下载：`{export_record.get('download_url')}`）",
+                ]
+            )
         return "\n".join(lines)
 
     def _format_single_tool_result(self, tool_result: Dict[str, Any]) -> str:
@@ -655,9 +687,9 @@ class AgentAction:
             return f"{tool_name} 执行失败：{tool_result.get('error', '未知错误')}。结果库：{db_type} `{db_path}`，相关表：{tables}。"
 
         if tool_name == "subdomain":
-            if tool_result.get("file_path"):
+            if tool_result.get("upload_id"):
                 return (
-                    f"使用 {tool_result.get('scan_tool', 'subfinder')} 对上传目标列表完成子域名收集，"
+                    f"使用 {tool_result.get('scan_tool', 'subfinder')} 对上传目标列表（{tool_result.get('upload_id')}）完成子域名收集，"
                     f"目标数 {tool_result.get('target_count', 0)}，发现 {tool_result.get('total_found', 0)} 条，"
                     f"新增入库 {tool_result.get('total_inserted', 0)} 条。结果库：{db_type} `{db_path}`，相关表：{tables}。"
                 )
@@ -748,7 +780,7 @@ class AgentAction:
         focus_domain: Optional[str] = None,
         pending_plan: Optional[Dict[str, Any]] = None,
         plan_status: Optional[str] = None,
-        export_path: Optional[str] = None,
+        export_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         return {
             "message": message,
@@ -757,7 +789,8 @@ class AgentAction:
             "steps": self.steps,
             "pending_plan": pending_plan,
             "plan_status": plan_status,
-            "export_path": export_path,
+            # P0-5：只回可下载 URL，不回服务器路径。
+            "export_url": export_url,
             "context_state": self.context,
         }
 

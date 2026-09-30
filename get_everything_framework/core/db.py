@@ -223,6 +223,26 @@ def init_schema(path: str | None = None) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_job ON artifacts(job_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_step ON artifacts(step_id)")
 
+        # ── P0-5 导出记录 ───────────────────────────────────
+        # 导出文件本身落在 exports/ 目录；这里只登记元数据。
+        # `path` 是服务端内部信息，API 出参一律不带（见 core/exports.py）。
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS exports (
+                id          TEXT PRIMARY KEY,
+                filename    TEXT NOT NULL,
+                path        TEXT NOT NULL,
+                format      TEXT NOT NULL,
+                row_count   INTEGER NOT NULL DEFAULT 0,
+                size        INTEGER NOT NULL DEFAULT 0,
+                sha256      TEXT,
+                created_at  TEXT NOT NULL,
+                created_by  TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_exports_created ON exports(created_at)")
+
         _migrate_columns(conn)
 
 

@@ -160,16 +160,12 @@ def index():
 
                     targets, _ = _resolve_targets({"targets": [domain]})
                     from core import jobs as jobs_store
-                    from core import scope_store
+                    from core.policy import validate_job_targets  # 统一 Policy 入口
                     from core.safety import resolve_mode
 
-                    if not scope_id:
-                        raise BadRequestError(
-                            "必须选择授权范围（Scope）：没有 Scope 不允许创建扫描任务",
-                            details={"field": "scope_id"},
-                        )
-                    scope = scope_store.require(scope_id)
-                    validated = [item.value for item in scope.validate_targets(targets)]
+                    # 首页与 POST /api/jobs 走完全相同的 Scope 判定路径
+                    # （scope_id 缺失 → 400；不存在或越界 → 403）。
+                    scope, validated = validate_job_targets(scope_id, targets)
                     mode = resolve_mode("mock")
 
                     job = jobs_store.create_job(

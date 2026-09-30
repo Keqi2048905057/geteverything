@@ -142,6 +142,68 @@ def test_execute_calls_renew_between_steps(scope_id):
     assert len(calls) == 2
 
 
+# ── 执行前的 Scope 复检（P0-2） ───────────────────────────
+
+
+def test_real_step_rechecks_scope_before_calling_runner(scope_id, monkeypatch):
+    """Job 创建后 Scope 被删除：real 步骤必须被拦下，且绝不进入 Runner。
+
+    对应方案第 5.3 节「每个 Step 执行前」的复检要求 —— 不能相信创建时的快照。
+    """
+    import modules.registry as registry
+    from core import db
+
+    called = []
+
+    class _Runner:
+        tool_name = "subfinder"
+        category = "subdomain"
+
+        def run(self, target):  # pragma: no cover - 走到这里就说明复检失效了
+            called.append(target)
+            raise AssertionError("Scope 已失效，Runner 不允许被调用")
+
+    monkeypatch.setattr(registry, "build_runner", lambda name: _Runner())
+
+    job = _make_job(scope_id, mode="real")
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+
+    # 模拟「创建后被删除」：直接删掉 Scope 行。
+    with db.transaction() as conn:
+        conn.execute("DELETE FROM scopes WHERE id = ?", (scope_id,))
+
+    result = execute_job(job["id"])
+
+    step = jobs_store.list_steps(job["id"])[0]
+    assert called == []  # 关键：Runner 一次都没被调用
+    assert step["status"] == jobs_store.STEP_FAILED
+    assert step["error_code"] == "scope_violation"
+    assert "复检" in step["error_message"]
+    assert result["status"] == jobs_store.STATUS_FAILED
+
+
+def test_real_step_rechecks_target_still_in_scope(scope_id, monkeypatch):
+    """执行期复检通过时，步骤照常执行（复检不能把正常路径也拦死）。"""
+    import modules.registry as registry
+    from core.runner_result import RunnerResult
+
+    class _Runner:
+        tool_name = "subfinder"
+        category = "subdomain"
+        last_execution = {}
+
+        def run(self, target):
+            return RunnerResult.ok([], exit_code=0)
+
+    monkeypatch.setattr(registry, "build_runner", lambda name: _Runner())
+
+    job = _make_job(scope_id, mode="real")
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+
+    result = execute_job(job["id"])
+    assert result["status"] == jobs_store.STATUS_SUCCEEDED
+
+
 # ── cancel ────────────────────────────────────────────────
 
 

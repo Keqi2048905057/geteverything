@@ -297,9 +297,95 @@ def test_finish_job_requires_terminal_status(scope_id):
 
 def test_finish_job_writes_finished_event(scope_id):
     job = _make_job(scope_id)
+    # 方案第 7 节：queued 不能直接落到执行结果终态，必须先被 worker 领成 running。
+    jobs_store.claim_next_job("w1", lease_seconds=300)
     jobs_store.finish_job(job["id"], status=jobs_store.STATUS_FAILED, error_code="unknown_error")
     types = [event["event_type"] for event in jobs_store.list_events(job["id"])]
     assert jobs_store.EVENT_JOB_FINISHED in types
+
+
+# ── 状态机合法跃迁（方案第 7 节） ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    "from_status,to_status,expected",
+    [
+        # queued 只能被领取或直接取消，不能一步跳到结果态
+        (jobs_store.STATUS_QUEUED, jobs_store.STATUS_RUNNING, True),
+        (jobs_store.STATUS_QUEUED, jobs_store.STATUS_CANCELLED, True),
+        (jobs_store.STATUS_QUEUED, jobs_store.STATUS_SUCCEEDED, False),
+        (jobs_store.STATUS_QUEUED, jobs_store.STATUS_TIMEOUT, False),
+        (jobs_store.STATUS_QUEUED, jobs_store.STATUS_FAILED, False),
+        # running 能落到各终态
+        (jobs_store.STATUS_RUNNING, jobs_store.STATUS_SUCCEEDED, True),
+        (jobs_store.STATUS_RUNNING, jobs_store.STATUS_PARTIAL, True),
+        (jobs_store.STATUS_RUNNING, jobs_store.STATUS_INTERRUPTED, True),
+        (jobs_store.STATUS_RUNNING, jobs_store.STATUS_QUEUED, False),
+        # 终态之间不能互相跳（只能经 retry 回 queued）
+        (jobs_store.STATUS_FAILED, jobs_store.STATUS_SUCCEEDED, False),
+        (jobs_store.STATUS_INTERRUPTED, jobs_store.STATUS_QUEUED, True),
+        (jobs_store.STATUS_PARTIAL, jobs_store.STATUS_QUEUED, True),
+        # succeeded 是绝对终态
+        (jobs_store.STATUS_SUCCEEDED, jobs_store.STATUS_QUEUED, False),
+        (jobs_store.STATUS_SUCCEEDED, jobs_store.STATUS_FAILED, False),
+        # 同名状态幂等
+        (jobs_store.STATUS_FAILED, jobs_store.STATUS_FAILED, True),
+        # 未知状态一律拒绝
+        ("not_a_status", jobs_store.STATUS_QUEUED, False),
+    ],
+)
+def test_can_transition(from_status, to_status, expected):
+    assert jobs_store.can_transition(from_status, to_status) is expected
+
+
+def test_finish_job_rejects_queued_to_terminal(scope_id):
+    """回归：``queued → succeeded`` / ``queued → timeout`` 这类跳步必须被拒绝。"""
+    job = _make_job(scope_id)
+    for illegal in (jobs_store.STATUS_SUCCEEDED, jobs_store.STATUS_TIMEOUT, jobs_store.STATUS_FAILED):
+        with pytest.raises(ValueError, match="非法的状态跃迁"):
+            jobs_store.finish_job(job["id"], status=illegal)
+
+    assert jobs_store.get_job(job["id"])["status"] == jobs_store.STATUS_QUEUED
+
+
+def test_finish_job_rejects_unknown_job(local_db):
+    with pytest.raises(ValueError, match="任务不存在"):
+        jobs_store.finish_job("job_missing", status=jobs_store.STATUS_SUCCEEDED)
+
+
+def test_finish_job_is_idempotent_on_same_terminal(scope_id):
+    """worker 重复写同一个终态不能炸（幂等）。"""
+    job = _make_job(scope_id)
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+    jobs_store.finish_job(job["id"], status=jobs_store.STATUS_SUCCEEDED)
+    jobs_store.finish_job(job["id"], status=jobs_store.STATUS_SUCCEEDED)
+    assert jobs_store.get_job(job["id"])["status"] == jobs_store.STATUS_SUCCEEDED
+
+
+def test_finish_job_rejects_transition_from_succeeded(scope_id):
+    """succeeded 之后不能被改写成 failed —— 否则「成功」会被静默覆盖。"""
+    job = _make_job(scope_id)
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+    jobs_store.finish_job(job["id"], status=jobs_store.STATUS_SUCCEEDED)
+
+    with pytest.raises(ValueError, match="非法的状态跃迁"):
+        jobs_store.finish_job(job["id"], status=jobs_store.STATUS_FAILED)
+
+
+def test_retry_respects_max_attempts(scope_id):
+    """方案第 7 节：必须有 max attempts，防止无限重试刷爆队列。"""
+    job = _make_job(scope_id)
+
+    for expected_attempt in range(2, jobs_store.MAX_ATTEMPTS + 1):
+        jobs_store.request_cancel(job["id"])
+        retried = jobs_store.retry_job(job["id"])
+        assert retried["attempt"] == expected_attempt
+
+    # 已到上限：再 retry 必须被拒绝，且任务状态不变。
+    jobs_store.request_cancel(job["id"])
+    with pytest.raises(ValueError, match="最大重试次数"):
+        jobs_store.retry_job(job["id"])
+    assert jobs_store.get_job(job["id"])["status"] == jobs_store.STATUS_CANCELLED
 
 
 # ── 查询 ──────────────────────────────────────────────────

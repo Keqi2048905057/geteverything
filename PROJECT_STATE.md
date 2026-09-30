@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · Phase M5 未开始 · 等 9 项决策拍板后再开工**
+**Phase M4 已完成 · P0 产品化加固进行中 · Phase M5 待开工（E 项已预授权）**
 
-- 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`，与 `origin/main` 同步
+- 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → **M5 ⬜ → M6 ⬜ → M7 ⬜**
-- 更新日期：2026-10-01
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → **P0 加固 🔄 → M5 ⬜ → M6 ⬜ → M7 ⬜**
+- 更新日期：2026-10-01（P0 加固轮）
 
 ---
 
@@ -60,9 +60,31 @@
 - `run_scan(target)` 旧签名保留，旧调用方无需改动
 - 修掉三个真机缺陷：失败被吞成空结果、残留输出文件冒充本次结果、超时杀不掉孙进程（Windows）/ `killpg` 误杀调用方（POSIX）
 
-**提前完成的 M6 条目**
+**P0 产品化加固（本轮，方案第 7 章 + 执行方案 P0 清单）**
+- `core/policy.py`：**统一 Policy / Scope 引擎**——`validate_job_targets` / `validate_step_target` /
+  `validate_resolved_address` / `validate_redirect_target` 四个入口，收口原先散落在
+  `api/scan.py`、`api/jobs.py`、`jobs/executor.py` 的 Scope 判断（缺失 → 400，不存在/越界 → 403，整体拒绝）
+- `api/scan.py` / `api/jobs.py` / `app.py` 全部改走统一入口，删掉各自的 Scope 分支
+- `jobs/executor.py`：**real 步骤在调用 Runner 之前重新校验一次 Scope**——即使任务创建后 Scope 被删/被改，
+  也不会继续跑（回归测试锁定）
+- `agent/action.py` + `agent/planner.py`：**Agent 层不再接受任意 `file_path`**，只能引用受控 `upload_id`
+- `core/exports.py` + `exports` 表：导出改为**登记制**，`/api/export` 只返回
+  `export_id` / `filename` / `download_url`，**不再下发服务器路径**；新增
+  `GET /api/export/<id>/download` 与 `GET /api/exports`
+- `exporter.py:safe_prefix()`：导出文件名前缀过滤，堵住 `../` 穿越（有参数化测试）
+- `core/jobs.py`：补齐**显式状态跃迁表** `ALLOWED_TRANSITIONS` + `can_transition()`，
+  `finish_job` 拒绝 `queued → succeeded` 这类跳步；`retry_job` 增加 `MAX_ATTEMPTS = 5`
+- `storage.py`（旧库）：新增 `_connect()` 上下文管理器，**连接一定会关闭**（原先 `with conn`
+  只提交不关闭，泄漏文件句柄）；连接级 `busy_timeout=5000`；表结构未动
+- `core/health.py`：健康检查的 SQLite 连接改为显式 `close()`
+- 测试：新增 `test_policy.py`、`test_agent_boundary.py`、`test_export_contract.py`、
+  `test_api_auth_contract.py`、`test_storage_connection.py`，并扩充 `test_jobs_store.py` 状态机用例
+
+**已完成的 M6 条目**
 - `scripts/run_local.ps1`（一键拉起 Web + worker，退出时收尾）
 - `/health` 的完整字段（database / worker / queue / tools / modes / security）
+- `/api/export` 改为**下载链接**（登记 + `download_url`），不再是服务器路径
+- 导出记录（`exports` 表 + `GET /api/exports`）
 
 **流程与沉淀**
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
@@ -76,7 +98,7 @@
 |---|---|---|
 | **`mode=real` 真实链路** | 代码层与真实子进程用例齐备（`tool_not_found` / `timeout` / `nonzero_exit` 都有测试）；状态机、错误码、超时、进程树清理都已验证 | **从未用真实工具打真实目标**（按硬约束刻意不做），「工具 + 真实目标」这条链路零实证 |
 | **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库 | 只在任务详情的证据面板里能看到，**没有专门的资产视图**（属 M5） |
-| **M6 导出** | `exporter.py` 存在，能生成 CSV / JSON 文件 | `/api/export` 仍只返回**服务器路径**，不是流式下载；没有导出记录 |
+| **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
 | **M6 本机启动文档** | `CONTRIBUTING.md` 有环境搭建说明；`scripts/run_local.ps1` 可用 | 没有面向「新开发者 10 分钟启动」的完整文档；`scripts/check_env.py` 不存在 |
 | **M7 mypy** | 其余验收项（pytest / ruff）已达标 | **mypy 仍有 34 errors**，见下 |
 
@@ -95,13 +117,13 @@
 **M6 — 导出、健康检查和本机运行脚本**
 - [x] `/health` 完整字段
 - [x] `scripts/run_local.ps1`
-- [ ] `/api/export` 改为直接下载（当前只返回路径）
-- [ ] 导出记录
+- [x] `/api/export` 改为直接下载（`export_id` + `download_url`，不再返回路径）
+- [x] 导出记录（`exports` 表 + `GET /api/exports`）
 - [ ] `scripts/check_env.py`
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（405 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（540 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [ ] SQLite 并发测试
 - [ ] 本地 fixture HTTP 测试
@@ -109,31 +131,47 @@
 - [ ] 一份测试报告
 
 **其他待办（不在里程碑内，但已知）**
-- [ ] `README.md` 未同步 M1～M4：仍写 `file_path` 上传后直接喂 `/api/run`（M2 起已废弃），未提鉴权 / Token / Scope
+- [x] `README.md` 未同步 M1～M4（已重写鉴权表、`upload_id`、导出下载示例）
 - [ ] `config.py` 中 `FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径，换机器必失败
-- [ ] `/api/tools` / `/api/results` / `/api/export` 三个只读接口仍匿名可读（是否加鉴权待定）
+- [ ] `/api/tools` / `/api/results` / `/api/export` / `/api/exports` 等只读接口仍匿名可读（见 DECISIONS-D，已用测试锁定现状）
 - [ ] `/api/jobs` 只有 `limit`，没有游标分页
 - [ ] 单并发 worker：`SCAN_LIMITS["max_concurrency"] = 2` 是未使用的配置项
-- [ ] `storage.py`（旧库）无 WAL / 无 `busy_timeout`，`with conn` 只提交不关闭
+- [x] `storage.py`（旧库）`with conn` 只提交不关闭（已修：`_connect()` 显式关闭 + `busy_timeout`）
+- [ ] 旧库仍无 WAL（只加了连接级 `busy_timeout`；WAL 属迁移范畴，未动）
+- [ ] `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 DECISIONS §3 待授权）
 
 ---
 
 ## Known Existing Failures
 
 > 这些是**已知且当前存在**的问题，不是「待办想法」。审查时不要重复报为新发现。
+> **本轮已修掉 2 条**（原 #2、#7），保留编号以便对照历史报告。
 
 | # | 症状 | 位置 | 影响 |
 |---|---|---|---|
 | 1 | `mypy` 报 34 个错误 | 见下方分布 | M7 验收命令不通过；不影响运行 |
-| 2 | `/api/export` 返回服务器文件路径 | `api/results.py:253` | 泄露本机目录结构 |
-| 3 | `/api/tools`、`/api/results`、`/api/export` 匿名可读 | `api/tools.py`、`api/results.py` | 未授权即可读到扫描结果与库元信息 |
-| 4 | 旧库并发写 `database is locked` | `storage.py:_get_connection` | 仅 `mode=real` 多任务并发时触发 |
+| 2 | ~~`/api/export` 返回服务器文件路径~~ **本轮已修** | `api/results.py` + `core/exports.py` | 现在只返回 `export_id` / `filename` / `download_url`；有契约测试锁定 |
+| 3 | `/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports` 匿名可读 | `api/tools.py`、`api/results.py` | 未授权即可读到扫描结果与库元信息；**按 DECISIONS-D 故意保持**，已用 `test_api_auth_contract.py` 锁定现状 |
+| 4 | 旧库并发写 `database is locked` | `storage.py` | **已缓解**：连接级 `busy_timeout=5000`；仍无 WAL（WAL 属迁移范畴，未动） |
 | 5 | `FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径 | `config.py:236` | 换机器后 feroxbuster 直接失败 |
 | 6 | `HTTPX_CONFIG.path` 默认 `"http-x"` | `config.py` | 本机靠 `E:\GoWorkspace\bin\http-x.cmd` 包装脚本指向 `httpx.exe` 才能跑；裸环境会 `tool_not_found` |
-| 7 | `python -m pytest` 有 2 条 warning | `core/db.py:244`、`tests/unit/test_security_baseline.py:59` | 良性：FileIO 未关闭 + `SECRET_KEY` 未配置的预期告警 |
+| 7 | ~~`python -m pytest` 有 2 条 warning~~ **本轮已清零** | — | 见下节「已修的两条 warning」 |
 | 8 | `agent/client.py`、`agent/providers/*` 无任何调用方 | `agent/` | 「LLM 规划」实际由正则 + 模板决定，**不调用大模型**；「模型超时/返回格式错」类症状在当前路径不可达 |
+| 9 | Agent 仍可绕过 Job/Policy 直接调 `run_tools` / `HttpxRunner.run_scan` | `agent/action.py` | Agent 层已禁止任意 `file_path`（只能 `upload_id`），但**尚未改走 Job Service**；属 P0-6 未完成项 |
+| 10 | `jobs` 表无 `idempotency_key`、无 `backoff` | `core/db.py:init_schema` | 需新增列 = 改表结构；已登记 `docs/DECISIONS.md` §3 待授权。`MAX_ATTEMPTS` 与显式状态跃迁表本轮已补 |
 
-**mypy 错误分布**（`mypy --no-incremental app.py core api jobs storage.py modules`，共 34 条 / 8 个文件）：
+### 已修的两条 warning（原 Known Failure #7 / DECISIONS-I）
+
+| 原报告位置 | 真实根因 | 修法 |
+|---|---|---|
+| `core/db.py:244` 未关闭文件 | 标签本身是**旧的**。真正的来源是 `storage.py` 里 `with self._get_connection() as conn:` —— `sqlite3.Connection` 的 `with` **只提交事务、不关闭连接**，于是每次查询都漏一个文件句柄 | 新增 `storage.py:_connect()` 上下文管理器（事务语义不变 + `finally: conn.close()`），10 个调用点全部改用它；另有 `core/health.py` 的只读连接显式 `close()` |
+| `tests/unit/test_security_baseline.py:59` | 该用例**故意**让 `SECRET_KEY` 为空，必然触发一次性密钥告警 | 改为 `pytest.warns(RuntimeWarning, ...)` 显式断言这条安全提示存在，告警不再污染输出 |
+| （附带发现）`test_upload_over_limit_is_rejected` 偶发 `unclosed file` | 来自 Werkzeug 测试客户端：body > 500KB 时 `stream_encode_multipart` 建 `TemporaryFile("wb+")` 且从不关闭 | 该用例改为手工拼 multipart 字节串，走 `BytesIO` 不落盘；导出下载用例显式 `response.close()` |
+
+回归测试：`tests/unit/test_storage_connection.py`（10 项，含异常路径不泄漏、`busy_timeout`、
+表结构未变、以及用 `warnings.simplefilter("error", ResourceWarning)` 复现原始症状）。
+
+**mypy 错误分布**（`mypy app.py core api jobs storage.py modules`，共 34 条 / 8 个文件 / 55 source files）：
 
 | 文件 | 错误数 | 备注 |
 |---|---|---|
@@ -196,21 +234,18 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-01 01:58
+验证时间：2026-10-01（P0 产品化加固轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 405 passed, 2 skipped, 2 warnings in 43.12s
-mypy:   Found 34 errors in 8 files (checked 53 source files)     ← M7 待修
-        （含 agent 时为 41 errors in 9 files / 76 source files）
-
-CI:     GitHub Actions 最近一次 success（提交 536fe49）
+pytest: 538 passed, 2 skipped, 0 warnings in 46s      ← 警告已清零
+mypy:   Found 34 errors in 8 files (checked 55 source files)     ← M7 待修，本轮未增减
 ```
 
-两条 warning 均为已知良性：`ResourceWarning: unclosed file`（`core/db.py:244`）、
-`RuntimeWarning: 未检测到强 SECRET_KEY`（`tests/unit/test_security_baseline.py:59`）。
+两条历史 warning（`ResourceWarning: unclosed file`、`RuntimeWarning: 未检测到强 SECRET_KEY`）
+**本轮已全部消除**，根因与修法见上一节。
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → **M4 `405`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → **P0 加固 `538`**
 
 ---
 

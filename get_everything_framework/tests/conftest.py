@@ -83,6 +83,7 @@ def app_module(store, tmp_path, monkeypatch):
     """
     import config
     import core.db as core_db
+    import exporter as exporter_module
     import storage
     from core import artifacts as core_artifacts
     from core import health as core_health
@@ -101,6 +102,8 @@ def app_module(store, tmp_path, monkeypatch):
     monkeypatch.setattr(core_health, "OUTPUT_DIR", output_dir, raising=False)
     # M4 的原始证据目录同理：绝不能把 stdout/stderr 写进仓库 results/artifacts。
     monkeypatch.setattr(core_artifacts, "ARTIFACT_DIR", str(tmp_path / "results" / "artifacts"), raising=False)
+    # P0-5 的导出文件同理：导出目录也要落临时目录，不能写仓库 exports/。
+    monkeypatch.setattr(exporter_module, "EXPORT_DIR", str(tmp_path / "exports"), raising=False)
 
     core_db.reset_schema_cache()
     core_db.ensure_schema(local_db)

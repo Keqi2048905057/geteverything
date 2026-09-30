@@ -6,9 +6,9 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4（2026-09-30）**
+> **last-mapped：本机联调版 @ M4 + P0 加固（2026-10-01）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
-> **第 9 节**记录本机联调版新增/改写的部分（M0→M4）。两者冲突时，第 9 节更新。
+> **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
 ---
 
@@ -599,6 +599,8 @@ get_everything_framework/
 │   ├── db schema 见 core/db.py:init_schema  scopes / audit_events / uploads / jobs / job_steps / job_events / artifacts
 │   ├── scope.py              Scope 模型与目标校验（排除优先、拒全放行）
 │   ├── scope_store.py        Scope 持久化 + require()（无 Scope 即拒绝）
+│   ├── policy.py             P0-2：统一 Policy/Scope 引擎（Job 创建 / Step 执行前 / 解析后地址 / 重定向）
+│   ├── exports.py            P0-5：导出登记 + 公开出参（不含 path）+ 下载文件解析
 │   ├── uploads.py            受控上传：uploads/<id>/{raw.*,normalized.txt,meta.json}
 │   ├── mock.py               mock 执行结果（7 种场景，错误码对齐 §6.2）
 │   ├── safety.py             mock/real 模式解析 + GEF_ALLOW_REAL_SCAN 开关
@@ -646,7 +648,10 @@ get_everything_framework/
 | POST | `/api/tool/<n>/run` | `api/scan.py` | **需管理员** | 同上，单工具 |
 | POST | `/api/upload` | `api/upload.py` | **需管理员** | M2 起只返回 `upload_id`，不再暴露服务器路径 |
 | GET/POST | `/api/settings*` | `api/settings.py` | **需管理员** | M1 加认证；M2 加原子写 + 备份 + 审计 |
-| GET | `/api/tools`、`/api/databases`、`/api/results`、`/api/export` | `api/tools.py`、`api/results.py` | 无 | 保持只读开放（方案只要求修改类 API 认证） |
+| GET | `/api/tools`、`/api/databases`、`/api/results` | `api/tools.py`、`api/results.py` | 无 | 保持只读开放（方案只要求修改类 API 认证）；**已用 `test_api_auth_contract.py` 锁定现状** |
+| GET | `/api/export` | `api/results.py` | 无 | **P0-5 起**返回 `export_id` / `filename` / `download_url`，**不再返回 `path`** |
+| GET | `/api/export/{export_id}/download` | `api/results.py` | 无 | P0-5 新增；`send_file(as_attachment=True)`，未知/已清理的 id → 404 |
+| GET | `/api/exports` | `api/results.py` | 无 | P0-5 新增；导出记录列表（同样不含路径） |
 
 ### 9.3 双库架构（**最容易踩的坑**）
 
@@ -656,10 +661,24 @@ get_everything_framework/
 | 新本机应用库 | `results/local.db`（可用 `LOCAL_DB_PATH` 覆盖） | `core/db.py` | `scopes` / `audit_events` / `uploads` / `jobs` / `job_steps` / `job_events` |
 
 **新库的连接约定**（`core/db.py`）：`PRAGMA journal_mode=WAL` + `busy_timeout=5000` + `BEGIN IMMEDIATE`。
-这解决了第 7.3 节记录的并发问题——但**只针对新库**；`storage.py` 依旧无 WAL、`with conn` 只提交不关闭。
+这解决了第 7.3 节记录的并发问题——但**只针对新库**。
+
+**旧库（`storage.py`）的 P0 加固**：原先每个方法都写 `with self._get_connection() as conn:`，
+而 `sqlite3.Connection` 的 `with` **只提交事务、不关闭连接**，于是每次查询漏一个文件句柄
+（pytest 报 `ResourceWarning: unclosed file <_io.FileIO ... mode='rb+'>`，报错位置却指向 `conn.execute(...)`，
+看起来像 execute 的锅）。现在：
+
+* `storage.py:_connect()` = 「`try: with conn: yield conn` + `finally: conn.close()`」，事务语义不变；
+* `_get_connection()` 加 `PRAGMA busy_timeout=5000`（连接级，不改库文件）；
+* **表结构与查询语义一律未动**（`test_storage_connection.py::test_schema_is_unchanged` 锁定）；
+* 旧库**仍无 WAL** —— WAL 需要改库文件持久属性，属迁移范畴，未在无人值守期间执行。
+
+`core/health.py:database_health()` 的只读连接（`file:...?mode=ro`）同样改为显式 `close()`：
+它在 `/health` 上被反复调用，泄漏会耗尽文件描述符。
 
 测试切库：`tests/conftest.py` 同时 patch `storage.SQLITE_CONFIG["path"]`、`config.LOCAL_DB_CONFIG["path"]`、
-`core.uploads.UPLOAD_DIR`、`core.health.OUTPUT_DIR`，并调 `core.db.reset_schema_cache()`。
+`core.uploads.UPLOAD_DIR`、`core.health.OUTPUT_DIR`、`core.artifacts.ARTIFACT_DIR`、`exporter.EXPORT_DIR`，
+并调 `core.db.reset_schema_cache()`。
 **任何一个漏 patch 都会让测试往仓库 `results/` 里写文件。**
 
 ### 9.4 任务状态机（第 5.3 节的「不存在」已不成立）
@@ -673,13 +692,21 @@ queued ──claim──> running ──┬──> succeeded   （全部步骤�
                             └──> interrupted （租约过期 / worker 优雅退出，可 retry）
 ```
 
-* 终态：`succeeded / partial / failed / timeout / cancelled`；
+* 终态：`succeeded / partial / failed / timeout / cancelled / interrupted`；
+* **显式跃迁表（P0-7 新增）**：`core/jobs.py:ALLOWED_TRANSITIONS` + `can_transition(from, to)`。
+  `finish_job` 会先读当前状态再比对，非法跃迁直接 `ValueError` —— 拦住
+  `queued → succeeded`（没被 worker 领过就宣布成功）、`succeeded → failed`（成功被静默覆盖）这类跳步。
+  同名状态视为**幂等**（worker 重复写同一终态不会炸）；未知状态一律拒绝。
 * 可 retry：`interrupted / failed / timeout / cancelled / partial`（`succeeded` 与 `running` 拒绝）；
+* **max attempts（P0-7 新增）**：`MAX_ATTEMPTS = 5`。超限后 `retry_job` 抛 `ValueError`，
+  `POST /api/jobs/<id>/retry` 转 400，防止反复重试刷爆队列。
 * retry 只重跑**未成功**的步骤，已成功的步骤保留（`job_steps` 是创建时就落好的快照）；
 * **单表即队列**：`jobs` 自己就是队列，`claim_next_job` 用 `BEGIN IMMEDIATE` + `UPDATE ... WHERE status='queued'`
   保证同一个 job 只会被一个 worker 领到（`core/jobs.py`）；
 * **租约**：领取时写 `worker_id` + `lease_until`；执行中每个步骤结束续租。
   worker 被 kill → 租约过期 → 新 worker 启动时 `recover_stale_jobs()` 标为 `interrupted`（不会静默消失）。
+* **仍未实现**：`idempotency_key` 与 `backoff`（都需要给 `jobs` 新增列 = 改表结构，
+  已登记 `docs/DECISIONS.md` §3 待授权）。`cancel_requested` 与 `heartbeat` 已有。
 
 ### 9.5 三个执行入口的差别（**排查「任务没跑」先看这里**）
 
@@ -711,39 +738,50 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 | 项 | 现状 | 计划 |
 |---|---|---|
-| `storage.py` 并发 | 无 WAL、`with conn` 只提交不关闭、每方法新建连接 | M5 迁移时一并处理 |
-| `/api/export` | 仍只返回服务器路径，不是流式下载 | M6 |
-| `/api/results`、`/api/tools` | 仍匿名可读 | 方案未要求，需确认 |
+| `storage.py` 并发 | **P0 已修一半**：连接必定关闭 + 连接级 `busy_timeout=5000`；**仍无 WAL**（WAL 需重建库文件，属迁移范畴） | M5 迁移时补 WAL |
+| `/api/export` | **P0-5 已解决**：登记制 + `download_url` + `GET /api/export/<id>/download`，不再返回路径 | — |
+| `/api/results`、`/api/tools`、`/api/databases`、`/api/export`、`/api/exports` | 仍匿名可读 | 按 `docs/DECISIONS.md` D **有意保持**，已用 `test_api_auth_contract.py` 锁定现状；收口需授权 |
 | 前端轮询 | 任务表 3 秒轮询 `/api/jobs`，未做 SSE/WebSocket | 本机联调够用 |
 | 真实 runner 的结构化结果 | **已落地**（M4）：统一 `RunnerResult`，见 §9.10 | — |
-| `assets` / `observations` / `artifacts` 表 | `artifacts` 已建（M4）；`assets` / `observations` 未创建 | M5 |
+| `assets` / `observations` / `artifacts` 表 | `artifacts` 已建（M4）；`assets` / `observations` 未创建 | M5（E 项已预授权） |
 | 敏感产物仍在 Git 索引 | **已解决**：自有仓库 `geteverything` 只保留一份干净历史，`results/`、`uploads/`、`SecLists/`、`scripts/*.exe` 均未入库 | — |
+| Scope 判定位置 | **P0-2 已统一**到 `core/policy.py`（见 §9.11） | — |
+| Agent 的执行边界 | **P0-3 部分**：已禁止任意 `file_path`，但仍直接调 `run_tools` / runner，未改走 Job Service | P0-6，需授权 |
+| `jobs` 表幂等与退避 | 无 `idempotency_key` / 无 `backoff`（需 ADD COLUMN = 改表结构） | 已登记 `docs/DECISIONS.md` §3 待授权 |
 
 ### 9.8 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 405 passed, 2 skipped（M1 70 → M2 142 → M3 236 → M4 405）
+$ python -m pytest           # 538 passed, 2 skipped, 0 warnings
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
+
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → **P0 加固 `538`**。
+> **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 
 | 测试文件 | 覆盖 |
 |---|---|
 | `tests/unit/test_smoke.py`、`test_repo_layout.py` | 导入与仓库布局（M0） |
 | `tests/unit/test_scope.py` | Scope 匹配语义与全放行拒绝（M1） |
 | `tests/unit/test_security_baseline.py` | SECRET_KEY 弱值、受控上传、`.env` 原子写（M2） |
-| `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry（M3） |
-| `tests/unit/test_jobs_executor.py` | mock/real 分流、进度、取消边界、**真实子进程 kill/重启**（M3） |
+| `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry、**跃迁表 + max attempts**（M3 / P0-7） |
+| `tests/unit/test_jobs_executor.py` | mock/real 分流、进度、取消边界、**真实子进程 kill/重启**、**执行期 Scope 复检**（M3 / P0-2） |
 | `tests/unit/test_runner_result.py` | 命令预览脱敏、`RunnerResult` 组装、artifact 落盘/读取（M4） |
 | `tests/unit/test_runner_interface.py` | **真实子进程**：成功/零结果/未安装/非零/127/超时/SystemExit/残留文件清理（M4） |
 | `tests/unit/test_runners_m4.py` | subfinder / httpx / dnsx 的 `build_command` + `parse_output`（M4） |
 | `tests/unit/test_runners_m4_rollout.py` | **其余 14 个 runner** 的接口覆盖 + 解析 + 横切自检（M4 铺开） |
+| `tests/unit/test_policy.py` | **P0-2**：统一 Policy 四个入口（缺失 400 / 越界 403 / 整体拒绝 / 解析后地址校验，注入 resolver 不查真实 DNS） |
+| `tests/unit/test_agent_boundary.py` | **P0-3**：Agent 拒绝任意 `file_path`、只收 `upload_id`、planner 不再下发 `file_path` |
+| `tests/unit/test_storage_connection.py` | **DECISIONS-I**：旧库连接必关（含异常路径）、`busy_timeout`、表结构未变、`-W error::ResourceWarning` 复现 |
 | `tests/integration/test_web_baseline.py` | 首页可渲染、登录/登出（M1） |
 | `tests/integration/test_m2_security.py` | 认证、受控上传、file_path 拒绝、审计（M2） |
 | `tests/integration/test_m2_scope_enforcement.py` | 无 Scope/越界拒绝、mock 不碰真实 runner（M2） |
 | `tests/integration/test_m2_page_scan.py` | 首页 = 异步任务、不阻塞（M2/M3） |
 | `tests/integration/test_m3_jobs_api.py` | 7 个 jobs 接口、10 个任务响应时间、状态持久化（M3） |
 | `tests/integration/test_m4_runner_result.py` | RunnerResult 端到端：零结果 vs 失败、artifact 不下发路径（M4） |
+| `tests/integration/test_export_contract.py` | **P0-5**：导出响应无 `path`、可下载、未知/已清理 id → 404、`safe_prefix` 穿越表、前缀逃不出导出目录 |
+| `tests/integration/test_api_auth_contract.py` | **P0-1/D**：锁定「哪些只读接口匿名、哪些必须 401」的当前契约 + 响应体不夹带服务器路径 |
 
 ### 9.9 第 6 节 BUG 索引表的**现状修正**
 
@@ -756,10 +794,10 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | #23「SECRET_KEY 默认固定值」 | 已解决：默认值清空，弱值告警 + 进程级一次性密钥，有回归测试 |
 | #24「/api/settings 可匿名写 .env」 | 已解决：需管理员；原子写（临时文件+fsync+`os.replace`）+ 写入前备份 + 审计（只记字段名） |
 | #32「首页无模板」 | 已解决：`web/templates/` 与 `web/static/` 已补齐 |
-| #33「测试覆盖极薄」 | 已解决：405 项，含真实子进程 kill/重启 |
+| #33「测试覆盖极薄」 | 已解决：**538** 项，含真实子进程 kill/重启 |
 | #34「无 create_app()」 | 已加 `create_app()`，但仍保留模块级单例 `app`（测试与 waitress 共用） |
 | #2 第 1 条「残留输出文件」 | **已解决**（M4）：`_execute` / `_execute_stdout` 执行前先删同名旧文件；删不掉时写 `stale_output_warning` 到 `last_execution`，不再把上次输出当本次结果 |
-| #2 第 5 条「SQLite 并发」 | **仅新库已解决**：`core/db.py` 用 WAL + `busy_timeout=5000`；`storage.py` 旧库未动 |
+| #2 第 5 条「SQLite 并发」 | **旧库已缓解**（P0）：`storage.py` 连接必关 + 连接级 `busy_timeout=5000`；仍无 WAL。新库（`core/db.py`）本来就是 WAL + `busy_timeout` |
 
 ### 9.10 M4：统一结果与错误模型（**「失败被吞成空结果」的终点**）
 
@@ -850,3 +888,101 @@ core/runner_result.py
 最初把 `results/` 里的长路径也打码了，排查时反而看不出工具到底读了哪个文件。
 判断标准是「像不像密钥」而不是「长不长」——正则用前后向断言排除路径分隔符后，
 `results/...` 这类路径会原样保留（测试里断言 `"results" in preview`）。
+
+### 9.11 P0 产品化加固（M4 之后，按 DSH 执行方案 P0 清单）
+
+> 这一节是 §9.1～§9.10 之后的增量。改动只做「收口既有边界」，**没有引入新框架、
+> 没有改技术栈、没有改既有表结构**（`exports` 表是新增的，`jobs` 表一个列都没加）。
+
+#### 9.11.1 `core/policy.py` —— 统一 Policy / Scope 引擎（P0-2）
+
+加固前，Scope 判断散落在三处：`api/scan.py` 自己解析 mode + 查 scope_store，
+`api/jobs.py` 又写一遍，`jobs/executor.py` 执行期**完全不查**。
+结果是「任务创建时合法，执行时 Scope 已被删/被改」这条缝没人管。
+
+现在只有一个入口模块：
+
+| 函数 | 时机 | 语义 |
+|---|---|---|
+| `validate_job_targets(scope_id, targets)` | 创建任务 / 同步扫描 | `scope_id` 缺失 → 400 `bad_request`；Scope 不存在 → 403 `scope_violation`；任一目标越界 → 403（**整体拒绝，不部分执行**） |
+| `validate_step_target(scope_id, target)` | **每个 real 步骤执行前**（`jobs/executor.py`） | 同上，单目标版本；失败时该步骤记 `scope_violation`，Runner **不会被调用** |
+| `validate_resolved_address(scope, host, resolver=...)` | DNS 解析之后 | 解析出的每个 IP 都要落在 Scope 允许范围；loopback / private / link-local 默认拒绝，除非显式写进 `allowed_cidrs` |
+| `validate_redirect_target(scope, url)` | HTTP 重定向后 | 只允许 `http` / `https`；重定向到 Scope 外的地址即拒绝 |
+
+配套：`is_dangerous_address()`（SSRF 味道的地址判定）、`resolve_host()`、`scope_address_allowed()`、
+`require_scope()`。解析器用参数注入（`Resolver = Callable[[str], list[str]]`），
+所以单测**不发真实 DNS**。
+
+测试：`tests/unit/test_policy.py`（约 40 例）、
+`tests/unit/test_jobs_executor.py`（「执行期 Scope 复检」：删掉 scope 行后 Runner 一次都没被调用）。
+
+#### 9.11.2 Agent 执行边界（P0-3）
+
+`agent/action.py:_tool_subdomain` 原先接受请求里传来的任意 `file_path` 并直接读文件。
+现在：
+
+* **任何** `file_path` 直接拒绝（不是"过滤成安全路径"，是拒绝）；
+* 只接受受控 `upload_id`，经 `core/uploads.py:resolve_targets_file()` 换取真实路径；
+* `agent/planner.py:build_uploaded_file_plan()` 只下发 `upload_id`；
+  老的「只有 `file_path` 的历史记录」不再生成 steps，而是回一句提示要求重新上传；
+* 工具 schema 里的参数名也从 `file_path` 改成 `upload_id`——避免模型照着旧名字生成调用。
+
+测试：`tests/unit/test_agent_boundary.py`（16 例，含 `../../` 穿越的 `upload_id` 被拒）。
+
+**仍未做**（P0-6）：Agent 依旧直接调 `tool_runner.run_tools` / `HttpxRunner.run_scan`，
+没有改走 Job Service。这是「Agent 提议 = 执行」的残留，改动面涉及 Agent 主流程重排，
+属需要授权的项。
+
+#### 9.11.3 导出不再泄露路径（P0-5）
+
+```text
+加固前：GET /api/export          → {ok, path: "E:\\...\\exports\\all_results_20261001.csv", count, format}
+加固后：GET /api/export          → {ok, export_id, filename, format, row_count, size, sha256,
+                                    created_at, download_url}
+        GET /api/export/<id>/download  → send_file(as_attachment=True)
+        GET /api/exports               → 导出记录列表（同样不含 path）
+```
+
+* `core/exports.py` 把导出登记进新表 `exports`（`filename` / `path` / `format` / `row_count` /
+  `size` / `sha256` / `created_at` / `created_by`）；
+* `to_public_dict()` 是**唯一的出参构造点**，`path` 只在 `get_export()` 的内部形态里出现；
+* `get_export(export_id)` 对含 `/` 或 `\` 的 id 直接拒绝，防止把 id 当成路径片段；
+* 文件被清理后 `resolve_export_file()` 返回 `None` → 下载路由 404（有测试）；
+* `exporter.py:safe_prefix()`：文件名前缀只保留 `[A-Za-z0-9._-]`，折叠连续 `.`，限长 64，
+  首尾 `._` 去掉——`../../evil` → `evil`（参数化测试覆盖 8 种输入）。
+
+**保留的已知项**：这些导出接口仍是**匿名可读**（`docs/DECISIONS.md` D：不改鉴权行为）。
+`tests/integration/test_export_contract.py::test_export_endpoints_are_currently_anonymous`
+把这件事显式写成测试，避免以后有人"顺手"加鉴权却不知道会破坏本机脚本。
+
+#### 9.11.4 任务状态机收口（P0-7）
+
+* `ALLOWED_TRANSITIONS`：`queued → {running, cancelled}`；`running → 六个终态`；
+  五个可重试终态 `→ queued`；`succeeded → {}`（绝对终态）；
+* `can_transition(from, to)`：同名幂等、未知状态一律 `False`；
+* `finish_job` 在事务里先读当前状态再比对，非法跃迁抛 `ValueError`
+  （`POST /api/jobs/<id>/retry` 会把 `ValueError` 转成 400）；
+* `MAX_ATTEMPTS = 5`：`retry_job` 到上限即拒绝，防止有人写脚本无限重试刷爆队列。
+
+测试：`tests/unit/test_jobs_store.py` 的 `test_can_transition`（16 组参数化）
+与 `test_finish_job_rejects_*` / `test_retry_respects_max_attempts`。
+
+**未做的部分**：`idempotency_key`、`backoff` 需要给 `jobs` 加列（改表结构），
+已登记 `docs/DECISIONS.md` §3 等授权。`cancel_requested` 与 `heartbeat` 原本就有。
+
+#### 9.11.5 旧结果库连接生命周期（DECISIONS-I）
+
+见 §9.3 的「旧库（`storage.py`）的 P0 加固」。
+
+#### 9.11.6 只读接口的鉴权现状被显式锁定（P0-1 / DECISIONS-D）
+
+`tests/integration/test_api_auth_contract.py` 把两类事实写死成断言：
+
+* **匿名可读**（有意保持）：`/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports`；
+* **必须 401**：`/api/settings`、`/api/scopes`、`/api/upload`、`/api/run`、
+  `/api/tool/<n>/run`、`/api/jobs*`、`/api/artifacts/<id>`、首页表单扫描。
+
+另外断言 `/api/auth/session` 匿名可用（前端靠它判断登录态），
+以及 `/api/tools` / `/api/results` 的响应体里**不夹带服务器路径**。
+将来任何一侧发生变化，这两个测试会失败——那时要同步改的是
+`docs/DECISIONS.md`、`SECURITY.md` 和 README 的鉴权列，而不是删除测试。

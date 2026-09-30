@@ -69,6 +69,44 @@ RETRYABLE_STATUSES = (
     STATUS_PARTIAL,
 )
 
+#: 合法状态跃迁表（方案第 7 节：不允许 ``queued → succeeded`` 这类跳步）。
+#:
+#: * ``queued`` 只能被 worker 领成 ``running``，或被直接取消成 ``cancelled``；
+#: * 只有 ``running`` 能落到执行结果类终态（``succeeded`` / ``partial`` /
+#:   ``failed`` / ``timeout`` / ``cancelled`` / ``interrupted``）；
+#: * 终态之间不能互相跳，只能经 retry 回到 ``queued``；
+#: * ``succeeded`` 是绝对终态——成功的任务不该被重跑。
+#:
+#: 同名状态视为**幂等**（重复写同一个终态不算非法跃迁，worker 双写时不会炸）。
+ALLOWED_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    STATUS_QUEUED: (STATUS_RUNNING, STATUS_CANCELLED),
+    STATUS_RUNNING: (
+        STATUS_SUCCEEDED,
+        STATUS_PARTIAL,
+        STATUS_FAILED,
+        STATUS_TIMEOUT,
+        STATUS_CANCELLED,
+        STATUS_INTERRUPTED,
+    ),
+    STATUS_INTERRUPTED: (STATUS_QUEUED,),
+    STATUS_FAILED: (STATUS_QUEUED,),
+    STATUS_TIMEOUT: (STATUS_QUEUED,),
+    STATUS_CANCELLED: (STATUS_QUEUED,),
+    STATUS_PARTIAL: (STATUS_QUEUED,),
+    STATUS_SUCCEEDED: (),
+}
+
+
+def can_transition(from_status: str, to_status: str) -> bool:
+    """该状态跃迁是否合法。
+
+    ``from_status == to_status`` 视为幂等，返回 ``True``。
+    未知状态一律返回 ``False``（宁可拒绝，也不要放进一个状态机外的值）。
+    """
+    if from_status == to_status:
+        return from_status in ALL_STATUSES
+    return to_status in ALLOWED_TRANSITIONS.get(from_status, ())
+
 # ── 步骤状态 ──────────────────────────────────────────────
 
 STEP_PENDING = "pending"
@@ -93,6 +131,10 @@ EVENT_STEP_FINISHED = "step.finished"
 
 #: worker 默认租约时长（秒）。超过这个时间没续租，视为 worker 已死。
 DEFAULT_LEASE_SECONDS = 60
+
+#: 单个任务允许的最大尝试次数（方案第 7 节「max attempts」）。
+#: 达到上限后 retry 会被拒绝，避免手工反复重试把队列刷爆。
+MAX_ATTEMPTS = 5
 
 
 def _utcnow() -> datetime:
@@ -556,7 +598,8 @@ def retry_job(job_id: str) -> dict | None:
         dict | None: 操作后的 job；不存在返回 ``None``。
 
     Raises:
-        ValueError: 任务当前状态不允许重试（如正在 running 或已 succeeded）。
+        ValueError: 任务当前状态不允许重试（如正在 running 或已 succeeded），
+            或已达到 :data:`MAX_ATTEMPTS` 上限。
     """
     db.ensure_schema()
     with db.transaction() as conn:
@@ -567,6 +610,10 @@ def retry_job(job_id: str) -> dict | None:
         status = row["status"]
         if status not in RETRYABLE_STATUSES:
             raise ValueError(f"当前状态 {status} 不允许 retry")
+        if not can_transition(status, STATUS_QUEUED):
+            raise ValueError(f"非法的状态跃迁: {status} → {STATUS_QUEUED}")
+        if row["attempt"] >= MAX_ATTEMPTS:
+            raise ValueError(f"已达到最大重试次数（{MAX_ATTEMPTS}），拒绝继续 retry")
 
         conn.execute(
             """
@@ -680,11 +727,25 @@ def finish_job(
     error_message: str | None = None,
     release_worker: bool = True,
 ) -> None:
-    """把任务置为终态。"""
+    """把任务置为终态。
+
+    Raises:
+        ValueError: ``status`` 不是终态，或从当前状态跃迁到该终态非法
+            （方案第 7 节：不允许 ``queued → succeeded`` 这类跳步）。
+    """
     if status not in TERMINAL_STATUSES:
         raise ValueError(f"{status} 不是终态")
-    now = _now()
+
+    db.ensure_schema()
     with db.transaction() as conn:
+        row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"任务不存在: {job_id}")
+        current = row["status"]
+        if not can_transition(current, status):
+            raise ValueError(f"非法的状态跃迁: {current} → {status}")
+
+        now = _now()
         if release_worker:
             conn.execute(
                 """

@@ -22,10 +22,11 @@ from flask import jsonify, request
 
 from api import api_bp
 from core import artifacts as artifacts_store
-from core import audit, jobs as jobs_store, scope_store, uploads
+from core import audit, jobs as jobs_store, uploads
 from core.auth import require_admin
 from core.errors import BadRequestError, NotFoundError
 from core.mock import SCENARIOS, normalize_scenario
+from core.policy import validate_job_targets
 from core.safety import MODE_MOCK, MODE_REAL, resolve_mode
 from config import SCAN_LIMITS
 
@@ -88,11 +89,6 @@ def create_job():
         raise BadRequestError("请求体必须是 JSON 对象")
 
     scope_id = str(payload.get("scope_id") or "").strip()
-    if not scope_id:
-        raise BadRequestError(
-            "必须提供 scope_id：没有授权范围不允许创建扫描任务",
-            details={"field": "scope_id"},
-        )
 
     targets, upload_id = _resolve_targets(payload)
     if not targets:
@@ -117,10 +113,9 @@ def create_job():
             details={"max_targets_per_job": max_targets},
         )
 
-    # Scope 强校验：不存在 → 403；目标越界 → 403（整体拒绝，不部分执行）。
-    scope = scope_store.require(scope_id)
-    scoped = scope.validate_targets(targets)
-    validated_targets = [item.value for item in scoped]
+    # scope_id 缺失 / Scope 不存在 / 目标越界，全部由统一 Policy 入口判定：
+    # 缺失 → 400，不存在或越界 → 403（整体拒绝，不部分执行）。
+    scope, validated_targets = validate_job_targets(scope_id, targets)
 
     mode = resolve_mode(payload.get("mode"))
     if mode == MODE_REAL:

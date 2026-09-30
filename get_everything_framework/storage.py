@@ -1,13 +1,19 @@
-"""SQLite 数据库层 — 管理扫描结果的持久化存储。
+﻿"""SQLite 数据库层 — 管理扫描结果的持久化存储。
 
 本模块提供 ScanResultStore 类，负责创建/维护所有工具的专用表、
 写入扫描结果、以及提供多维度查询接口（按域名/工具/分类等）。
 """
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 
 from config import SQLITE_CONFIG
+
+# 旧结果库的等锁超时：并发写时先等，而不是立刻抛 database is locked。
+# 只改连接行为，不改数据库文件结构与既有数据。
+BUSY_TIMEOUT_MS = 5000
+BUSY_TIMEOUT_SECONDS = BUSY_TIMEOUT_MS / 1000
 
 
 # ── 工具数据库元信息映射 ───────────────────────────────────
@@ -121,8 +127,30 @@ class ScanResultStore:
         self._init_db()
 
     def _get_connection(self):
-        """创建新的 SQLite 数据库连接（每次调用返回新连接）。"""
-        return sqlite3.connect(self.db_path)
+        """创建新的 SQLite 数据库连接（每次调用返回新连接）。
+
+        连接级别的 ``busy_timeout`` 不修改数据库文件，只影响本连接的等锁行为：
+        并发写时先等待而不是立刻抛 ``database is locked``。
+        """
+        conn = sqlite3.connect(self.db_path, timeout=BUSY_TIMEOUT_SECONDS)
+        conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        return conn
+
+    @contextmanager
+    def _connect(self):
+        """连接上下文：正常退出提交、异常回滚，**并在最后关闭连接**。
+
+        ``sqlite3.Connection`` 的 ``with`` 只负责事务，**不会关闭连接**；
+        以前直接用 ``with self._get_connection() as conn`` 会留下未关闭的
+        文件句柄（pytest 报 ``ResourceWarning: unclosed database``）。
+        这里把两件事合起来：事务语义保持不变，连接一定会关。
+        """
+        conn = self._get_connection()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         """初始化数据库表结构。
@@ -132,7 +160,7 @@ class ScanResultStore:
         - tool_results：通用工具结果表（非专属工具使用）
         - 各工具的专属结果表
         """
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             # 扫描运行记录表
             conn.execute(
                 """
@@ -272,7 +300,7 @@ class ScanResultStore:
         table_name = meta["table"]
         result_column = meta["column"]
 
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             run_id = self._create_scan_run(
                 cursor, domain, tool_name, len(normalized_results), created_at
@@ -335,7 +363,7 @@ class ScanResultStore:
         normalized_results = self._normalize_results(results)
         created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             cursor = conn.cursor()
             run_id = self._create_scan_run(
                 cursor, domain, tool_name, len(normalized_results), created_at
@@ -399,7 +427,7 @@ class ScanResultStore:
             return []
 
         union_sql = " UNION ALL ".join(queries) + " ORDER BY value ASC"
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             return conn.execute(union_sql, params).fetchall()
 
     def get_results_by_domain(self, domain):
@@ -420,7 +448,7 @@ class ScanResultStore:
         Returns:
             字典包含 total_runs、total_domains、total_subdomains、tool_stats、recent_runs。
         """
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             total_runs = conn.execute("SELECT COUNT(*) FROM scan_runs").fetchone()[0]
 
             rows = self._query_subdomain_tables()
@@ -509,7 +537,7 @@ class ScanResultStore:
         query.append("LIMIT ?")
         params.append(limit)
 
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             cursor = conn.execute("\n".join(query), params)
             return [
                 {
@@ -547,7 +575,7 @@ class ScanResultStore:
             字典列表，每项含 tool_name、table、category、result_column、total_count、domain_count、last_scan_at。
         """
         overview = []
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             for tool_name, meta in sorted(TOOL_DATABASES.items()):
                 table_name = meta["table"]
                 result_column = meta["column"]
@@ -634,7 +662,7 @@ class ScanResultStore:
             query.append("WHERE domain = ?")
             params.append(domain)
         query.append("ORDER BY domain ASC, value ASC")
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             return conn.execute("\n".join(query), params).fetchall()
 
     def get_alive_overview(self, domain=None):
@@ -698,7 +726,7 @@ class ScanResultStore:
                 query.append("WHERE " + " AND ".join(conditions))
             query.append("ORDER BY id DESC LIMIT ?")
             params.append(limit)
-            with self._get_connection() as conn:
+            with self._connect() as conn:
                 return conn.execute("\n".join(query), params).fetchall()
 
         return self._get_tool_results_fallback(tool_name, domain, limit)
@@ -721,7 +749,7 @@ class ScanResultStore:
         if tool_name and tool_name in TOOL_DATABASES:
             filters = [(tool_name, TOOL_DATABASES[tool_name])]
 
-        with self._get_connection() as conn:
+        with self._connect() as conn:
             for tool, meta in filters:
                 table = meta["table"]
                 col = meta["column"]

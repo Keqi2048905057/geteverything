@@ -123,18 +123,53 @@
   `os.killpg()` 的杀伤范围包含 worker 自己（表现为 Linux/CI 上测试进程凭空消失，本地 Windows 全绿）。
   现在 POSIX 下子进程另起进程组，且清理前比对 child / own 进程组。
 
+### P0 — 产品化加固（本轮，非里程碑，按 DSH 执行方案 P0 清单）
+
+新增：
+
+- `core/policy.py`：**统一 Policy / Scope 引擎**。四个入口
+  `validate_job_targets` / `validate_step_target` / `validate_resolved_address` / `validate_redirect_target`，
+  语义统一为「缺失 → 400、不存在或越界 → 403、整体拒绝不部分执行」。
+- `core/exports.py` + `exports` 表：导出登记（`filename` / `format` / `row_count` / `size` / `sha256`），
+  对外只给 `export_id` 与 `download_url`，`path` 仅内部使用。
+- `api/results.py`：`GET /api/export/<export_id>/download`（`send_file` 附件下载）与 `GET /api/exports`。
+- `core/jobs.py`：显式状态跃迁表 `ALLOWED_TRANSITIONS` + `can_transition()`；`MAX_ATTEMPTS = 5`。
+- `exporter.py:safe_prefix()`：导出文件名前缀白名单过滤（折叠 `..`、限长 64）。
+
+变更：
+
+- `api/scan.py` / `api/jobs.py` / `app.py` 全部改走 `core/policy.py`，删除各自重复的 Scope 判断。
+- `jobs/executor.py`：real 步骤在调用 Runner **之前**重新校验 Scope，任务创建后 Scope 被删/被改即中止。
+- `agent/action.py` / `agent/planner.py`：Agent 层只接受受控 `upload_id`，任意 `file_path` 一律拒绝。
+- `storage.py`：新增 `_connect()` 上下文管理器（事务语义不变、退出必 `close()`）+ 连接级 `busy_timeout=5000`。
+  10 个调用点全部切换；**未改表结构、未动既有数据**。
+- `core/health.py`：健康检查的只读连接改显式 `close()`。
+- `core/db.py`：`exports` 表 + `idx_exports_created` 索引。
+
+修复：
+
+- **DECISIONS-I**：`ResourceWarning: unclosed file` 的真实来源不是报告里的 `core/db.py:244`，
+  而是 `storage.py` 的 `with conn`（只提交不关闭）。已修并补回归测试。
+- **DECISIONS-I**：`test_security_baseline.py` 的 `SECRET_KEY` 告警改为 `pytest.warns` 显式断言。
+  现在 `python -m pytest` **零 warning**。
+- 导出下载与超大上传用例的 `ResourceWarning`（前者漏关响应，后者来自 Werkzeug 测试客户端的临时文件）。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 405 passed, 2 skipped
+$ python -m pytest           # 538 passed, 2 skipped, 0 warnings
+$ python -m mypy app.py core api jobs storage.py modules   # 34 errors（M7 待修，本轮未增减）
 ```
 
 ### 已知仍未处理（不属 M0～M4 范围）
 
-- `/api/tools`、`/api/results`、`/api/export` 仍可匿名只读；`/api/export` 仍只返回服务器路径而不是流式下载。
-- `storage.py`（旧库）依然无 WAL / 无 `busy_timeout`，`with conn` 只提交不关闭。
+- `/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports` 仍可匿名只读
+  （按 `docs/DECISIONS.md` D 有意保持，已用契约测试锁定）。
+- `storage.py`（旧库）仍无 WAL；已加连接级 `busy_timeout`，但 WAL 需重建库文件，属迁移范畴。
 - `/api/jobs` 只有 `limit`，没有游标分页。
 - 单并发 worker（`SCAN_LIMITS["max_concurrency"] = 2` 目前未使用）。
 - `config.py:FEROXBUSTER_CONFIG` 的 `wordlist` 仍是开发机绝对路径。
 - 首页尚未展示 `httpx` 观测到的状态码/标题——那属于 M5 的资产页。
+- `jobs` 表无 `idempotency_key` / 无 `backoff`（需新增列 = 改表结构，已登记 `docs/DECISIONS.md` §3 待授权）。
+- Agent 尚未改走 Job Service（P0-6 未完成部分）。

@@ -59,53 +59,65 @@ def _execute_mock_step(step: dict, scenario: str | None) -> dict:
     }
 
 
-def _execute_real_step(step: dict) -> dict:
+def _failed_outcome(error_code: str, message: str) -> dict:
+    """构造一个「未执行即失败」的步骤结果。
+
+    工具未注册、执行前 Scope 复检失败等都属于这一类：没有 exit_code、没有证据，
+    但错误码必须明确（方案第 6.2 节：失败不能被吞成空结果）。
+    """
+    return {
+        "step_status": jobs_store.STEP_FAILED,
+        "found_count": 0,
+        "results": [],
+        "observations": [],
+        "error_code": error_code,
+        "error_message": message,
+        "exit_code": None,
+        "artifact_id": None,
+        "duration_ms": None,
+        "command_preview": None,
+        "parser_version": None,
+    }
+
+
+def _execute_real_step(step: dict, scope_id: str | None = None) -> dict:
     """real 步骤：调用真实 runner 的统一入口 ``run()``。
 
-    真实执行前已经由 API 层完成 Scope 与环境开关校验；这里只负责执行、
-    落盘原始证据并把结果归一化成 ``job_steps`` 的形状。
+    真实执行前由 API 层完成 Scope 与环境开关校验；这里在执行**之前**再复检一次
+    （方案第 5.3 节「每个 Step 执行前」），落盘原始证据并把结果归一化成
+    ``job_steps`` 的形状。
 
     ``run()`` 内部已经接住 ``SystemExit`` / ``FileNotFoundError`` /
     ``TimeoutError`` 等异常（否则会直接把 worker 进程带走），因此这里
-    只需要处理「工具未注册」这一种前置情况。
+    只需要处理「执行前复检失败」与「工具未注册」两种前置情况。
     """
     from modules.registry import build_runner
 
     tool_name = step["tool_name"]
     target = step["target"]
 
+    # ── 执行前的 Scope 复检（方案第 5.3 节「每个 Step 执行前」） ──
+    # Job 创建到真正执行之间，Scope 可能已被删除或收紧。worker 必须重新读一次
+    # Scope 并重校验，而不是相信创建时的快照；越界目标绝不允许进入 Runner。
+    from core.errors import AppError
+    from core.policy import validate_step_target
+
+    try:
+        target = validate_step_target(scope_id, target)
+    except AppError as exc:
+        # Scope 缺失（400）与目标越界（403）在执行期同样是「不许执行」。
+        return _failed_outcome(ErrorCode.SCOPE_VIOLATION, f"执行前 Scope 复检失败：{exc.message}")
+    except Exception as exc:  # noqa: BLE001 - 复检本身出错时按未知错误处理，不放行
+        return _failed_outcome(ErrorCode.UNKNOWN_ERROR, f"执行前 Scope 复检异常：{exc}")
+
     if tool_name not in _known_tools():
-        return {
-            "step_status": jobs_store.STEP_FAILED,
-            "found_count": 0,
-            "results": [],
-            "observations": [],
-            "error_code": ErrorCode.TOOL_NOT_FOUND,
-            "error_message": f"工具未注册: {tool_name}",
-            "exit_code": None,
-            "artifact_id": None,
-            "duration_ms": None,
-            "command_preview": None,
-            "parser_version": None,
-        }
+        return _failed_outcome(ErrorCode.TOOL_NOT_FOUND, f"工具未注册: {tool_name}")
 
     try:
         runner = build_runner(tool_name)
         result = runner.run(target)
     except Exception as exc:  # noqa: BLE001 - 兜底：任何异常都不能带走 worker
-        return {
-            "step_status": jobs_store.STEP_FAILED,
-            "found_count": 0,
-            "results": [],
-            "observations": [],
-            "error_code": ErrorCode.UNKNOWN_ERROR,
-            "error_message": f"{type(exc).__name__}: {exc}",
-            "exit_code": None,
-            "artifact_id": None,
-            "duration_ms": None,
-            "command_preview": None,
-            "parser_version": None,
-        }
+        return _failed_outcome(ErrorCode.UNKNOWN_ERROR, f"{type(exc).__name__}: {exc}")
 
     outcome = result.to_step_outcome()
 
@@ -232,6 +244,8 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
 
     mode = job["mode"]
     scenario = job["scenario"]
+    # 执行期复检要用 job 上的 scope_id：步骤快照里没有这一列。
+    scope_id = job.get("scope_id")
     step_statuses: list[str] = [
         step["status"] for step in jobs_store.list_steps(job_id) if step["status"] != jobs_store.STEP_PENDING
     ]
@@ -244,7 +258,8 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
 
         jobs_store.start_step(step["id"])
         if mode == "real":
-            outcome = _execute_real_step(step)
+            # real 步骤在执行前重新读一次 Scope 并复检目标（方案第 5.3 节）。
+            outcome = _execute_real_step(step, scope_id)
         else:
             outcome = _execute_mock_step(step, scenario)
 

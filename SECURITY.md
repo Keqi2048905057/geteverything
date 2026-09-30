@@ -34,16 +34,23 @@
 | M3 | 扫描在 Flask 请求线程内同步阻塞 | 改为异步任务队列 + 独立 worker 进程 |
 | M4 | 工具失败返回 `[]`，与“无结果”不可区分 | 统一 `RunnerResult`，失败/超时/零结果分开记录 |
 | M4 | 工具无超时、命令预览泄露 API Key | 强制超时（含进程树终止）+ 命令预览脱敏 |
+| P0-2 | Scope 判定散落在各 API，执行期不再复检 | 统一 `core/policy.py` 四个入口：Job 创建 / Step 执行前 / 解析后地址 / 重定向 |
+| P0-3 | Agent 仍接受任意 `file_path` 并直接交给编排层 | Agent 只接受受控 `upload_id`，任意路径直接拒绝 |
+| P0-5 | `/api/export` 返回服务器文件路径，泄露本机目录结构 | 改为 `export_id` + 下载路由；导出记录入 `exports` 表可追溯 |
+| P0-5 | 导出文件名前缀可由请求参数拼接，存在 `../` 穿越写盘风险 | `exporter.py:safe_prefix()` 白名单字符 + 折叠 `..` + 长度上限，并有参数化测试 |
+| P0-7 | 任务状态机缺少显式跃迁表，`queued` 可被直接写成终态 | `core/jobs.py:ALLOWED_TRANSITIONS` + `can_transition()`，`finish_job` 拒绝非法跃迁 |
+| P0-7 | 任务可被无限次 retry，队列会被刷爆 | `MAX_ATTEMPTS = 5`，超限 retry 返回 400 |
+| DECISIONS-I | 旧结果库 `with conn` 只提交不关闭，句柄持续泄漏 | `storage.py:_connect()` 显式关闭 + 连接级 `busy_timeout`；`core/health.py` 同样显式关闭 |
 
 仍待处理：
 
 | 状态 | 问题 |
 |---|---|
-| 待修复 | `/api/tools`、`/api/results`、`/api/export` 仍可匿名读取 |
-| 待修复 | `/api/export` 返回服务器文件路径，会泄露本机目录结构 |
-| 待修复 | `storage.py` 旧结果库无 WAL、无 `busy_timeout`，并发写会 `database is locked` |
+| 已知项（`docs/DECISIONS.md` D） | `/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports`、`/api/export/<id>/download` 仍可**匿名读取**。这是**有意保持的现状**（不破坏本机脚本兼容性），已在 `tests/integration/test_api_auth_contract.py` 与 `test_export_contract.py` 用测试锁定该契约；后续若要收口鉴权需用户明确授权 |
+| 待修复 | `storage.py` 旧结果库**仍无 WAL**（已加连接级 `busy_timeout=5000`，但 WAL 需重建库文件，属迁移范畴，未在无人值守期间执行） |
 | 待修复 | `config.py` 中 `FEROXBUSTER_CONFIG` 的 `wordlist` 是开发机绝对路径，换机器会失败 |
 | 待修复 | `scripts/*.exe` 等工具二进制不进仓库，需自行按 `README.md` 准备，缺失时报 `tool_not_found` |
+| 待评估（P0-6） | Agent 层已禁止任意 `file_path`（只能引用受控 `upload_id`），但**仍直接调用 `run_tools` / runner，未改走 Job Service**——即 Agent 提议与执行尚未彻底分离，需先授权再动 |
 
 ## 使用约定
 

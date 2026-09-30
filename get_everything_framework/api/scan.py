@@ -13,10 +13,11 @@ from flask import jsonify, request
 
 from api import api_bp            # Flask 蓝图实例
 from config import SCAN_LIMITS     # 目标数上限等资源限制
-from core import scope_store, uploads  # 受控上传 + Scope 存储
+from core import uploads  # 受控上传
 from core.auth import require_admin  # 本地管理员认证守卫
 from core.errors import BadRequestError, ScopeViolationError
 from core.mock import run_mock
+from core.policy import validate_job_targets  # 统一 Policy / Scope Engine（P0-2）
 from core.safety import MODE_MOCK, MODE_REAL, resolve_mode
 from storage import ScanResultStore  # 扫描结果持久化存储
 # 工具加载与执行的核心函数
@@ -32,6 +33,9 @@ def resolve_scoped_targets(
 ) -> tuple[list[str], "object", str]:
     """解析目标并强制通过 Scope 校验（方案第 2.3 节第 2、5 条）。
 
+    具体判定全部委托给 :mod:`core.policy`（统一 Policy / Scope Engine），
+    本函数只负责「把请求字段拼成目标列表」与资源上限检查。
+
     Args:
         scope_id: 请求中的 scope_id，M2 起必填。
         domain: 单个目标。
@@ -45,18 +49,8 @@ def resolve_scoped_targets(
         BadRequestError: 缺少 scope_id、目标为空或超过单任务上限。
         ScopeViolationError: Scope 不存在，或任一目标越界。
     """
-    if not scope_id:
-        raise BadRequestError(
-            "必须提供 scope_id：没有授权范围不允许创建扫描任务",
-            details={"field": "scope_id"},
-        )
-
-    scope = scope_store.require(scope_id)
     # 真实扫描需要环境开关；mock 模式不受该开关限制。
     resolved_mode = resolve_mode(mode)
-    if resolved_mode == MODE_REAL:
-        # 双重门槛：环境开关（上面）+ 该 Scope 自身声明允许真实扫描。
-        scope.require_active_scan()
 
     raw_targets: list[str] = []
     if upload_id:
@@ -82,9 +76,12 @@ def resolve_scoped_targets(
             details={"max_targets_per_job": max_targets},
         )
 
-    # 逐个过 Scope；任一出界即整体拒绝，不做部分执行。
-    scoped = scope.validate_targets(unique_targets)
-    return [item.value for item in scoped], scope, resolved_mode
+    # 统一入口：scope_id 缺失 → 400；不存在 → 403；任一出界 → 403（整体拒绝）。
+    scope, validated = validate_job_targets(scope_id, unique_targets)
+    if resolved_mode == MODE_REAL:
+        # 双重门槛：环境开关（上面）+ 该 Scope 自身声明允许真实扫描。
+        scope.require_active_scan()
+    return validated, scope, resolved_mode
 
 
 def _normalize_domain(value: str | None) -> str | None:

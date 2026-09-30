@@ -7,14 +7,22 @@
   GET /api/tool/<tool_name>/results  — 按工具名查询其专属数据库中的结果
   GET /api/export                    — 将扫描结果导出为 CSV 或 JSON 文件
 
+导出契约（P0-5，方案第 3.4 节「严禁 API 直接暴露服务器绝对路径」）:
+  `/api/export` **不再**返回 `path` 字段，改为下发 `export_id` + 文件名 +
+  大小 + sha256；需要字节流时走 `GET /api/export/<export_id>/download` 流式下载。
+  导出文件登记在 `exports` 表，可审计、可过期清理。
+
 依赖:
   - storage.ScanResultStore: 扫描结果持久化存储层
   - exporter: 结果导出与数据聚合模块
+  - core.exports: 导出记录登记与安全读取（不暴露路径）
 """
 
-from flask import jsonify, request
+from flask import jsonify, request, send_file
 
 from api import api_bp            # Flask 蓝图实例
+from core import exports as exports_store
+from core.errors import NotFoundError
 from exporter import export_results, gather_export_rows  # 结果导出相关函数
 from storage import ScanResultStore  # 扫描结果存储层
 
@@ -197,9 +205,10 @@ def query_tool_results(tool_name: str):
 @api_bp.route("/export", methods=["GET"])
 def export_data():
     """
-    导出扫描结果为文件
+    导出扫描结果，并返回可下载的导出记录
 
     将符合过滤条件的扫描结果导出为 CSV 或 JSON 格式文件。
+    **响应里没有服务器路径**：只给 ``export_id`` 与 ``download_url``。
 
     请求方式: GET
     路径: /api/export
@@ -214,17 +223,19 @@ def export_data():
     返回示例:
         {
             "ok": true,
-            "path": "/path/to/example.com_20250101_120000.csv",
-            "count": 500,
-            "format": "csv"
+            "export_id": "exp_...",
+            "filename": "example.com_20250101_120000.csv",
+            "format": "csv",
+            "row_count": 500,
+            "size": 20480,
+            "sha256": "...",
+            "download_url": "/api/export/exp_.../download"
         }
 
     内部逻辑:
-        1. 创建存储层实例
-        2. 提取并规范化过滤条件与导出参数
-        3. 聚合符合条件的结果记录
-        4. 调用导出函数生成文件到磁盘
-        5. 返回文件路径、记录数、格式信息
+        1. 聚合符合条件的结果记录
+        2. 调用导出函数生成文件到磁盘
+        3. 登记导出记录（`exports` 表），**不把路径回传给调用方**
     """
     # 初始化存储实例
     store = ScanResultStore()
@@ -247,10 +258,50 @@ def export_data():
     )
     # 生成导出文件，文件名使用域名前缀（未指定域名时用 "all_results"）
     path = export_results(rows, fmt=fmt, prefix=domain or "all_results")
+    # 登记为可追溯的导出记录；对外只暴露 export_id，绝不返回 path。
+    record = exports_store.register_export(path, fmt=fmt, row_count=len(rows))
 
-    return jsonify({
-        "ok": True,
-        "path": path,
-        "count": len(rows),
-        "format": fmt,
-    })
+    return jsonify({"ok": True, **record})
+
+
+@api_bp.route("/export/<export_id>/download", methods=["GET"])
+def download_export(export_id: str):
+    """
+    下载一个已登记的导出文件。
+
+    请求方式: GET
+    路径: /api/export/<export_id>/download
+
+    返回:
+        文件字节流（``Content-Disposition: attachment``）。
+        路径只在服务端解析，响应头与响应体都不含服务器绝对路径。
+
+    错误响应:
+        - 404: export_id 不存在，或登记的文件已被删除
+    """
+    resolved = exports_store.resolve_export_file(export_id)
+    if resolved is None:
+        raise NotFoundError(f"导出记录不存在或文件已失效: {export_id}")
+
+    path, filename = resolved
+    return send_file(
+        path,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="text/csv" if filename.endswith(".csv") else "application/json",
+    )
+
+
+@api_bp.route("/exports", methods=["GET"])
+def list_exports():
+    """
+    列出导出记录（**不含服务器路径**）
+
+    请求方式: GET
+    路径: /api/exports
+
+    Query 参数:
+        limit — 返回条数上限（可选，默认 50，最大 500）
+    """
+    limit = _parse_limit(request.args.get("limit"), default=50, maximum=500)
+    return jsonify({"ok": True, "exports": exports_store.list_exports(limit=limit)})
