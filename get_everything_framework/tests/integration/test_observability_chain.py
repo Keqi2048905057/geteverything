@@ -298,3 +298,112 @@ def test_worker_log_does_not_print_when_quiet(capsys):
     captured = capsys.readouterr()
     assert "不应出现在 stdout" not in captured.out
     assert "不应出现在 stdout" not in captured.err
+
+
+# ── 长方案 P1-5 的验收口径：一个 job_id 串起整条执行链 ────────
+
+
+def test_single_job_id_stitches_the_whole_chain(admin_client, caplog):
+    """长方案 P1-5 验收原话：「输入一个 job_id 可以串起整条执行链」。
+
+    这条用例按**排障时的真实动作**来写：拿一个 ``job_id`` 去日志里捞，
+    应当一次性看到 Web 层（创建）→ 执行层（开始 / 每一步 / 结束）→
+    worker 层（领取 / 任务结束）的全部事件，且都带这一个 job_id。
+    这是整轮 §19 改造的**端到端验收**，比逐个字段的单测更能说明问题。
+    """
+    from jobs.worker import Worker
+
+    caplog.set_level(logging.DEBUG, logger=observability.LOGGER_NAME)
+
+    scope = admin_client.post("/api/scopes", json={"name": "链路范围", "allowed_domains": ["example.test"]})
+    assert scope.status_code in (200, 201), scope.get_data(as_text=True)
+    scope_id = scope.get_json()["scope"]["id"]
+
+    response = admin_client.post(
+        "/api/jobs",
+        json={
+            "scope_id": scope_id,
+            "targets": ["a.example.test", "b.example.test"],
+            "tools": ["subfinder"],
+            "mode": "mock",
+        },
+    )
+    assert response.status_code == 202, response.get_data(as_text=True)
+    job_id = response.get_json()["job_id"]
+    request_id = response.headers[observability.REQUEST_ID_HEADER]
+
+    with Worker(worker_id="trace-worker", verbose=False, recover_on_start=False) as worker:
+        processed = 0
+        while worker.tick() is not None:
+            processed += 1
+            if processed > 20:  # 防御，正常不会走到
+                break
+    assert processed == 1
+
+    # 模拟排障：只拿 job_id 去捞日志。
+    all_events = [json.loads(record.getMessage()) for record in caplog.records if record.name == observability.LOGGER_NAME]
+    trace = [event for event in all_events if event.get("job_id") == job_id]
+    events = {event["event"] for event in trace}
+
+    # 链路两端 + 每个步骤都在，且全部共用同一个 job_id。
+    assert {
+        observability.EVENT_JOB_CREATED,
+        observability.EVENT_JOB_STARTED,
+        observability.EVENT_JOB_STEP_FINISHED,
+        observability.EVENT_JOB_FINISHED,
+        observability.EVENT_WORKER_CLAIMED_JOB,
+        observability.EVENT_WORKER_JOB_FINISHED,
+    } <= events
+
+    # 创建事件额外带 request_id，把「这一跳 HTTP 请求」也接上。
+    created = [event for event in trace if event["event"] == observability.EVENT_JOB_CREATED]
+    assert created and created[0]["request_id"] == request_id
+
+    # 每一步都能拿到 step_id，且 step_id 互不相同（同一步的 started/finished 才该相同）。
+    step_ids = {event["step_id"] for event in trace if event.get("step_id")}
+    assert len(step_ids) == 2  # 2 个目标 = 2 个步骤
+
+    # worker 侧事件都带 worker_id，便于区分是哪个 worker 跑的。
+    worker_events = [event for event in trace if event["event"].startswith("worker_")]
+    assert worker_events
+    assert all(event.get("worker_id") == "trace-worker" for event in worker_events)
+
+    # 方案第 19 节：这份「公共日志」里不能出现完整目标列表。
+    assert "targets" not in created[0]
+    assert created[0]["target_count"] == 2
+
+
+def test_log_trace_never_contains_the_scope_target_list(admin_client, caplog):
+    """反向守卫：整条链的日志里不得出现「一次性列出全部目标」的字段。
+
+    逐步的 ``target`` 是允许的（那是当前这一步的目标，排查必需）；
+    被禁止的是把整份目标列表塞进一个字段 —— 这正是方案第 19 节最后一句。
+    """
+    from jobs.worker import Worker
+
+    caplog.set_level(logging.DEBUG, logger=observability.LOGGER_NAME)
+    scope = admin_client.post("/api/scopes", json={"name": "守卫范围", "allowed_domains": ["example.test"]})
+    scope_id = scope.get_json()["scope"]["id"]
+    targets = [f"host{i}.example.test" for i in range(12)]
+
+    response = admin_client.post(
+        "/api/jobs",
+        json={"scope_id": scope_id, "targets": targets, "tools": ["subfinder"], "mode": "mock"},
+    )
+    assert response.status_code == 202
+
+    with Worker(worker_id="guard-worker", verbose=False, recover_on_start=False) as worker:
+        while worker.tick() is not None:
+            pass
+
+    for record in caplog.records:
+        if record.name != observability.LOGGER_NAME:
+            continue
+        payload = json.loads(record.getMessage())
+        # 不许有「整份目标列表」字段（各种可能的名字都堵上）。
+        for key in ("targets", "target_list", "all_targets", "scope_targets"):
+            assert key not in payload, f"日志里出现了整份目标列表字段 {key}: {payload}"
+        # 任何列表字段都不该装下整份目标清单（逐步的 ``target`` 是字符串，不受影响）。
+        for key, value in payload.items():
+            if isinstance(value, list):
+                assert len(value) < len(targets), f"{key} 疑似装下了完整目标列表: {payload}"

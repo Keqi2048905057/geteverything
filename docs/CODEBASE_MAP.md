@@ -790,12 +790,12 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 826 passed, 2 skipped, 0 failures
+$ python -m pytest           # 828 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 60 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → **P1 §19 Observability（结构化日志与关联 ID）`826`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → **P1 §19 Observability（结构化日志与关联 ID）`828`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -832,7 +832,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/integration/test_assets_api.py` | **P1**：资产接口全部 401（未登录）、「任务跑完 → 资产可查」端到端链路、`summary` 未被 `<asset_id>` 吃掉、`/api/observations` 拒绝无条件全表扫描、Diff 端点 404 与 `include_unchanged`、**diff 条目必带可用的 `asset_id`**、资产页骨架与匿名时不下发 Scope 名、**静态脚本已把 diff 条目接成点击**、响应无服务器路径 |
 | `tests/integration/test_m7_local_e2e.py` | **M7（方案第 18 节）**：本地 fixture HTTP **全链路**——真实 httpx 子进程打只绑 `127.0.0.1` 的 fixture，一条用例走完 target → job → worker → runner → raw artifact → parser → observation → asset → diff → export；含「证据必须完整读出（只脱敏、不按 300 字符截断）」的回归。无 httpx 可执行文件时 `pytest.skip` |
 | `tests/unit/test_observability.py` | **P1 §19**：`request_id` 生成与入站校验（空格/过短/过长一律拒绝并重生成）、contextvar 绑定/还原/**线程隔离**、事件信封（`ts`/`level`/`event` + 自动并入的四个关联字段）、单行 JSON、级别常量与非法值退化、敏感字段名单只记占位符、自由文本脱敏、**关联 ID 不被裸 token 规则误打码**、长字段截断、**容器最多 20 项（不记完整目标列表）**、`format_event` 两种格式、`configure_logging` 幂等/分级/读配置/配置坏掉也不炸；另有三条**源码守卫**：`print` 里不得出现密钥形状、除 `core.observability` 外不得自建 logger、新增 `print` 必须在登记清单里 |
-| `tests/integration/test_observability_chain.py` | **P1 §19**：Web 层每个请求绑定并回写 `X-Request-Id`（合法入站值沿用、非法值拒绝、逐请求唯一、失败响应也带）、访问与失败事件的 `path` **只记路径不带 query**、`job_created` 事件与触发它的请求共用 `request_id` 且不记目标列表、401 事件的错误码且不回显 Token 值、执行层 `job_step_finished` 带 `job_id`/`step_id`/`tool`/`status`/`duration_ms`（失败为 WARNING）、多目标时只记当前步骤目标、worker 三层事件都带 `worker_id` 且上下文管理器退出后还原 |
+| `tests/integration/test_observability_chain.py` | **P1 §19**：Web 层每个请求绑定并回写 `X-Request-Id`（合法入站值沿用、非法值拒绝、逐请求唯一、失败响应也带）、访问与失败事件的 `path` **只记路径不带 query**、`job_created` 事件与触发它的请求共用 `request_id` 且不记目标列表、401 事件的错误码且不回显 Token 值、执行层 `job_step_finished` 带 `job_id`/`step_id`/`tool`/`status`/`duration_ms`（失败为 WARNING）、多目标时只记当前步骤目标、worker 三层事件都带 `worker_id` 且上下文管理器退出后还原；**端到端按长方案 P1-5 的验收原话写**：拿一个 `job_id` 去日志里捞，六类事件（创建/开始/每步/结束/领取/worker 结束）一次全部出现且共用同一个 `job_id`，另加反向守卫确认 **12 个目标的整份清单不会出现在任何日志字段里**（连换成别的字段名也拦得住） |
 
 ### 9.9 第 6 节 BUG 索引表的**现状修正**
 
@@ -1772,12 +1772,33 @@ worker 绑了 `worker_id` 后，它跑的所有任务事件都带 `worker_id`。
 一个是「我花了几毫秒跑这一步」的观测，一个是「真实 runner 报告的耗时」。
 （第一版实现误把补出来的值也写进了库，被该用例当场拦下。）
 
-#### 9.18.7 新增用例（+67，759 → 826）
+#### 9.18.7 新增用例（+69，759 → 828）
 
 | 文件 | 例数 | 覆盖 |
 |---|---|---|
 | `tests/unit/test_observability.py` | 50 | 事件信封、contextvar 绑定/还原/线程隔离、`request_id` 校验、脱敏（敏感字段 / 自由文本 / 关联 ID 不被误打码）、容器上限、长字段截断、两种格式、`configure_logging` 幂等与分级、三条源码守卫 |
-| `tests/integration/test_observability_chain.py` | 17 | Web 层（回写 `X-Request-Id`、逐请求唯一、失败响应也带、`path` 不带 query）、执行层（每步一条 `job_step_finished`、失败 WARNING、只记当前步骤目标）、worker 层（三层事件都带 `worker_id`、`with Worker` 退出后还原） |
+| `tests/integration/test_observability_chain.py` | 19 | Web 层（回写 `X-Request-Id`、逐请求唯一、失败响应也带、`path` 不带 query）、执行层（每步一条 `job_step_finished`、失败 WARNING、只记当前步骤目标）、worker 层（三层事件都带 `worker_id`、`with Worker` 退出后还原）、端到端「一个 `job_id` 串起整条链」+ 反向守卫（整份目标清单不得进日志） |
+
+#### 9.18.8 「一个 `job_id` 串起整条链」的端到端验收
+
+这是**长方案 P1-5 的验收原话**，也是本轮最有说服力的一条证据：
+`test_single_job_id_stitches_the_whole_chain` 不按实现写、而是**按排障时的真实动作写** ——
+拿一个 `job_id` 去日志里捞，断言六类事件一次全部出现且共用这一个 `job_id`：
+
+```text
+job_created（带那一跳 HTTP 的 request_id）
+job_started
+job_step_finished × N（每个目标一步，step_id 互不相同）
+job_finished
+worker_claimed_job（带 worker_id）
+worker_job_finished（带 worker_id）
+```
+
+配套的反向守卫 `test_log_trace_never_contains_the_scope_target_list` 用 **12 个目标**跑一遍整条链，
+然后逐条事件检查：既不许出现 `targets` / `target_list` / `all_targets` / `scope_targets` 这类
+「整份清单」字段，也不许任何**列表型字段**长度达到目标总数 ——
+这一步把方案第 19 节最后那句「不要记录完整目标列表到公共日志」变成了可执行的断言
+（只检查字段名是不够的：换个名字塞进去照样漏）。
 
 另外两处**测试隔离**修正：
 

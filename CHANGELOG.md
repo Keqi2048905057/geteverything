@@ -547,12 +547,18 @@ httpx 之后的一切（命令行构造、子进程执行、JSONL 解析、证�
 除 `core/observability.py` 与 `core/errors_handlers.py` 外不得自建 logger；
 现存 50 处 `print` 按 `文件:函数` 粒度登记，新增一处即失败。
 
-回归测试（+67，759 → 826）：
+回归测试（+69，759 → 828）：
 
 | 文件 | 例数 | 覆盖 |
 |---|---|---|
 | `tests/unit/test_observability.py` | 50 | 事件信封、contextvar 绑定/还原/**线程隔离**、`request_id` 校验（空格/过短/过长一律拒绝并重生成）、敏感字段只记占位符、自由文本脱敏、**关联 ID 不被误打码**、长字段截断、**容器最多 20 项**、两种格式、`configure_logging` 幂等/分级/读配置/配置坏掉也不炸、三条源码守卫 |
-| `tests/integration/test_observability_chain.py` | 17 | Web 层（回写 `X-Request-Id`、逐请求唯一、**失败响应也带**、`path` 不带 query、401 不回显 Token 值）、执行层（每步一条、失败 WARNING、只记当前步骤目标）、worker 层（三层事件都带 `worker_id`、`with Worker` 退出后还原） |
+| `tests/integration/test_observability_chain.py` | 19 | Web 层（回写 `X-Request-Id`、逐请求唯一、**失败响应也带**、`path` 不带 query、401 不回显 Token 值）、执行层（每步一条、失败 WARNING、只记当前步骤目标）、worker 层（三层事件都带 `worker_id`、`with Worker` 退出后还原）、**端到端「一个 `job_id` 串起整条链」**（长方案 P1-5 的验收原话）+ 反向守卫（12 个目标的整份清单不得出现在任何日志字段里） |
+
+> 最后那两条是**对着长方案的验收口径**写的，不是对着实现写的：
+> 长方案 P1-5 的原话是「输入一个 `job_id` 可以串起整条执行链」，所以用例就照排障时的
+> 真实动作来 —— 拿一个 `job_id` 去日志里捞，断言 Web 创建、执行开始/每步/结束、
+> worker 领取/结束**六类事件一次全部出现且共用这一个 `job_id`**，创建事件还额外
+> 带上了那一跳 HTTP 的 `request_id`。这是整轮 §19 改造最有说服力的一条证据。
 
 另有两处**测试隔离**修正：
 
@@ -567,7 +573,7 @@ httpx 之后的一切（命令行构造、子进程执行、JSONL 解析、证�
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 826 passed, 2 skipped, 0 failures
+$ python -m pytest           # 828 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 60 source files
 ```
 

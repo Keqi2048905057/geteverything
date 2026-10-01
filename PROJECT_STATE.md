@@ -186,7 +186,12 @@
 - 两处测试隔离修正：`conftest.py` 新增 autouse 的 contextvar 清理；
   M7 E2E 的 `_drain_worker` 改用 `with Worker(...)`（原来只 `startup()` 不 `shutdown()`，
   `worker_id` 会泄漏到同线程的下一条用例 —— 单独跑绿、全量跑炸）
-- 测试：+67 → **826 passed / 2 skipped**
+- **端到端验收**（长方案 P1-5 原话「输入一个 `job_id` 可以串起整条执行链」）：
+  `test_single_job_id_stitches_the_whole_chain` 拿一个 `job_id` 去日志里捞，
+  一次性捞到 Web 创建 → 执行开始/每步/结束 → worker 领取/结束 全部事件；
+  另有反向守卫 `test_log_trace_never_contains_the_scope_target_list`
+  （12 个目标的整份清单不得出现在任何日志字段里）
+- 测试：+69 → **828 passed / 2 skipped**
 
 **流程与沉淀**
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
@@ -235,7 +240,7 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（826 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（828 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [x] SQLite 并发测试（`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
 - [x] **本地 fixture HTTP 测试**（`tests/fixtures/local_http_server.py` + `tests/integration/test_m7_local_e2e.py`，
@@ -371,7 +376,7 @@
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 826 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+pytest: 828 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
 mypy:   Success: no issues found in 60 source files        ← M7 验收命令，仍为 0
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
@@ -379,7 +384,7 @@ git diff --check: 退出码 0
         stderr 输出结构化 JSON 事件（含 request_id / path / status / duration_ms）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → **P1 §19 Observability `826`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → **P1 §19 Observability `828`**
 
 ---
 
@@ -390,8 +395,8 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-50d04cc8751ce5c0edc2b67bcc91e0aa3580ebfc   ← 最近一次代码提交（M7 本地 fixture HTTP 全链路 E2E）
-50d04cc  feat: M7 本地 fixture HTTP 全链路 E2E（方案第 18 节）+ 修证据读取被预览规则截断 (2026-10-02)
+8d0afd07ad0ae9e356f41cf5f9de879bb76dbf6a   ← 最近一次代码提交（P1 §19 Observability）
+8d0afd0  feat: P1 §19 Observability——结构化日志 + 四个关联 ID（request/job/step/worker）(2026-10-02)
 ```
 
 自检：
@@ -403,10 +408,12 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
 
 与 `origin/main` **不同步**：本地领先（`git status -sb` 会显示 `[ahead N]`，N 含本文件自身的提交，
 所以这里不写死数字）。M0～M4 之后的全部里程碑提交都还在本地 —— 夜间无人值守期间
-**不做 `git push`**，等你确认后再推。下表是**除本文件提交之外**的全部 15 个提交：
+**不做 `git push`**，等你确认后再推。下表是**除本文件提交之外**的全部 16 个提交：
 
 | 提交 | 说明 |
 |---|---|
+| `8d0afd0` | feat: P1 §19 Observability——结构化日志 + 四个关联 ID（request/job/step/worker） |
+| `70f3c30` | docs: 同步 M7 本地全链路 E2E（状态板 + CHANGELOG + README） |
 | `50d04cc` | feat: M7 本地 fixture HTTP 全链路 E2E（方案第 18 节）+ 修证据读取被预览规则截断 |
 | `9eb68f1` | docs: 同步 M7 mypy 清零（代码地图 + CHANGELOG + 状态板） |
 | `26c7246` | fix: M7 类型收口——mypy 34 errors 清零（未改 mypy 配置） |
@@ -429,16 +436,20 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
 ## 下一步该做什么（给接手者）
 
 1. **先推进 C 之前的确认**：把上表 A～I 里你能定的定掉，**E 是关键路径**（已按 DECISIONS-E 落地，可回看）。
-2. **M5 剩余**（§11 统一执行链需授权，见 `docs/DECISIONS.md` §3）：资产过期自动化、观测 `data_json` 按字段拆列、
-   旧库真实迁移（等你手动 `--apply`）。
-3. **顺手可做（不需要决策）**：
-   - ~~修 `config.py` 里 `FEROXBUSTER_CONFIG.wordlist` 的开发机绝对路径~~ —— **已修（M5，
-     连同「字典缺失不再静默空结果」一起）**；
+2. **方案第 26 节的执行顺序已走到第 16 条（Observability）**。第 17～19 条
+   （PostgreSQL / Redis+Celery / 正式部署）**属第 4 节明令禁止的架构迁移，未获授权，不要开工**；
+   第 20 条「再开始高级产品能力」对应方案第 21 节 P2 清单，同样等 P0/P1 全部稳定后再说。
+   因此**当前阶段没有新的「方案内大项」可推**，剩下的是收尾与加固。
+3. **M5 剩余**（§11 统一执行链需授权，见 `docs/DECISIONS.md` §3）：资产过期自动化、
+   观测 `data_json` 按字段拆列、旧库真实迁移（等你手动 `--apply`）。
+4. **M6 剩余**（纯白名单内，不需要决策）：`scripts/check_env.py`、面向新开发者的
+   「10 分钟本机启动」文档。
+5. **M7 只剩「一份测试报告」**：现有 `826` / `828` 项用例已可由 pytest 直接产出，
+   报告要写的是「测了什么、没测什么、为什么」。
+6. **顺手可做（不需要决策）**：
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
-   - ~~M7：本地 fixture HTTP 测试~~ —— **已完成（`tests/integration/test_m7_local_e2e.py`，
-     真实 httpx 打 `127.0.0.1` 全链路）**；M7 只剩**一份测试报告**（`scripts/check_env.py`
-     与「10 分钟启动」文档属 M6）。
-4. **改完代码记得**：刷新 `docs/CODEBASE_MAP.md` 对应章节与 `last-mapped`，更新 `CHANGELOG.md`，
+   - 把 §19 的日志能力继续往前推一小步（文件输出 + 轮转是最自然的下一格）。
+7. **改完代码记得**：刷新 `docs/CODEBASE_MAP.md` 对应章节与 `last-mapped`，更新 `CHANGELOG.md`，
    并回来更新本文件的「最近一次验证 / 最近一次 commit」。
 
 ## 复现三条基线命令
@@ -448,7 +459,7 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 759 passed, 2 skipped
+python -m pytest                                      # 期望 828 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
 ```
 
