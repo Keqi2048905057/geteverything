@@ -49,16 +49,51 @@ STATUS_GONE = "gone"
 
 STATUSES = (STATUS_ACTIVE, STATUS_STALE, STATUS_GONE)
 
-#: 资产的「可变属性」白名单：只有这些键参与 diff 的 ``changed`` 判定。
+#: 观测属性键名的**别名表**：不同 runner 对同一个属性用了不同的名字。
+#:
+#: 为什么必须有它：``DIFFABLE_ATTRIBUTES`` 是按方案第 10 节的**语义**命名的，
+#: 而真实 runner 产出的键名并不一致 ——
+#: ``modules/httpx.py`` 写的是 ``webserver`` / ``tech``，旧文档与部分手工
+#: 构造的观测写的是 ``server`` / ``technology``（甚至 httpx 的原生 JSON 里
+#: 还可能是 ``web_server`` / ``technologies``）。
+#: 不归一化就会出现「两边明明都是 nginx，却判为没变化，或者反过来漏报」：
+#: 曾经用 httpx 的真实键名喂进比较函数，``webserver`` 从 nginx 变 apache
+#: 返回的是空字典 —— 方案第 10 节点名要求的 server / technology 在真实链路上
+#: 完全失效，而单测用的是文档里的键名，所以一直是绿的。
+#:
+#: 约定：**值就是该属性的 canonical key**，也就是 API 出参 ``changes``
+#: 里出现的键名。加新属性只需往这里加一行，不要在比较逻辑里写散落的
+#: ``if key == "server"`` —— 那样每加一个字段都要改多处，且迟早漏掉一处。
+ATTRIBUTE_ALIASES: dict[str, str] = {
+    # Web 服务器
+    "server": "webserver",
+    "webserver": "webserver",
+    "web_server": "webserver",
+    # 技术栈
+    "technology": "technologies",
+    "technologies": "technologies",
+    "tech": "technologies",
+    # 下列属性各 runner 的命名已经一致，登记进来是为了让「哪些属性参与比较」
+    # 一目了然，而不是让它们只能从 DIFFABLE_ATTRIBUTES 里反推。
+    "status_code": "status_code",
+    "title": "title",
+    "url": "url",
+}
+
+#: 资产的「可变属性」白名单：只有这些键（**canonical key**）参与 diff 的
+#: ``changed`` 判定。
 #:
 #: 为什么需要白名单：``data_json`` 里还有各种一次性字段（时间戳、耗时、
 #: 响应长度），把它们算进 diff 会让**每次扫描都报 changed**，
 #: diff 结果直接失去意义。方案第 10 节点名要看的就是这几项。
+#:
+#: 注意这里写的是 canonical key（``webserver`` / ``technologies``），
+#: 别名归一到它们的规则见 :data:`ATTRIBUTE_ALIASES`。
 DIFFABLE_ATTRIBUTES = (
     "status_code",
     "title",
-    "server",
-    "technology",
+    "webserver",
+    "technologies",
     "url",
 )
 
@@ -601,18 +636,41 @@ def _latest_data_by_asset(job_id: str) -> dict[str, dict]:
     return latest
 
 
-def _changed_attributes(before: dict, after: dict) -> dict:
-    """比较两次观测的可变属性，返回 ``{属性: {"from": ..., "to": ...}}``。
+def _canonical_attributes(data: dict) -> dict[str, Any]:
+    """把观测属性归一到 canonical key（见 :data:`ATTRIBUTE_ALIASES`）。
 
-    口径：只看 :data:`DIFFABLE_ATTRIBUTES` 里的键，值不等就算变化
+    同一个属性可能有多个别名键同时出现（例如 httpx 原样透传了 ``webserver``，
+    而调用方又补了一个 ``server``）。此时**按 canonical 分组取第一个非空值**，
+    而不是让后面的静默覆盖前面的 —— 两者冲突时说明上游数据本身有问题，
+    静默选一个会让 diff 报出无法解释的变化。
+    """
+    canonical: dict[str, Any] = {}
+    for key, value in (data or {}).items():
+        name = ATTRIBUTE_ALIASES.get(str(key).lower())
+        if name is None:
+            continue
+        if name not in canonical or canonical[name] in (None, "", [], {}):
+            canonical[name] = value
+    return canonical
+
+
+def _changed_attributes(before: dict, after: dict) -> dict:
+    """比较两次观测的可变属性，返回 ``{canonical_key: {"from": ..., "to": ...}}``。
+
+    口径：先把两边都过一遍 :data:`ATTRIBUTE_ALIASES`（于是 ``server`` /
+    ``webserver`` / ``web_server`` 会被当成同一个属性），再只看
+    :data:`DIFFABLE_ATTRIBUTES` 里的键，值不等就算变化
     —— 包含「从有到无」（``200 → None``）与「从无到有」。
     「以前报 200、这次什么也没报」确实是一次值得注意的变化，
     而两边都为 ``None`` 时不算（属性缺失 ≠ 属性被改）。
     """
+    canonical_before = _canonical_attributes(before)
+    canonical_after = _canonical_attributes(after)
+
     changes: dict[str, dict] = {}
     for attribute in DIFFABLE_ATTRIBUTES:
-        old = before.get(attribute)
-        new = after.get(attribute)
+        old = canonical_before.get(attribute)
+        new = canonical_after.get(attribute)
         if old == new:
             continue
         # 两边都缺该属性时不算变化（工具没报 ≠ 属性被改）。

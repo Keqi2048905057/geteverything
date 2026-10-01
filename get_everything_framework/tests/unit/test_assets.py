@@ -208,7 +208,13 @@ def test_diff_plan_acceptance_added_removed_unchanged(scope_id):
 
 
 def test_diff_detects_attribute_changes(scope_id):
-    """方案第 10 节：changed 至少要能指出 status_code / title / server / technology。"""
+    """方案第 10 节：changed 至少要能指出 status_code / title / server / technology。
+
+    注意 ``changes`` 的键名是 **canonical key**（``webserver`` /
+    ``technologies``），不是方案正文里写的 ``server`` / ``technology`` ——
+    正文说的是「要能看出这几个属性变了」，而归一化到哪个名字由
+    ``core.assets.ATTRIBUTE_ALIASES`` 决定。
+    """
     _observe(
         "l.example.test",
         type="url",
@@ -229,9 +235,77 @@ def test_diff_detects_attribute_changes(scope_id):
     changes = result["changed"][0]["changes"]
     assert changes["status_code"] == {"from": 200, "to": 403}
     assert changes["title"] == {"from": "Login", "to": "Forbidden"}
-    assert changes["technology"] == {"from": ["php"], "to": ["php", "laravel"]}
+    assert changes["technologies"] == {"from": ["php"], "to": ["php", "laravel"]}
     # server 没变，不该出现在 changes 里。
-    assert "server" not in changes
+    assert "webserver" not in changes
+
+
+def test_diff_alias_table_is_canonical_and_consistent():
+    """别名表的值必须是 canonical key，且每个 canonical key 都参与比较。
+
+    这条守卫防的是「往别名表里加了个新名字，却忘了把它算进
+    ``DIFFABLE_ATTRIBUTES``」——那种字段会静默地永远不报变化。
+    """
+    canonical = set(assets.ATTRIBUTE_ALIASES.values())
+    assert canonical == set(assets.DIFFABLE_ATTRIBUTES)
+    # 值必须是它自己的键（canonical key 不能是别人的别名，否则会形成二级映射）。
+    for name in canonical:
+        assert assets.ATTRIBUTE_ALIASES.get(name) == name
+
+
+def test_diff_matches_httpx_real_key_names():
+    """回归：httpx 真实产出的键名是 ``webserver`` / ``tech``。
+
+    以前 ``DIFFABLE_ATTRIBUTES`` 写的是 ``server`` / ``technology``，
+    而 ``modules/httpx.py`` 产出的是 ``webserver`` / ``tech`` —— 于是
+    **方案第 10 节点名要求的 server / technology，在真实 httpx 链路上完全不报**，
+    只有 status_code / title / url 能报出来。而当时的单测用的是文档里的键名，
+    所以一直是绿的。这条用例锁死「真实键名必须能被识别」。
+    """
+    before = {"url": "http://a/", "status_code": 200, "title": "Home",
+              "webserver": "nginx", "tech": ["php"]}
+    after = {"url": "http://a/", "status_code": 200, "title": "Home",
+             "webserver": "apache", "tech": ["php", "laravel"]}
+
+    changes = assets._changed_attributes(before, after)
+
+    assert changes["webserver"] == {"from": "nginx", "to": "apache"}
+    assert changes["technologies"] == {"from": ["php"], "to": ["php", "laravel"]}
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ({"server": "nginx"}, {"webserver": "apache"}),
+        ({"webserver": "nginx"}, {"web_server": "apache"}),
+        ({"web_server": "nginx"}, {"server": "apache"}),
+    ],
+)
+def test_diff_treats_server_aliases_as_one_attribute(left, right):
+    """三个别名互相之间也必须能比较，而不是「同名才比」。"""
+    assert assets._changed_attributes(left, right) == {"webserver": {"from": "nginx", "to": "apache"}}
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        ({"server": "nginx"}, {"webserver": "nginx"}),
+        ({"tech": ["php"]}, {"technologies": ["php"]}),
+        ({"technology": ["php"]}, {"tech": ["php"]}),
+    ],
+)
+def test_diff_alias_does_not_report_change_when_value_identical(left, right):
+    """别名只是名字不同：值一样就必须判为「没变」，否则每次扫描都刷 changed。"""
+    assert assets._changed_attributes(left, right) == {}
+
+
+def test_diff_ignores_attributes_outside_the_alias_table():
+    """不在别名表里的键一律不参与比较（哪怕它看起来像可变属性）。"""
+    changes = assets._changed_attributes(
+        {"status_code": 200, "content_length": 100, "cdn": "cloudflare"},
+        {"status_code": 200, "content_length": 999, "cdn": "akamai"},
+    )
+    assert changes == {}
 
 
 def test_diff_ignores_volatile_attributes(scope_id):

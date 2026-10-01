@@ -289,6 +289,18 @@
     ["unchanged", "未变", "两次都有且属性一致"],
   ];
 
+  //: 属性 canonical key → 中文显示名。键名由服务端 core/assets.py 的
+  //: ATTRIBUTE_ALIASES 归一化后给出（server/webserver/web_server 都归到
+  //: webserver，tech/technology/technologies 都归到 technologies），
+  //: 这里只负责把 canonical key 翻成人话，不做任何判断。
+  var ATTRIBUTE_LABELS = {
+    status_code: "状态码",
+    title: "标题",
+    webserver: "Web Server",
+    technologies: "技术栈",
+    url: "URL",
+  };
+
   function fillJobOptions(jobs) {
     var selects = ["diff-before", "diff-after"];
     selects.forEach(function (id) {
@@ -341,7 +353,8 @@
     if (item.changes && Object.keys(item.changes).length) {
       var parts = Object.keys(item.changes).map(function (attribute) {
         var change = item.changes[attribute] || {};
-        return attribute + ": " + JSON.stringify(change.from) + " → " + JSON.stringify(change.to);
+        var label = ATTRIBUTE_LABELS[attribute] || attribute;
+        return label + ": " + JSON.stringify(change.from) + " → " + JSON.stringify(change.to);
       });
       text += "（" + parts.join("；") + "）";
     }
