@@ -569,11 +569,70 @@ httpx 之后的一切（命令行构造、子进程执行、JSONL 解析、证�
   同线程里的下一条用例（症状：观测测试断言 `current_context() == {}` 却看到
   `{'worker_id': 'm7-e2e-after'}`，而**单独跑该文件时全绿、全量跑才炸**）。
 
+### P1 — §14 文档同步 + 导出格式 400 收口（本轮，方案第 14 节）
+
+方案第 14 节要求 README 写清「环境要求 / 安装 / 启动 Web / 启动 Worker / 认证 / Scope /
+Mock 模式 / Real 模式 / API / 测试 / 故障排查」，并**建议**增加 `docs/ARCHITECTURE.md`、
+`docs/API.md`、`docs/DEPLOYMENT.md`。本轮把这三份补齐（安全文档本来就在仓库根
+`SECURITY.md`，未新建 `docs/SECURITY.md`，三份新文档一律链接到 `../SECURITY.md`）。
+
+**新增文档**（内容来自实际读码 + `app.url_map` 枚举 + `app.test_client()` 匿名探测，
+不是照抄 README）：
+
+| 文档 | 内容要点 |
+|---|---|
+| `docs/ARCHITECTURE.md` | 分层链路 Flask Web/API → Auth → Policy/Scope → Job → Worker → Runner → Artifact → Asset/Observation；「Agent 只能提出计划，不能直接执行」；Worker 与 Web 解耦；**明确记录当前技术选型被刻意冻结**（不做 Flask→FastAPI / SQLite→PostgreSQL / Worker→Redis+Celery / Jinja→React）；含 §19 Observability 一节 |
+| `docs/API.md` | **逐条核对真实路由**：`app.url_map` 共 39 条规则 / 41 个方法绑定；`/api/*` **34 条**、其中**需管理员认证 24 条**、**匿名可读 7 条**、登录相关公开 3 条；非 `/api` 5 条。每条给方法 / 路径 / 鉴权 / 请求体或 query / 成功响应形状 / 主要错误码；含统一错误信封与状态码→`error_code` 映射表 |
+| `docs/DEPLOYMENT.md` | 环境要求、依赖安装、`.env` 逐键说明（**不写任何真实密钥值**）、启动 Web、**单独启动 worker**（不启动则任务永远停在 `queued`）、一键脚本、健康检查、Mock/Real 双开关、三条基线命令、故障排查 |
+
+**修一个真实缺陷：`GET /api/export?format=xlsx` 返回 500 而不是 400**
+
+实测复现：`api/results.py:export_data` 把 `format` 直接转小写后交给
+`exporter.export_results`，后者对非 `csv`/`json` 抛 `ValueError`，而调用点**没有捕获**
+—— 异常一路冒到 `core/errors_handlers.py` 的全局兜底，对外变成
+**500 `unknown_error`「服务内部错误」**。也就是说：**调用方参数写错了，却被报成服务端崩了**。
+更糟的是 `agent/intent.py:guess_export_format` 会产出 `"xlsx"`，这条链是必然踩中的。
+
+修法（最小必要）：
+
+- `exporter.py` 新增模块级常量 `SUPPORTED_FORMATS = ("csv", "json")`，
+  原先写在 `export_results` 里的字面量元组改为引用它；
+- `api/results.py:export_data` 在**调用 exporter 之前**校验，非法值抛
+  `BadRequestError` → **400 `bad_request`**，带
+  `details.field="format"` 与 `details.supported=["csv","json"]`。
+
+> 两处共用同一份 `SUPPORTED_FORMATS`，并有一条用例专门断言「校验清单与内部兜底是同一份」，
+> 避免以后只改一边造成漂移。行为兼容性：缺省仍是 `csv`（有用例），`?format=CSV`
+> 仍大小写不敏感（有用例）。
+
+**顺带修正一批「文档与代码不一致」**（都是核对代码后确认的）：
+
+| 位置 | 原来的说法 | 实际 |
+|---|---|---|
+| `README.md:43` | 「12 个 RESTful 接口：`/api/tools`、`/api/scan`、…」 | `/api/scan` **这个路由不存在**；`/api/*` 实际 **34 条** |
+| `README.md:124` | 建议用 `curl …/api/tools` 做健康检查 | 健康检查是 `GET /health`（挂根路径、免登录、无副作用） |
+| `README.md:153` | 匿名只读接口「以下三个」 | 实际 **7 个**（多出 `/api/databases`、`/api/tool/<n>/results`、`/api/exports`、`/api/export/<id>/download`） |
+| `README.md:111` | 「需在 `web/templates/index.html` 部署前端模板」 | 模板与静态资源都已在仓库里，`GET /` 返回 200 |
+| `README.md` Q6 | 「`/` 报 TemplateNotFound，index.html 是占位文件」 | M1 已修；该说法只在**旧 clone** 上成立（历史提交 `5853752` 删过 `web/templates/`） |
+| `README.md:130` | 测试基线 `759 passed` | 本轮为 `838 passed, 2 skipped` |
+| `README.md` 全文 | **0 次**提及 worker / `LOCAL_ADMIN_TOKEN` / `GEF_ALLOW_REAL_SCAN` / `local.db` | 照着 README 装完，`POST /api/jobs` 建的任务会**永远停在 `queued`**。已补「启动 Worker」「Mock / Real 模式」「环境要求」三节 |
+| `api/tools.py` docstring | `table_name` / `record_count` | 实际键是 `table` / `result_column` / `category`（以 `storage.get_tool_databases()` 为准） |
+| `api/scopes.py:110` 注释 | 404 会被转成 `error_code=bad_request` | 实际是 `not_found`（与 `core/errors_handlers.py` 的映射表一致，注释过时） |
+| `api/scan.py:238`、`api/results.py:166` | 举例工具名含 `nuclei` | `RUNNER_REGISTRY` 里**没有 nuclei**，实际 17 个工具 |
+| `SECURITY.md:51` | `FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径 | M5 已修为仓库相对路径 + `FEROXBUSTER_WORDLIST` 覆盖；同时把匿名只读清单补成 7 条、补记导出格式缺陷 |
+| `AGENTS.md:3` | `CODEBASE_MAP.md`「560 行，含 22 条索引表」 | 实际 1800+ 行 / **27 条**；同时给第 26 节三个「高频坑」加了现状标注（第 1、2、5 条已部分/全部修复，第 3 条只在旧 clone 上成立） |
+| `docs/CODEBASE_MAP.md` §9.7 | `assets` / `observations` 「未创建 … M5」 | 早已建成（P1 §8 两层模型），该行 stale，已更新 |
+
+回归测试（+10，828 → 838）：`tests/integration/test_export_contract.py` 新增
+6 条参数化非法 `format`（`xlsx` / `pdf` / `CSV2` / `json ` / `c s v` / `../csv`）断言 400 +
+`details`，
+另加「校验清单与 `SUPPORTED_FORMATS` 同源」「缺省仍是 csv」「大小写不敏感」三组。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 828 passed, 2 skipped, 0 failures
+$ python -m pytest           # 838 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 60 source files
 ```
 

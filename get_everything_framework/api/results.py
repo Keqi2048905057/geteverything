@@ -22,8 +22,8 @@ from flask import jsonify, request, send_file
 
 from api import api_bp            # Flask 蓝图实例
 from core import exports as exports_store
-from core.errors import NotFoundError
-from exporter import export_results, gather_export_rows  # 结果导出相关函数
+from core.errors import BadRequestError, NotFoundError
+from exporter import SUPPORTED_FORMATS, export_results, gather_export_rows  # 结果导出相关函数
 from storage import ScanResultStore  # 扫描结果存储层
 
 
@@ -163,7 +163,7 @@ def query_tool_results(tool_name: str):
     请求方式: GET
     路径: /api/tool/<tool_name>/results
     路径参数:
-        tool_name: 工具名称（如 subfinder, httpx, nuclei 等）
+        tool_name: 工具名称（如 subfinder, httpx, dnsx 等）
 
     Query 参数:
         domain — 按目标域名过滤（可选）
@@ -232,6 +232,9 @@ def export_data():
             "download_url": "/api/export/exp_.../download"
         }
 
+    错误响应:
+        - 400: ``format`` 不是 ``csv`` / ``json``
+
     内部逻辑:
         1. 聚合符合条件的结果记录
         2. 调用导出函数生成文件到磁盘
@@ -243,8 +246,16 @@ def export_data():
     domain = _normalize_domain(request.args.get("domain"))
     tool_name = _normalize_value(request.args.get("tool"))
     category = _normalize_value(request.args.get("category"))
-    # 导出格式，默认 csv，转小写统一处理
+    # 导出格式，默认 csv，转小写统一处理。
+    # 非法值必须在这里就拦下：否则 ``exporter.export_results`` 抛出的
+    # ``ValueError`` 会一路冒到全局兜底，对外变成 500 ``unknown_error``
+    # —— 一个「用户传错参数」被报成「服务器内部错误」。
     fmt = (request.args.get("format") or "csv").lower()
+    if fmt not in SUPPORTED_FORMATS:
+        raise BadRequestError(
+            "仅支持 csv / json 两种导出格式",
+            details={"field": "format", "supported": list(SUPPORTED_FORMATS)},
+        )
     # 导出使用更大的默认值和上限
     limit = _parse_limit(request.args.get("limit"), default=1000, maximum=5000)
 

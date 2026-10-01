@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -463,7 +463,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 6 | 新增一个扫描工具后「没生效」 | ① `modules/registry.py:RUNNER_REGISTRY`（`:19-37`）② `config.py:build_tool_config` + 对应 `*_CONFIG` ③ `storage.py:TOOL_DATABASES`（`:15-101`） | 三处都要登记：漏 registry → `load_tools` 报"存在不支持的工具"；漏 TOOL_DATABASES → 结果落到通用 `tool_results` 且 `get_dedicated_results` 抛 `ValueError`；漏 `*_CONFIG` → `KeyError: 'path'` |
 | 7 | 扫描范围/目标校验被绕过（传入任意 file_path 或空目标却扫了别的域名） | ① `tool_runner.py:load_targets`（`:29-41` 直接 `open(file_path)` + 空目标回落 `TARGET_CONFIG`）② `config.py:TARGET_CONFIG`（`:94-97` 默认 `domains=["nfl.com"]`）③ `api/scan.py:execute_scan`（`:94` 只校验 `domain or file_path` 非空） | **没有 Scope 概念**（grep 全仓无 scope 表/校验器）。`file_path` 可为任意绝对路径（任意文件读取）；目标全被过滤掉时回落到硬编码的 `nfl.com` 并真的发起扫描；`tools: []` 也会因为 `payload.get("tools") or payload.get("tool")` 变成 `None`，进而 `load_tools` 回落到 `SCAN_CONFIG["enabled_runners"]=["amass"]` 去扫 |
 | 8 | 设置项保存后「不生效」 | ① `api/settings.py:save_settings` → `_write_env_file`（`:99`）② `config.py:Config` 类属性（`:13-39`，**import 期求值**）③ `api/settings.py:KEY_MAPPING`（`:58-80`） | `.env` 写成功了，但 `Config.LLM_API_KEY` 等是类属性，进程内已固化，必须重启（响应里的 message 也这么说）；`load_dotenv` 默认**不覆盖**已存在的环境变量；`KEY_MAPPING` 里 `enscan_*_cookie` 映射到 `FOFA_EMAIL/FOFA_KEY/HUNTER_API_KEY` 是**永远不会走到的死分支**（enscan 键在 `save_settings` 里走 yaml 分支），极易误导后来者 |
-| 9 | 导出文件缺字段 / 行重复 / 混入别的工具数据 | ① `exporter.py:gather_export_rows`（`:46-77` 两段拼接）② `storage.py:_get_tool_results_fallback`（`:706-747` 遍历**全部 17 张表**）③ `exporter.py:export_results`（`:109` 动态 fieldnames） | 同一条子域名会先由 `get_view_results` 加入、又被 `_get_tool_results_fallback` 从同一张专属表再加一次 → 重复行；`category` 过滤在专属表分支失效 → 混入其他分类；`fmt` 不是 csv/json 时抛 `ValueError`，`api/results.py:export_data` 不捕获 → 500（`agent/intent.guess_export_format` 会产出 `"xlsx"`，必然踩中） |
+| 9 | 导出文件缺字段 / 行重复 / 混入别的工具数据 / `?format=xlsx` 报 500 | ① `exporter.py:gather_export_rows`（`:46-77` 两段拼接）② `storage.py:_get_tool_results_fallback`（`:706-747` 遍历**全部 17 张表**）③ `exporter.py:export_results`（`:109` 动态 fieldnames）④ `api/results.py:export_data` 的 fmt 白名单校验 | 同一条子域名会先由 `get_view_results` 加入、又被 `_get_tool_results_fallback` 从同一张专属表再加一次 → 重复行；`category` 过滤在专属表分支失效 → 混入其他分类；~~`fmt` 不是 csv/json 时抛 `ValueError`，`api/results.py:export_data` 不捕获 → 500~~ **本轮已修**：调用 `exporter` 前用同一份 `SUPPORTED_FORMATS` 拦下，非法值现在是 400 `bad_request`（原 500 `unknown_error`）。注意 `agent/intent.guess_export_format` 仍会产出 `"xlsx"`，那条链现在拿到的是 400 而不是 500 |
 | 10 | 前端页面 500 / `TemplateNotFound: index.html` | ① `app.py:26` `template_folder="web/templates"` ② `app.py:160` `render_template("index.html", **context)` ③ `app.py:92` `index()` 的 `request.values.get("domain")` | 仓库里 **不存在 `web/` 目录**（实测 `Test-Path web` = False），`/` 必然抛 `TemplateNotFound`；同时 `app.py:110` 会在渲染前同步跑 subfinder；`debug=True` 让异常页暴露堆栈 |
 | 11 | Agent 规划报错 / 答非所问 | ① `agent/intent.py:analyze_intent`（`:118-273` 的分支顺序）② `agent/planner.py:build_plan`（`:79-199`）③ `agent/action.py:run`（`:109-182`） | 分支顺序敏感：`确认/执行/开始/继续` 的关键词判断（`:121`）优先于一切，含"继续"的正常句子会被吞成 `confirm_plan`；`build_plan` 对 `confirm_plan`/`cancel_plan`/`analyze_existing_subdomains` 都返回 `None`，走到 `:161` 就回"我没有识别到明确任务"；`subdomain_scan` 恒用 `scan_tool="subfinder"`，用户说 amass 也不改（除 `plan_state.apply_user_intervention` 的"改用 amass"字面量） |
 | 12 | provider 超时 / 认证失败 | ① `agent/providers/openai_compat.py:_convert_error`（`:133`，按 401/403/429/5xx/404/400 + 文本关键字分类）② `agent/providers/openai_compat.py:_chat_with_retry`（`:52`，退避 `min(2**attempt, 8)`）③ `agent/config.py:validate_llm_config`（`:114`） | **当前 Web/CLI 流程根本不会走到这里**（`LLMClient` 无调用方）。若自行调用：`validate_llm_config` 在 `LLMClient.__init__` 里抛 `LLMConfigError`；`openai` SDK 的 `APITimeoutError` 没有 `status_code`，只能靠 `"timeout" in message.lower()` 命中，`sanitize` 只对 api_key 做替换 |
@@ -501,6 +501,10 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 3. **`SystemExit` 与 HTTP 混用**：`tool_runner.py:111/117/121` 用 `raise SystemExit(1)` 表达"无目标/无工具"，这是 CLI 语义；`api/scan.py:execute_scan` 不捕获 `BaseException`，Web 场景下表现为 500 或被 dev server 中断。`app.py:112` 是唯一显式处理 `SystemExit` 的地方。
 4. **`_execute_tool` 的宽泛捕获**：`agent/action.py:366` `except Exception as exc: result = {"ok": False, "error": str(exc), "tool": action}` —— 会把 `KeyError`/`AttributeError` 这类编程错误伪装成"工具执行失败"反馈给用户，排查时容易走错方向。
 5. **`api/results.py:export_data` 未捕获 `export_results` 的 `ValueError`**（`exporter.py:116`），非法 `format` 直接 500。
+   ▶ **本轮已解决**：改为在调用 `exporter` **之前**用 `exporter.SUPPORTED_FORMATS` 拦下，返回 400 `bad_request`
+   + `details.field="format"` / `details.supported=["csv","json"]`。回归用例 6 条（`test_export_contract.py`
+   的参数化非法值 + 大小写不敏感 + 缺省仍是 csv + 「校验清单与兜底同一份」）。**注意**这只是把
+   「用户传错参数」从 500 改回 400，`agent/intent.guess_export_format` 仍会产出 `"xlsx"`（见 §6 第 9 条）。
 6. **`api/upload.py` 未捕获 `target_parser` 的 `ImportError`**（`target_parser.py:117`），上传 `.xlsx` 且未装 openpyxl 时 500，而不是 400 + 明确提示。
 
 ### 7.2 路径与外部依赖
@@ -780,7 +784,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 | `/api/results`、`/api/tools`、`/api/databases`、`/api/export`、`/api/exports` | 仍匿名可读 | 按 `docs/DECISIONS.md` D **有意保持**，已用 `test_api_auth_contract.py` 锁定现状；收口需授权 |
 | 前端轮询 | 任务表 3 秒轮询 `/api/jobs`，未做 SSE/WebSocket | 本机联调够用 |
 | 真实 runner 的结构化结果 | **已落地**（M4）：统一 `RunnerResult`，见 §9.10 | — |
-| `assets` / `observations` / `artifacts` 表 | `artifacts` 已建（M4）；`assets` / `observations` 未创建 | M5（E 项已预授权） |
+| `assets` / `observations` / `artifacts` 表 | **均已建成**：`artifacts` 是 M4，`assets` / `observations` 是 M5/P1 §8（两层模型：一行唯一资产 + N 条观测时间线，`core/db.py` 建表 + `core/assets.py` 读写） | — |
 | 敏感产物仍在 Git 索引 | **已解决**：自有仓库 `geteverything` 只保留一份干净历史，`results/`、`uploads/`、`SecLists/`、`scripts/*.exe` 均未入库 | — |
 | Scope 判定位置 | **P0-2 已统一**到 `core/policy.py`（见 §9.11） | — |
 | Agent 的执行边界 | **P0-3 部分**：已禁止任意 `file_path`，但仍直接调 `run_tools` / runner，未改走 Job Service | P0-6，需授权 |
@@ -827,7 +831,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/integration/test_m2_page_scan.py` | 首页 = 异步任务、不阻塞（M2/M3） |
 | `tests/integration/test_m3_jobs_api.py` | 7 个 jobs 接口、10 个任务响应时间、状态持久化（M3） |
 | `tests/integration/test_m4_runner_result.py` | RunnerResult 端到端：零结果 vs 失败、artifact 不下发路径（M4） |
-| `tests/integration/test_export_contract.py` | **P0-5**：导出响应无 `path`、可下载、未知/已清理 id → 404、`safe_prefix` 穿越表、前缀逃不出导出目录 |
+| `tests/integration/test_export_contract.py` | **P0-5**：导出响应无 `path`、可下载、未知/已清理 id → 404、`safe_prefix` 穿越表、前缀逃不出导出目录；**本轮新增**：`?format=` 非法值（`xlsx`/`pdf`/带空格/`../csv` 等 6 个参数化取值）必须 **400 `bad_request`** 而不是 500、校验清单与 `exporter.SUPPORTED_FORMATS` 同一份、缺省仍是 csv、大小写不敏感 |
 | `tests/integration/test_api_auth_contract.py` | **P0-1/D**：锁定「哪些只读接口匿名、哪些必须 401」的当前契约 + 响应体不夹带服务器路径 |
 | `tests/integration/test_assets_api.py` | **P1**：资产接口全部 401（未登录）、「任务跑完 → 资产可查」端到端链路、`summary` 未被 `<asset_id>` 吃掉、`/api/observations` 拒绝无条件全表扫描、Diff 端点 404 与 `include_unchanged`、**diff 条目必带可用的 `asset_id`**、资产页骨架与匿名时不下发 Scope 名、**静态脚本已把 diff 条目接成点击**、响应无服务器路径 |
 | `tests/integration/test_m7_local_e2e.py` | **M7（方案第 18 节）**：本地 fixture HTTP **全链路**——真实 httpx 子进程打只绑 `127.0.0.1` 的 fixture，一条用例走完 target → job → worker → runner → raw artifact → parser → observation → asset → diff → export；含「证据必须完整读出（只脱敏、不按 300 字符截断）」的回归。无 httpx 可执行文件时 `pytest.skip` |

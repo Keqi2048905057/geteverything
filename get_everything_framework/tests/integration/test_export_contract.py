@@ -86,6 +86,48 @@ def test_export_unknown_id_is_404(admin_client):
     assert resp.get_json()["error_code"] == "not_found"
 
 
+# ── 非法 format 是「用户传错参数」，不是「服务器内部错误」 ──
+
+
+@pytest.mark.parametrize("fmt", ["xlsx", "pdf", "CSV2", "json ", "c s v", "1", "../csv"])
+def test_export_rejects_unsupported_format_with_400(admin_client, fmt):
+    """回归：曾经返回 500 ``unknown_error``。
+
+    真实缺陷（本轮实测复现）：``?format=xlsx`` 会让 ``exporter.export_results``
+    抛 ``ValueError``，而该异常没有被捕获，一路冒到全局兜底处理器，
+    对外就成了一条 500 —— 把「调用方参数写错了」报成了「服务端崩了」。
+    修法是**在调用 exporter 之前**用同一份 ``SUPPORTED_FORMATS`` 拦掉。
+    """
+    resp = admin_client.get(f"/api/export?format={fmt}")
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["ok"] is False
+    assert body["error_code"] == "bad_request"
+    assert body["details"]["field"] == "format"
+    assert body["details"]["supported"] == ["csv", "json"]
+
+
+def test_export_format_check_shares_one_source_of_truth():
+    """400 的校验清单与 exporter 内部兜底必须是同一份，否则两边会漂移。"""
+    from exporter import SUPPORTED_FORMATS
+
+    assert SUPPORTED_FORMATS == ("csv", "json")
+
+
+def test_export_defaults_to_csv_when_format_is_absent(client):
+    """不传 ``format`` 时保持既有默认行为（csv），不能因为加了校验就改变默认值。"""
+    resp = client.get("/api/export")
+    assert resp.status_code == 200
+    assert resp.get_json()["format"] == "csv"
+
+
+def test_export_format_is_case_insensitive(admin_client):
+    """``?format=CSV`` 大小写不敏感，不能因为加了白名单校验就把它拒了。"""
+    resp = admin_client.get("/api/export?format=CSV")
+    assert resp.status_code == 200
+    assert resp.get_json()["format"] == "csv"
+
+
 def test_export_id_with_path_traversal_is_rejected(admin_client):
     """``export_id`` 里塞路径分隔符不能变成任意文件读取。"""
     for bad in ["exp_x%2F..%2F..%2Fetc", "exp_x%5C..%5Cwindows"]:

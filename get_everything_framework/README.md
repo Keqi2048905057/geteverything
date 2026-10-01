@@ -40,8 +40,8 @@
 | 🚀 **一键部署** | 提供 Windows / Linux 自动安装脚本，Go 工具、Python 依赖、系统工具一站搞定 |
 | 🔧 **20+ 工具集成** | subfinder / amass / dnsx / httpx / nmap / naabu / katana / gospider / waybackurls / dirsearch / feroxbuster / ENScan ... |
 | 📊 **统一数据存储** | SQLite 数据库 + JSONL / TXT 多格式输出，跨工具结果自动合并去重 |
-| 🌐 **Web API** | 12 个 RESTful 接口：`/api/tools`、`/api/scan`、`/api/results`、`/api/upload` ... |
-| 🤖 **LLM Agent** | DeepSeek 等大模型接入，可自然语言描述扫描任务 |
+| 🌐 **Web API** | `/api/*` 共 34 个接口（其中 24 个需管理员身份、7 个只读接口匿名可读）+ 免登录的 `GET /health`；逐条说明见 [`docs/API.md`](../docs/API.md) |
+| 🤖 **LLM Agent** | 自然语言描述扫描任务由**正则 + 模板**规划（`agent/intent.py` / `agent/planner.py`）；`agent/providers/*` 已实现但**当前无调用方**，运行时不发大模型请求 |
 | 📤 **多格式导出** | 支持按域名 / 工具 / 分类导出 CSV / JSON |
 | 🎯 **目标管理** | 支持手动输入 + 批量导入 + 配置文件管理 |
 | 🔌 **配置面板** | Web 端可改 LLM API Key / FOFA / Hunter / Quake / Shodan / ENScan Cookie |
@@ -49,6 +49,18 @@
 ---
 
 ## 🚀 快速部署
+
+### 环境要求
+
+| 项 | 要求 |
+|---|---|
+| 操作系统 | Windows 10/11（本机联调版的主要平台）或 Linux；脚本分别对应 `scripts/install_windows.ps1` / `scripts/install_linux.sh` |
+| Python | **3.11**（开发与验证基线为 3.11.9；代码用到 `dict[str, X]`、`X \| None` 等 3.10+ 语法） |
+| Go | 仅在需要安装扫描工具时需要（`go install` 编译 subfinder / httpx 等） |
+| 网络 | 首次安装需要联网拉依赖与 Go 工具；**扫描本身默认不联网**（`mode=mock`） |
+
+Python 依赖见 `requirement.txt`（27 个，含锁定版本）；开发依赖
+（pytest / ruff / mypy）见 `requirement-dev.txt`。
 
 项目提供 **Windows** 和 **Linux** 两套自动安装脚本，自动安装 Go、Python 依赖、系统工具以及本框架依赖的全部安全工具。
 
@@ -108,7 +120,26 @@ python app.py
 # 默认监听 http://127.0.0.1:5000
 ```
 
-启动后访问 `http://127.0.0.1:5000/` 即可使用前端页面（需在 `web/templates/index.html` 部署前端模板）。
+启动后访问 `http://127.0.0.1:5000/` 即可使用前端页面（`web/templates/` 下的模板与
+`web/static/` 下的静态资源都已随仓库提供）。
+
+> 未配置 `.env` 的 `LOCAL_ADMIN_TOKEN` 时，启动横幅会打印本次进程的**临时** Token，
+> 重启即失效。想固定下来就把它写进 `.env`。
+
+### 启动 Worker（**不启动则任务永远停在 `queued`**）
+
+Web 与 worker 是**两个独立进程**，Web 只负责建任务，真正跑任务的是 worker：
+
+```bash
+python -m jobs.worker          # 常驻轮询
+python -m jobs.worker --once   # 只跑一轮，适合本机试跑
+```
+
+或用一键脚本把两者一起拉起：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+```
 
 ### LLM Agent CLI 模式
 
@@ -117,17 +148,28 @@ python agent_cli.py
 # 进入 REPL 多轮对话模式,输入 quit/exit 退出
 ```
 
+> ⚠️ 当前 Agent 路径**不在运行时调用任何大模型**：规划由 `agent/intent.py` 的正则 +
+> `agent/planner.py` 的模板决定。`agent/client.py` 与 `agent/providers/*` 目前没有调用方。
+
 ### 健康检查
 
 ```bash
-# 检查服务是否正常
-curl http://127.0.0.1:5000/api/tools
+# 检查服务是否正常（挂根路径、免登录、无副作用）
+curl http://127.0.0.1:5000/health
 ```
+
+`/health` 会返回数据库状态、worker 状态（`ok` / `stale` / `missing`，stale 阈值 30 秒）、
+队列计数（只给计数）与各工具的可用性快照。
+
+### 结构化日志
+
+每个 HTTP 响应都带 `X-Request-Id`；日志是一行一个 JSON 事件，详见
+[「结构化日志与关联 ID（方案第 19 节）」](#结构化日志与关联-id方案第-19-节)。
 
 ### 测试与验收
 
 ```bash
-python -m pytest                                       # 759 passed, 2 skipped
+python -m pytest                                       # 828 passed, 2 skipped
 python -m ruff check .                                 # All checks passed!
 python -m mypy app.py core api jobs storage.py modules  # Success: no issues found
 ```
@@ -147,13 +189,18 @@ python -m mypy app.py core api jobs storage.py modules  # Success: no issues fou
 ## 🔌 API 接口
 
 所有接口统一前缀 `/api`，数据格式 JSON。完整文档可调用 `GET /api/tools` 自行探查。
+**逐条接口说明（方法 / 鉴权 / 请求体 / 响应形状 / 错误码）见
+[`docs/API.md`](../docs/API.md)**，架构分层见 [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)，
+本机部署见 [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md)。
 
 **鉴权现状（重要）**：除 `/health` 外，**修改/执行类**接口都要求本地管理员
 身份（请求头 `X-Local-Token: <Token>`，或先 `POST /api/auth/login` 建立会话）。
-以下三个**只读**接口目前仍然**匿名可读**，这是有意保持的现状，属已知项：
-`GET /api/tools`、`GET /api/results`、`GET /api/export`。
-它们的契约由 `tests/integration/test_export_contract.py` 锁定；若要收口鉴权，
-需先改动该测试并同步 `SECURITY.md`。
+以下 **7 个只读**接口目前仍然**匿名可读**，这是有意保持的现状，属已知项：
+`GET /api/tools`、`GET /api/databases`、`GET /api/results`、`GET /api/tool/<n>/results`、
+`GET /api/export`、`GET /api/export/<id>/download`、`GET /api/exports`。
+它们的契约由 `tests/integration/test_api_auth_contract.py` 与
+`tests/integration/test_export_contract.py` 共同锁定；若要收口鉴权，
+需先改动这两个测试并同步 `SECURITY.md`。
 
 ### 工具与数据库
 
@@ -226,6 +273,22 @@ python -m mypy app.py core api jobs storage.py modules  # Success: no issues fou
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
 | POST | `/api/upload` | 需登录 | 上传目标文件（`.txt`/`.csv`/`.xlsx`/`.json`），返回受控 `upload_id` |
+
+### Mock 模式与 Real 模式
+
+扫描分两种模式，由 `POST /api/jobs`（或 `/api/run`）的 `mode` 参数决定：
+
+| 模式 | 行为 | 何时用 |
+|---|---|---|
+| `mock`（**默认**） | 走 `core/mock.py` 的确定性假数据，**不起任何外部进程、不联网** | 本机联调、看 UI、写测试 |
+| `real` | 真正调用各工具的可执行文件 | 只在你确实要跑工具时 |
+
+> ⚠️ **真实扫描是双开关，缺一即拒**：
+> ① 环境变量 `GEF_ALLOW_REAL_SCAN=true`（写在 `.env`，默认 `false`）；
+> ② 目标所在 Scope 的 `active_scan=true`（默认 `false`）。
+> 只开一个会返回 **403 `scope_violation`**，并在 `details.env` 里告诉你是哪个开关没开。
+> 此外目标必须落在已创建的 Scope 内 —— **没有 Scope 就拒绝扫描**，不存在隐式全放行。
+> 未经授权的外部目标一律不要尝试。
 
 ### 调用示例
 
@@ -608,7 +671,9 @@ grep '"request_id":"req_xxx"' server.log
 脚本会从 GitHub Release 下载 `x86_64-windows-feroxbuster.exe.zip`，如失败可手动下载放入 Go bin 目录。
 
 **Q3: 数据库文件在哪儿？**
-`results/scan_results.db`，可通过 `GET /api/databases` 查看表清单。
+两个库：旧库 `results/scan_results.db`（历史工具结果，`GET /api/databases` 可查表清单，
+`GET /api/results` / `GET /api/export` 读它）与新库 `results/local.db`
+（M3 起的任务 / 步骤 / 事件 / 证据 / 资产 / 观测 / 导出登记，WAL 模式）。
 
 **Q4: 如何新增自定义工具？**
 1. 在 `modules/` 下新建 `your_tool.py`，继承 `BaseRunner`
@@ -620,8 +685,20 @@ grep '"request_id":"req_xxx"' server.log
 - Web 模式：通过前端"对话"标签页使用
 - CLI 模式：`python agent_cli.py`，自然语言描述任务即可
 
+> ⚠️ 当前 Agent 规划走的是**正则 + 模板**（`agent/intent.py:analyze_intent` →
+> `agent/planner.py:build_plan`），**不会**在运行时请求任何大模型。
+> 因此"模型超时 / 返回格式错"这类症状在当前代码路径下不可达；
+> `agent/client.py` 与 `agent/providers/*` 已实现但**没有调用方**。
+
 **Q6: 启动后访问 `/` 报 TemplateNotFound？**
-当前 `web/templates/index.html` 是占位文件。前端开发者需要把 dashboard 页面放进去，或在 `app.py` 中改为纯 API 模式。
+该问题 M1 已修复：`web/templates/{index.html,login.html,assets.html}` 与
+`web/static/{app.css,app.js,assets.js}` 都已随仓库提供，`GET /` 正常返回 200。
+若你仍在旧 clone 上看到这个报错，那是历史提交 `5853752` 删掉 `web/templates/` 的残留状态。
+
+**Q6b: 建了任务但一直停在 `queued`？**
+Worker 没启动。Web 与 worker 是**两个独立进程**，需要另开一个终端跑
+`python -m jobs.worker`（或一键脚本 `scripts\run_local.ps1`）。
+`GET /health` 的 `worker` 字段是 `missing` / `stale` 就说明它没在跑。
 
 **Q7: 缺 `python-dotenv` 模块？**
 `pip install -r requirement.txt` 即可，或单独 `pip install python-dotenv`。

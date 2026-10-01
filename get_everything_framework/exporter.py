@@ -21,6 +21,10 @@ _UNSAFE_PREFIX_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _DOT_RUN = re.compile(r"\.{2,}")
 MAX_PREFIX_LENGTH = 64
 
+# 支持的导出格式。API 层用它做参数校验（非法值 → 400），
+# 这里再用它兜底（非法值 → ValueError），两处共用同一份清单，不会漂移。
+SUPPORTED_FORMATS = ("csv", "json")
+
 
 def safe_prefix(value: str | None, default: str = "results") -> str:
     """把任意字符串清洗为可安全用作文件名前缀的值。
@@ -123,7 +127,7 @@ def export_results(rows: List[Dict[str, Any]], fmt: str = "csv", prefix: str = "
     Raises:
         ValueError: 不支持的导出格式。
     """
-    if fmt not in ("csv", "json"):
+    if fmt not in SUPPORTED_FORMATS:
         # 先校验格式再落盘：非法 fmt 会直接拼出一个奇怪扩展名的文件。
         raise ValueError("暂不支持该导出格式")
 

@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · M5/M6/M7 剩余项待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · M5/M6/M7 剩余项待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → M5/M6/M7 剩余 ⬜**
-- 更新日期：2026-10-02（P1 §19 Observability 轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → M5/M6/M7 剩余 ⬜**
+- 更新日期：2026-10-02（P1 §14 文档同步 + 导出格式 400 收口轮）
 
 ---
 
@@ -197,6 +197,30 @@
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
 - 给 Codex 的独立核查文档在桌面：`geteverything_项目汇总_给Codex检查.md`
 
+**P1 §14 文档同步 + 导出格式 400 收口（本轮）**
+- 新增 `docs/ARCHITECTURE.md`（分层架构与冻结的技术选型）、`docs/API.md`
+  （**逐条核对真实路由**：39 条规则 / 41 个方法绑定，`/api/*` 34 条、需认证 24 条、
+  匿名可读 7 条）、`docs/DEPLOYMENT.md`（环境要求 / 安装 / `.env` / 启动 Web 与 worker /
+  测试 / 故障排查）；三份都是简体中文、互相交叉引用
+- **修一个真实缺陷**：`GET /api/export?format=xlsx` 原返回 **500 `unknown_error`**
+  （`exporter.export_results` 抛 `ValueError` 无人捕获，一路冒到全局兜底）——
+  「用户传错参数」被报成「服务器内部错误」。现改为在调用 exporter **之前**用
+  `exporter.SUPPORTED_FORMATS`（新增常量，与内部兜底**同一份**清单）拦下，返回
+  400 `bad_request` + `details.field="format"` + `details.supported=["csv","json"]`
+- 顺带修正一批**文档与代码不一致**：README 的「12 个接口 / `/api/scan`」（该路由不存在）、
+  「用 `/api/tools` 做健康检查」（实际是 `GET /health`）、匿名可读只列 3 条（实际 7 条）、
+  「需部署前端模板」（模板与静态资源都已在仓库）、Q6「`/` 报 TemplateNotFound」（M1 已修）、
+  测试基线 759；README 补「启动 Worker」「Mock / Real 双开关」「环境要求」三节
+  （原来全文 0 次提及 worker，照着装完任务会永远停在 `queued`）；
+  `api/tools.py` docstring 的 `table_name`/`record_count`（实际是 `table`/`result_column`/`category`）；
+  `api/scopes.py` 注释说 404 转成 `bad_request`（实际 `not_found`）；
+  `api/{scan,results}.py` 举 `nuclei` 当工具名（`RUNNER_REGISTRY` 里没有）；
+  `SECURITY.md` 的字典绝对路径条目（M5 已修）+ 补记导出格式缺陷；
+  `AGENTS.md` 的「560 行 / 22 条索引表」（实际 1800+ 行 / 27 条）+ 三个已修坑标注
+- 测试：+10 → **838 passed / 2 skipped**
+  （`test_export_contract.py` 新增 6 条参数化非法 format + 校验清单同源 + 默认仍是 csv +
+  大小写不敏感）
+
 ---
 
 ## 部分完成
@@ -206,7 +230,7 @@
 | **`mode=real` 真实链路** | ✅ **已有本地实证（本轮）**：`tests/integration/test_m7_local_e2e.py` 用**真实 httpx 子进程**打只绑 `127.0.0.1` 的 fixture 服务，一条用例走完 target → job → worker → runner → raw artifact → parser → observation → asset → diff → export（方案第 18 节）。此外 `tool_not_found` / `timeout` / `nonzero_exit` 等失败分类都有真实子进程用例 | 仍然**从未用真实工具打真实外部目标**（按硬约束刻意不做）—— 这是设计选择，不是缺口；CI 上若无 httpx 可执行文件，该用例会 `pytest.skip` |
 | **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库，**并已进资产页的观测时间线** | 资产页展示的是 `data_json` 原样 JSON，**没有按字段拆列**；任务详情页那一侧仍是原样 JSON |
 | **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
-| **M6 本机启动文档** | `CONTRIBUTING.md` 有环境搭建说明；`scripts/run_local.ps1` 可用 | 没有面向「新开发者 10 分钟启动」的完整文档；`scripts/check_env.py` 不存在 |
+| **M6 本机启动文档** | ✅ **已补齐**：`docs/DEPLOYMENT.md`（环境要求 / 安装 / `.env` 逐键说明 / 启动 Web 与 worker / 测试三条基线 / 故障排查），`README.md` 也补了「环境要求」与「启动 Worker」两节 | 仍缺 `scripts/check_env.py`（一键体检脚本） |
 | **M7 mypy** | ✅ **已完成**：`mypy app.py core api jobs storage.py modules` → `Success: no issues found in 60 source files` | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
 | **P1 Diff 的前端** | ✅ **已完成**：`/assets` 页底部有「两次任务对比」表单（基线与对比任务下拉、可选限定范围、「含未变」开关），四类分段渲染 + 属性差异（`status_code: 200 → 403`）；**清单条目可点进资产详情**（带 `asset_id` 的条目可点，详情面板会滚入视口） | — |
 | **P1 资产过期** | `mark_stale_assets(scope_id, last_seen_before=...)` 已实现且有用例 | **没有任何计划任务/接口调用它**，所以 `stale` / `gone` 目前永远是空的 |
@@ -237,10 +261,10 @@
 - [x] `/api/export` 改为直接下载（`export_id` + `download_url`，不再返回路径）
 - [x] 导出记录（`exports` 表 + `GET /api/exports`）
 - [ ] `scripts/check_env.py`
-- [ ] 本机启动文档
+- [x] 本机启动文档（`docs/DEPLOYMENT.md` + README 的「环境要求」「启动 Worker」两节）
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（828 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（838 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [x] SQLite 并发测试（`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
 - [x] **本地 fixture HTTP 测试**（`tests/fixtures/local_http_server.py` + `tests/integration/test_m7_local_e2e.py`，
@@ -376,7 +400,7 @@
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 828 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+pytest: 838 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
 mypy:   Success: no issues found in 60 source files        ← M7 验收命令，仍为 0
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
@@ -384,7 +408,7 @@ git diff --check: 退出码 0
         stderr 输出结构化 JSON 事件（含 request_id / path / status / duration_ms）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → **P1 §19 Observability `828`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → **§14 文档同步 + 导出格式 400 收口 `838`**
 
 ---
 
@@ -442,9 +466,9 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
    因此**当前阶段没有新的「方案内大项」可推**，剩下的是收尾与加固。
 3. **M5 剩余**（§11 统一执行链需授权，见 `docs/DECISIONS.md` §3）：资产过期自动化、
    观测 `data_json` 按字段拆列、旧库真实迁移（等你手动 `--apply`）。
-4. **M6 剩余**（纯白名单内，不需要决策）：`scripts/check_env.py`、面向新开发者的
-   「10 分钟本机启动」文档。
-5. **M7 只剩「一份测试报告」**：现有 `826` / `828` 项用例已可由 pytest 直接产出，
+4. **M6 剩余**（纯白名单内，不需要决策）：`scripts/check_env.py`
+   （本机启动文档已由 `docs/DEPLOYMENT.md` 补上）。
+5. **M7 只剩「一份测试报告」**：现有 `838` 项用例已可由 pytest 直接产出，
    报告要写的是「测了什么、没测什么、为什么」。
 6. **顺手可做（不需要决策）**：
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
@@ -459,7 +483,7 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 828 passed, 2 skipped
+python -m pytest                                      # 期望 838 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
 ```
 

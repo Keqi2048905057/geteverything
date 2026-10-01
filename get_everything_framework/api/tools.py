@@ -57,8 +57,9 @@ def list_tools():
                     "category": "subdomain",
                     "database": {
                         "tool_name": "subfinder",
-                        "table_name": "subfinder_results",
-                        "record_count": 1234
+                        "table": "subfinder_results",
+                        "result_column": "subdomain",
+                        "category": "subdomain"
                     }
                 },
                 ...
@@ -102,8 +103,9 @@ def list_databases():
             "databases": [
                 {
                     "tool_name": "subfinder",
-                    "table_name": "subfinder_results",
-                    "record_count": 1234
+                    "table": "subfinder_results",
+                    "result_column": "subdomain",
+                    "category": "subdomain"
                 },
                 ...
             ]

@@ -107,6 +107,7 @@ def get_scope(scope_id: str):
 
     scope = scope_store.get(scope_id)
     if scope is None:
-        # 404 由 HTTPException 处理器统一转成 JSON（error_code=bad_request）。
+        # 404 由 HTTPException 处理器统一转成 JSON（error_code=not_found，
+        # 见 core/errors_handlers.py 的状态码映射表）。
         abort(404, description=f"Scope 不存在: {scope_id}")
     return jsonify({"ok": True, "scope": scope.to_dict()})

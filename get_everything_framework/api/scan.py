@@ -235,7 +235,7 @@ def execute_single_tool(tool_name: str):
     请求方式: POST
     路径: /api/tool/<tool_name>/run
     路径参数:
-        tool_name: 工具名称（如 subfinder, httpx, nuclei 等）
+        tool_name: 工具名称（如 subfinder, httpx, dnsx 等）
 
     请求体 (JSON):
         {
