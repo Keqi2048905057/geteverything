@@ -94,7 +94,11 @@ class Config:
 # 项目路径
 # ═══════════════════════════════════════════════════════════
 
-OUTPUT_DIR = os.path.join(_BASE_DIR, "results")
+# 运行期产物目录（工具输出、心跳、两个 SQLite 库、artifact、导出）。
+# ``GEF_OUTPUT_DIR`` 允许整体改道：测试与验收既不必往仓库 ``results/`` 里写，
+# 也能让**子进程** worker（``python -m jobs.worker``）落在同一个临时目录上 ——
+# 子进程读不到父进程的 monkeypatch，只能靠环境变量。
+OUTPUT_DIR = os.getenv("GEF_OUTPUT_DIR") or os.path.join(_BASE_DIR, "results")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 UPLOAD_DIR = os.path.join(_BASE_DIR, "uploads")

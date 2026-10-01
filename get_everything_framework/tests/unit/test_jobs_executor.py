@@ -391,6 +391,10 @@ def test_worker_process_killed_then_restarted_does_not_lose_job(scope_id, local_
     env = os.environ.copy()
     # 子进程必须连到与测试同一个临时库，否则它去建自己的库。
     env["LOCAL_DB_PATH"] = local_db
+    # 同理，子进程的**运行期目录**也要改道：worker 启动会写
+    # ``<OUTPUT_DIR>/worker_heartbeat``，父进程的 monkeypatch 传不下去，
+    # 只有环境变量能拦（``GEF_OUTPUT_DIR`` 是唯一由 config 读取的出口）。
+    env["GEF_OUTPUT_DIR"] = os.path.dirname(local_db)
     # 显式拼 PYTHONPATH：不要留下结尾的分隔符，否则会多出一个空路径项，
     # 子进程可能既找不到 ``jobs`` 包、又读不到正确的项目根。
     existing = env.get("PYTHONPATH", "").strip()

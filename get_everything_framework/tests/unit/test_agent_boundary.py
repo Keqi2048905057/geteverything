@@ -22,7 +22,13 @@ from core import exports as exports_store
 
 @pytest.fixture
 def agent(local_db, store, monkeypatch, tmp_path):
-    """把上传目录指向临时路径的 Agent 实例。"""
+    """把上传目录指向临时路径的 Agent 实例。
+
+    ``EXPORT_DIR`` / ``OUTPUT_DIR`` 等模块级目录由 ``tests/conftest.py`` 的
+    autouse 夹具 ``_isolate_runtime_dirs`` 统一兜底 —— 本文件原先只 patch 了
+    ``UPLOAD_DIR``，导致 ``test_agent_export_returns_download_url_not_path``
+    每跑一次就往仓库 ``exports/`` 落一个空 CSV（单跑该用例一次即 +1 个文件）。
+    """
     from core import uploads as core_uploads
 
     monkeypatch.setattr(core_uploads, "UPLOAD_DIR", str(tmp_path / "uploads"), raising=False)

@@ -51,6 +51,54 @@ def _reset_observability_context():
         observability._CONTEXT_VARS[name].set(None)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_runtime_dirs(tmp_path, monkeypatch):
+    """把所有**模块级**运行期目录与**本机应用库**钉到临时目录。
+
+    ``AGENTS.md`` 硬约束：测试不得写仓库的 ``results/``、``exports/`` 与
+    ``results/local.db``。``app_module`` 里已经逐项 patch 过，但**只用 ``local_db``
+    或根本不用夹具的单元用例不经过那个夹具** —— 逐文件实测过三处泄漏：
+
+    * ``tests/unit/test_agent_boundary.py`` 每跑一次往仓库 ``exports/`` 落一个空 CSV
+      （``_tool_export_results`` → ``exporter.export_results()``，后者读的是
+      **模块级** ``EXPORT_DIR``）；
+    * ``tests/unit/test_security_baseline.py`` 的两个上传用例绕过 ``local_db``
+      直接调 ``core_uploads.save_upload()``，而它内部走
+      ``db.ensure_schema()`` + ``db.transaction()`` → 写的是**仓库**的
+      ``results/local.db``（实测单跑一次该文件：``audit_events`` 309 → 312、
+      ``uploads`` 309 → 312，每跑一次稳定 +3 行）；
+    * ``tests/integration/test_m4_runner_result.py``、``test_observability_chain.py``、
+      ``tests/unit/test_jobs_executor.py`` 会让真实 ``Worker`` 刷新仓库的
+      ``results/worker_heartbeat``（``jobs/worker.py`` 从 ``config`` 导入了自己的
+      ``OUTPUT_DIR`` 副本，patch ``core.health`` 对它无效）。
+
+    这些目录都是「导入期绑定」的普通字符串，只能靠替换模块属性来重定向；
+    两个库路径则是模块级字典，就地改 item 即可（``core.db`` 与 ``storage.py``
+    拿到的是同一个对象）。这层 autouse 兜底让「某个夹具忘了 patch」不再可能把
+    产物写进仓库 —— 实测全量跑完后 ``exports/``、``results/`` 的文件集合与
+    ``local.db`` 的哈希完全不变。与 ``app_module`` / ``local_db`` 的 patch 叠加是
+    安全的：``monkeypatch`` 按调用顺序回退还原。
+    """
+    import config
+    import core.db as core_db
+    import exporter as exporter_module
+    import jobs.worker as worker_module
+    from core import artifacts as core_artifacts
+    from core import health as core_health
+    from core import uploads as core_uploads
+
+    monkeypatch.setitem(config.LOCAL_DB_CONFIG, "path", str(tmp_path / "test_local.db"))
+    core_db.reset_schema_cache()
+
+    monkeypatch.setattr(exporter_module, "EXPORT_DIR", str(tmp_path / "exports"), raising=False)
+    monkeypatch.setattr(core_uploads, "UPLOAD_DIR", str(tmp_path / "uploads"), raising=False)
+    monkeypatch.setattr(core_health, "OUTPUT_DIR", str(tmp_path / "results"), raising=False)
+    monkeypatch.setattr(worker_module, "OUTPUT_DIR", str(tmp_path / "results"), raising=False)
+    monkeypatch.setattr(
+        core_artifacts, "ARTIFACT_DIR", str(tmp_path / "results" / "artifacts"), raising=False
+    )
+
+
 @pytest.fixture
 def admin_token(monkeypatch):
     """固定的管理员 Token（通过 monkeypatch 注入 Config，不落盘）。"""
