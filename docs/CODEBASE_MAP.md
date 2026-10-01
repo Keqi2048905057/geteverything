@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）（2026-10-01）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -116,11 +116,15 @@
 └─────────────────────────────────────────────────────────────────────────┘
 
 旁路（与上主链解耦，且**不经过任何模型**）：
-  app.py:118 action == "chat" → agent/service.handle_agent_message()
+  app.py:246 action == "chat" → agent/service.handle_agent_message()
     → agent/action.AgentAction.run()
       → agent/intent.analyze_intent()   （正则关键词）
       → agent/planner.build_plan()      （模板拼装）
       → AgentAction._execute_tool()     → 复用 tool_runner.run_tools / storage / exporter
+
+▶ P0-6 阶段一：**创建扫描任务**这条编排已收到一处（`core/application.py`），
+  上面主链的 `POST /api/jobs` 与首页表单共用它；Agent 的执行路径**仍在旁路上**
+  （阶段二才迁移，见 §9.19）。
 ```
 
 **关键结论（与任务描述的差异）**：任务书描述的 "LLM 规划 agent" 在运行时**不会调用任何大模型**。`AgentAction.__init__` 接收 `client` 参数但只赋值给 `self.client` 后从不使用（`agent/action.py:52`、grep 显示 `.chat(` 只出现在 `agent/client.py:34` 与 `agent/providers/openai_compat.py` 内部）。`SYSTEM_PROMPT`（含 skills）只被塞进 `self.conversation_history[0]`（`agent/action.py:776`），从未发送给 provider。规划完全由 `agent/intent.py` 的关键词 + `agent/planner.py` 的固定模板决定。
@@ -451,7 +455,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ---
 
-## 6. BUG 定位索引表（共 27 条症状；第 23～27 条为 P1/M7 新增）
+## 6. BUG 定位索引表（共 29 条症状；第 23～27 条为 P1/M7 新增，第 28～29 条为 P0-6 轮新增）
 
 | # | 典型症状 | 最可能的 3 个排查位置 | 该处典型失败模式 |
 |---|---|---|---|
@@ -482,6 +486,8 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 25 | Agent 回复里出现 `AttributeError: 'str' object has no attribute 'get'`（只在**真有存活结果**时） | ① `agent/action.py:_tool_httpx` 的 `items` 字段 ② `agent/action.py:_summarize_httpx_items`（逐条 `item.get(...)`）③ `modules/httpx.py:run_scan` 的返回值语义 | 同一个 `rows` 变量在两条链上有两种形态：`run_scan` 返回 **URL 字符串列表**（旧签名，兼容用），而元数据在 `runner.last_items`（dict 列表）。`items` 错取了 `rows`，于是 `_summarize_httpx_items` 收到一堆 `str` 就炸。**零结果时不炸** —— 所以「本地跑不通、真机上必炸」是它的典型表现。`results` 里的 `total` 也就会与 `items` 长度对不上 |
 | 26 | 原始证据打开后「只有一行」/ 明明跑出很多结果却只看到一条；`truncated` 还是 `false` | ① `core/artifacts.py:read_artifact`（脱敏用的是哪支函数）② `core/runner_result.py:scrub_text`（脱敏且默认不截断）vs `scrub_command`（**命令预览**，末尾截到 300 字符）③ API 的 `limit` 与 `SCAN_LIMITS["max_artifact_bytes"]` | **M7 已修**：`read_artifact()` 曾误用 `scrub_command()`，于是 `GET /api/artifacts/<id>` 的 `text` 永远只有头 300 字符，而 `truncated` 仍为 `False`（截断标记只看 `max_artifact_bytes`）。**症状的判别点**：`truncated is False` 但文本长度恰好 ≈300 且以 `...` 结尾。修法是 `scrub_text()`（只脱敏、默认不截断）；命令预览仍走 `scrub_command()`（语义与 300 字符上限未变）|
 | 27 | 日志里「找不到一个请求相关的任何记录」/ 结构化字段时有时无 | ① `core/observability.py:log_event`（关联字段来自 contextvar，不是参数）② 绑定处是否成对（`app.py` 的 `before_request`、`jobs/worker.py:startup`、`jobs/executor.py` 的 `with observability.bind(...)`）③ `configure_logging()` 是否在**进程入口**调过（`app.py:__main__` / `jobs/worker.py:__main__`）| 三个高发点：① 直接 `python -c "import app"` 或 `waitress-serve app:app` 起服务**不会**调 `configure_logging()`，事件只进 root logger（没人看）；② `Worker` 只 `startup()` 没 `shutdown()` → `worker_id` 一直挂着，同线程后续代码/测试会继承一个已死 worker 的身份；③ 用行号/字符串去 `grep "print("` 会撞上 `Blueprint("api", …)` 这类同形标识符，实际 print 清单以 `tests/unit/test_observability.py` 的 AST 守卫为准。**另注意**：401 的 `error_message` 里 `X-Local-Token` 后面的词会被脱敏规则打码（见 §9.18.3），不是日志丢了内容 |
+| 28 | 对比两次任务时，Web Server / 技术栈明明变了却**报不出 `changed`**（`status_code` / `title` / URL 却能报） | ① `core/assets.py:DIFFABLE_ATTRIBUTES`（白名单用的是哪个键名）② `core/assets.py:ATTRIBUTE_ALIASES` 与 `_canonical_attributes()` ③ `modules/httpx.py:_read_json_results` **实际产出的键名** | **已修**，但复发方式很隐蔽：httpx 产出的是 `webserver` / `tech`，而白名单早期写的是 `server` / `technology` —— 两边对不上，白名单永远匹配不到，`_changed_attributes()` 返回 `{}`。**判别点：只有 `status_code` / `title` / `url` 三项会报变化**。最危险的是单测若用「文档体例」的键名（`server`/`technology`）而不是工具真实键名，测试会全绿而线上失效。以后新增可 diff 属性，先确认工具真实产出的键名 |
+| 29 | 「创建任务」的两个入口行为不一致（错误码/文案/限流口径对不上） | ① `core/application.py:create_scan_job()`（唯一编排入口）② `api/jobs.py:create_job` 是否又被写回了内联编排 ③ `app.py:index()` 的扫描分支是否又反向导入 `api.jobs` 的私有函数 | 这类退化**不会让任何功能测试变红**（两条路各自都"能用"），只会让两个入口慢慢漂移。`tests/unit/test_application_service.py` 的三条源码守卫专拦这个：`api/jobs.py` 里不许再出现 `validate_job_targets` / `create_job_with_status` / `normalize_idempotency_key` / `resolve_mode` / `audit.record(job_created)`；`app.py` 里不许再出现 `from api.jobs import _resolve_targets`；`core/application.py` 里不许出现 `allowed_domains` / `allowed_cidrs` / `fnmatch`。**守卫失败时该改的是那段新写的内联代码，不是守卫** |
 
 ---
 
@@ -631,6 +637,7 @@ get_everything_framework/
 │   ├── runner_result.py      M4：Observation / ToolHealth / RunnerResult + scrub_command（命令预览，300 字符）+ scrub_text（任意文本，默认不截断）
 │   ├── artifacts.py          M4：原始证据落盘（stdout/stderr/output）+ 登记 + 截断脱敏读取（**脱敏用 scrub_text，不再被 300 字符预览规则截断**）
 │   ├── observability.py      P1 §19：**唯一日志出口**——一行一个 JSON 事件 + 四个关联 ID（request_id/job_id/step_id/worker_id，contextvars 绑定）+ 脱敏与容器上限
+│   ├── application.py        P0-6 阶段一：**Application Service 层**——create_scan_job() 是创建扫描任务的唯一编排入口（解析目标 → 查重 → 限流 → Policy → 模式 → 落库 → 审计 → 结构化日志），HTTP 视图 / 首页表单 / 以后的 Agent 共用
 │   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复
 ├── jobs/                     ← 进程层（刻意不放进 core/）
 │   ├── executor.py           执行逻辑（与进程无关，可直接单测调用）
@@ -787,19 +794,19 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 | `assets` / `observations` / `artifacts` 表 | **均已建成**：`artifacts` 是 M4，`assets` / `observations` 是 M5/P1 §8（两层模型：一行唯一资产 + N 条观测时间线，`core/db.py` 建表 + `core/assets.py` 读写） | — |
 | 敏感产物仍在 Git 索引 | **已解决**：自有仓库 `geteverything` 只保留一份干净历史，`results/`、`uploads/`、`SecLists/`、`scripts/*.exe` 均未入库 | — |
 | Scope 判定位置 | **P0-2 已统一**到 `core/policy.py`（见 §9.11） | — |
-| Agent 的执行边界 | **P0-3 部分**：已禁止任意 `file_path`，但仍直接调 `run_tools` / runner，未改走 Job Service | P0-6，需授权 |
+| Agent 的执行边界 | **P0-3 已完成**（禁止任意 `file_path`，只认受控 `upload_id`）；**P0-6 阶段一已完成**：任务创建编排收拢到 `core/application.py`，HTTP 视图与首页表单共用唯一入口。**阶段二未做**：Agent 仍直接调 `run_tools` / runner | P0-6 阶段二（已授权，见 §9.19 / `docs/DECISIONS.md` §3.2），开工前先出影响说明 |
 | `jobs` 表幂等与退避 | **已解决（P0-7）**：`idempotency_key` / `next_attempt_at` 两列纯增量补列（`ALTER TABLE ... ADD COLUMN`，可空，既有行语义不变）+ 两个非唯一索引 | 授权见 `docs/DECISIONS.md` §3.1 |
 
 ### 9.8 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 828 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 60 source files
+$ python -m pytest           # 874 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 61 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → **P1 §19 Observability（结构化日志与关联 ID）`828`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → **P0-6 阶段一（Application Service 入口收拢）`874`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -985,9 +992,10 @@ core/runner_result.py
 
 测试：`tests/unit/test_agent_boundary.py`（16 例，含 `../../` 穿越的 `upload_id` 被拒）。
 
-**仍未做**（P0-6）：Agent 依旧直接调 `tool_runner.run_tools` / `HttpxRunner.run_scan`，
-没有改走 Job Service。这是「Agent 提议 = 执行」的残留，改动面涉及 Agent 主流程重排，
-属需要授权的项。
+**仍未做**（P0-6 阶段二）：Agent 依旧直接调 `tool_runner.run_tools` / `HttpxRunner.run_scan`，
+没有改走 Job Service。这是「Agent 提议 = 执行」的残留。**阶段一已于本轮完成**
+（编排收拢到 `core/application.py`，见 §9.19）；阶段二开工前须先出影响说明
+（Agent 执行会异步化）。
 
 #### 9.11.3 导出不再泄露路径（P0-5）
 
@@ -1152,11 +1160,29 @@ changed   = []
 counts    = {added:1, removed:1, changed:0, unchanged:2}
 ```
 
-`changed` 只在**可 diff 属性**变化时产生，取值见 `DIFFABLE_ATTRIBUTES`：
+`changed` 只在**可 diff 属性**变化时产生。属性白名单是 **canonical key**，不是任意键名 ——
+两侧写法先过 `ATTRIBUTE_ALIASES` 归一化再比较：
 
 ```text
-status_code / title / server / technology / url
+ATTRIBUTE_ALIASES = {
+    "server": "webserver", "webserver": "webserver", "web_server": "webserver",
+    "technology": "technologies", "technologies": "technologies", "tech": "technologies",
+    "status_code": "status_code", "title": "title", "url": "url",
+}
+DIFFABLE_ATTRIBUTES = ("status_code", "title", "webserver", "technologies", "url")
 ```
+
+> ⚠️ **这里踩过一个真实缺陷（已修）**：`DIFFABLE_ATTRIBUTES` 原先写的是
+> `server` / `technology`，而 `modules/httpx.py:_read_json_results` 实际产出的键名是
+> `webserver` / `tech`。两边对不上，`_changed_attributes()` 在真实 httpx 链路上
+> **永远返回 `{}`** —— 只有 `status_code` / `title` / `url` 三项真的能报出变化，
+> `webserver` 从 `nginx` 变成 `apache` 也报不出来（方案第 10 节点名要求它能报）。
+> 更隐蔽的是：当时的单测用的是**文档体例**的键名而不是 httpx 真实键名，所以测试全绿。
+> 修法就是上面这张表 + `_canonical_attributes()`；不变量
+> 「`set(ATTRIBUTE_ALIASES.values()) == set(DIFFABLE_ATTRIBUTES)` 且每个 canonical key
+> 自映射」写成了用例，防止以后只改一边。
+> **排查提示**：以后再加可 diff 属性，先确认「工具真实产出的键名」是什么，
+> 不要照着文档写。
 
 > ⚠️ **`duration_ms` / `checked_at` 这类一次性字段必须排除**，否则每次扫描
 > 全表都是 `changed`，diff 直接废掉（`test_diff_ignores_volatile_attributes`）。
@@ -1813,4 +1839,103 @@ worker_job_finished（带 worker_id）
   泄漏到同线程里的**下一条用例**（症状：观测测试断言 `current_context() == {}`
   却看到 `{'worker_id': 'm7-e2e-after'}`，而单独跑该文件时全绿）。
   单文件跑没问题、全量跑才炸 —— 典型的测试间污染。
+
+### 9.19 P0-6 阶段一：Application Service 入口收拢
+
+方案第 6 节的原话是「**先增加统一 Service/Policy 入口，再迁移调用方；不要一次性进行
+无边界重写**」。本节就是那句话的前半句，**只挪编排位置，不动数据模型、不动执行架构**。
+
+#### 9.19.1 改前的实际拓扑（读码确认，不是推测）
+
+```text
+POST /api/jobs → api/jobs.py:create_job
+   解析目标 → 校验工具 → 限流 → Policy 判定 → 模式解析 → 落库 → 审计 → 结构化日志
+   ↑ 以上全部**内联在视图函数体内**（约 90 行）
+
+首页表单 POST / → app.py:index
+   from api.jobs import _resolve_targets      ← 反向导入 api 层的**私有**函数
+   + 把 Policy 判定抄了第二遍（validate_job_targets → resolve_mode → create_job）
+
+Agent → agent/action.py:_tool_subdomain / _tool_httpx
+   tool_runner.run_tools(...) / HttpxRunner.run_scan(...)   ← 完全绕过 Job 链
+```
+
+两个后果，都是可验证的而不是理论担忧：
+
+1. **同一套判定有两份实现**。`create_job` 里的字段顺序、错误文案、限流口径一旦调整，
+   `index()` 那份不会跟着变 —— 改一处漏一处。
+2. **Agent 那条路上的「同一次扫描」与主链不是同一件事**。在主链上它是一个可审计、
+   可取消、可重试、且**执行前会重新复检 Scope** 的 Job；在 Agent 链上只是一次
+   同步函数调用：没有 job 记录、没有 step 快照、没有 artifact、没有审计事件，
+   Scope 只在入口判了一次。这就是 P0-6 要移动的**权限边界**。
+
+#### 9.19.2 新增 `core/application.py`
+
+放在 `core/` 而不是 `agent/`：它是**与调用方无关**的编排层，Agent 只是将来的调用方之一。
+
+| 导出 | 职责 |
+|---|---|
+| `create_scan_job(...)` | 创建扫描任务的**唯一**编排入口 |
+| `resolve_targets(...)` | 目标来源解析（显式列表 + 受控 `upload_id`），从 api 层私有函数升为公开接口 |
+| `split_str_list(...)` | 请求字段 → 字符串列表（原 `api/jobs.py:_split_list`） |
+| `JobSubmission` | 返回 `job` / `scope` / 实际入库的 `tools` 与 `targets`；`to_dict()` 给出与 `POST /api/jobs` **完全一致**的响应体 |
+
+校验顺序与历史**逐条一致、刻意不重排**（重排会改掉「哪个错误先报出来」，从而改掉
+响应文案与错误码）：
+
+```text
+目标非空 → 工具非空 → 幂等键合法 → 工具受支持 → 目标数上限
+  → Scope/Policy（validate_job_targets）→ 模式开关（resolve_mode + require_active_scan）
+  → mock 场景名 → 落库（create_job_with_status）→ 审计 + 结构化日志
+```
+
+#### 9.19.3 边界为什么刻意收窄
+
+这是本轮最关键的设计决定：**阶段一不制造新的「第二处实现」**。
+
+* **不碰 Flask**：认证、请求解析、HTTP 状态码仍由 `api/` 与 `app.py` 负责。
+  服务层只接收已经解析好的标量/列表，返回结构化结果或抛 `core.errors` 里的业务异常
+  —— 于是它既能在 HTTP 请求里被调用，也能在将来的 Agent/CLI 里被直接调用。
+* **不自实现 Scope 判定**：一律转交 `core.policy.validate_job_targets`。
+  「Scope 判定只有一处」这条 P0-2 的成果不能被这次重构稀释。
+* **不改数据结构**：只调用 `core.jobs` 已有的写入函数，一行 DDL 都没动。
+
+#### 9.19.4 三条源码守卫（比功能测试更重要）
+
+功能测试只能证明「现在是对的」，证明不了「以后不会退回去」。所以
+`tests/unit/test_application_service.py` 里用 `inspect.getsource()` 把结构本身钉住：
+
+| 守卫 | 断言 |
+|---|---|
+| `api/jobs.py` 不得再内联编排 | 源码里不出现 `validate_job_targets` / `create_job_with_status` / `normalize_idempotency_key` / `resolve_mode` / `audit.record(audit.EVENT_JOB_CREATED` |
+| `app.py` 不得再反向导入 api 层私有函数 | 源码里不出现 `from api.jobs import _resolve_targets` |
+| 服务层不得自己比较白名单 | `core/application.py` 里不出现 `allowed_domains` / `allowed_cidrs` / `fnmatch` |
+
+> 为什么值得这么写：这次重构的核心价值是**「只有一处」**，而最容易发生的退化
+> 就是「为了图省事把一段逻辑抄回视图函数」—— 那种改动不会让任何功能测试变红。
+
+另加两条**等价性**断言：同一份输入走 HTTP 与直调服务层，落库结果逐字段一致；
+响应体字段集合相等。
+
+#### 9.19.5 阶段二（未做）的影响说明
+
+`agent/action.py` 仍在直接调 `run_tools` / `HttpxRunner.run_scan`。把它接到
+Application Service → Job 链，**不是换个函数调用**，而是：
+
+* **Agent 执行变为异步**：回复里给 `job_id` + `queued`，结果由 worker 产出；
+  现在那种「一句话说完就把子域名列表念出来」的体验会消失；
+* `agent_cli.py` 与首页 `action=chat` 的交互语义随之改变（需要轮询或二次询问）；
+* `tests/unit/test_agent_boundary.py` 现在 monkeypatch `agent.action.run_tools` /
+  `agent.action.HttpxRunner` 来断言「被拒绝时两者都没被调用」——
+  目标达成后这两个符号不该再存在于 `agent/action.py`，该文件需按新边界重写。
+
+按用户约束「**若某一步需要改变核心数据模型或执行架构，先停下来说明具体影响再继续**」，
+以上影响须先经确认，阶段二才开工。
+
+#### 9.19.6 回归测试（+27，847 → 874）
+
+`tests/unit/test_application_service.py`：三条源码守卫 + 两条等价性断言 +
+逐条覆盖历史口径（参数缺失 / 未知工具 / 越界目标 / 超限 / 非法幂等键 /
+非法 `scenario` / real 模式双开关 / 幂等命中 `reused` / 上传目标同样过 Scope /
+`upload_id` 任意路径被拒 / 结构化日志确实打出 `job_created`）。
 

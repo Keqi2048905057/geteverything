@@ -80,6 +80,7 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
 | Web/API | `api/*.py` | 解析请求、调 `require_admin()`、拼目标、把结果 jsonify | 不自己写 Scope 判定（一律转交 `core/policy.py`） |
 | Auth | `core/auth.py`、`core/security.py` | 单一 Token 校验（`hmac.compare_digest`）、Session、弱密钥处理 | **无 RBAC、无用户表、无权限分级** |
 | Policy/Scope | `core/policy.py`、`core/scope.py`、`core/safety.py` | 目标规范化与授权判定；`mock/real` 模式解析 | 不写数据库、不碰 Flask（便于 worker/CLI 复用） |
+| Application Service | `core/application.py` | **执行类业务的统一入口**：`create_scan_job()` 编排 目标解析 → 查重 → 限流 → Policy → 模式 → 落库 → 审计 → 结构化日志 | 不碰 Flask（不解析请求、不决定状态码）、不自实现 Scope 判定、不直接执行工具 |
 | Job | `core/jobs.py` | 队列、状态机、租约、幂等键、退避 | 不执行任何工具 |
 | Worker | `jobs/worker.py`、`jobs/executor.py` | 认领任务、逐步执行、写进度与心跳 | 不提供 HTTP 接口 |
 | Runner | `modules/`、`tool_runner.py` | 构造命令行、跑子进程、解析输出为 `RunnerResult` | 不做 Scope 判定（由 executor 在调用前复检） |
@@ -96,17 +97,18 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
 ```text
 1. app.py:before_request        → 绑定 request_id（沿用入站 X-Request-Id 或新生成）
 2. app.py:after_request         → 把同一个 X-Request-Id 回写响应头
-3. api/jobs.py:create_job()
+3. api/jobs.py:create_job()     ← 视图层只做「认证 + 解析 JSON + 拼响应」
    a. require_admin()                      → 无 Session / X-Local-Token → 401 unauthenticated
-   b. _split_list / _resolve_targets       → targets 显式列表 或 upload_id（受控上传）
-   c. load_tools(tools)                    → 不在 RUNNER_REGISTRY 一律 400
-   d. 超过 SCAN_LIMITS["max_targets_per_job"]（20）→ 400
-   e. validate_job_targets(scope_id, ...)  → 缺失 400 / Scope 不存在 403 / 任一越界 403（整体拒绝）
-   f. resolve_mode(payload["mode"])        → real 需 GEF_ALLOW_REAL_SCAN=true，否则 403
-   g. mode == real → scope.require_active_scan()   ← 第二道开关
-   h. jobs_store.create_job_with_status()  → 落 jobs + 展开 job_steps 快照（BEGIN IMMEDIATE）
-   i. audit.record(job.created) + observability.log_event(job_created)
-   j. 返回 202 {ok, job_id, status:"queued", mode, total_steps, scope_id, reused}
+   b. 交给 core/application.py:create_scan_job()   ← Application Service（唯一编排入口）
+        · resolve_targets / _split_list    → targets 显式列表 或 upload_id（受控上传）
+        · load_tools(tools)                → 不在 RUNNER_REGISTRY 一律 400
+        · 超过 SCAN_LIMITS["max_targets_per_job"]（20）→ 400
+        · validate_job_targets(scope_id, ...) → 缺失 400 / Scope 不存在 403 / 任一越界 403（整体拒绝）
+        · resolve_mode(mode)               → real 需 GEF_ALLOW_REAL_SCAN=true，否则 403
+        · mode == real → scope.require_active_scan()   ← 第二道开关
+        · jobs_store.create_job_with_status() → 落 jobs + 展开 job_steps 快照（BEGIN IMMEDIATE）
+        · audit.record(job.created) + observability.log_event(job_created)
+   c. 返回 202 {ok, job_id, status:"queued", mode, total_steps, scope_id, reused}
    ※ 到这里为止**从未执行任何工具**
 4. worker 进程（另一个操作系统进程）：
    jobs/worker.py:Worker.tick()
@@ -119,7 +121,7 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
                   → modules.registry.build_runner() → BaseRunner.run(target)
                   → 落 artifact（stdout/stderr/output）
                   → 写 observations_json
-       · 每步 re renew_lease + 刷心跳文件
+       · 每步 renew_lease + 刷心跳文件
    → jobs_store.finish_job(status=...)      → 走 ALLOWED_TRANSITIONS 校验
 5. P1 汇聚：观测经 core/canonical.py 归一化 → core/assets.py 写 assets / observations
 6. 前端：app.js 每 3 秒轮询 /api/jobs 与 /health；资产页 assets.js 调 /api/assets
@@ -131,6 +133,10 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
   一直停在 `queued`（这正是 `/health` 要能区分「Web 正常但 worker 未启动」的原因）。
 * **Scope 判四次**，不只判创建时那一次：任务创建后 Scope 被删或被收紧，执行期复检会拦下它，
   Runner 根本不会被调用，该步骤记 `scope_violation`。
+* **编排只有一处**（P0-6 阶段一）。上面 3.b 的那些步骤原先内联在 `api/jobs.py:create_job` 里，
+  首页表单为了做同一件事还得反向导入 api 层的私有函数 `_resolve_targets` 并把 Policy 判定抄一遍；
+  现在统一收在 `core/application.py:create_scan_job()`，视图函数只剩参数与响应。
+  三条源码守卫（`tests/unit/test_application_service.py`）阻止它退化回内联。
 
 ---
 
@@ -142,7 +148,9 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
 | `POST /api/run` | ❌ 同步阻塞在请求线程里 | 必填 `scope_id` | 同上 | 历史入口，仍保留 |
 | 首页表单 `POST /` | ✅ 创建 job | 必填 Scope（下拉框） | 固定 `mock` | `app.py:index()` |
 
-三者共用 `core/policy.py` 的同一套判定，不各写一份。
+前两者**共用 `core/application.py:create_scan_job()` 这同一个编排入口**（P0-6 阶段一；
+`/api/run` 是同步旧链，尚未合流，见第 11 节），Scope 判定一律转交 `core/policy.py`，
+不各写一份。
 
 ---
 
@@ -167,9 +175,18 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
 2. **Agent 不接受任意文件路径**（P0-3）。请求里出现 `file_path` 直接拒绝，只收受控 `upload_id`
    （经 `core/uploads.py:resolve_targets_file()` 换取真实路径）。
 
-**仍未完成（P0-6，需授权）**：Agent 依旧直接调 `tool_runner.run_tools` / runner，没有改走 Job Service。
-也就是说「提出计划」与「发起执行」在 Agent 这条路上还没有彻底分离——目标仍然要过 Scope，但绕过的是
-Job/队列这一层。主链（`/api/jobs`）不受此影响。
+**P0-6 阶段一已完成，阶段二未做**：
+
+* **已做**：创建扫描任务的编排收拢到 `core/application.py:create_scan_job()`
+  （`POST /api/jobs` 与首页表单共用），视图函数不再内联 Policy/落库/审计。
+* **未做**：Agent 依旧直接调 `tool_runner.run_tools` / `HttpxRunner.run_scan`，没有改走 Job Service。
+  也就是说「提出计划」与「发起执行」在 Agent 这条路上还没有彻底分离——目标仍然要过 Scope，
+  但绕过的是 Job/队列这一层。主链（`/api/jobs`）不受此影响。
+* **阶段二的影响**（开工前需确认）：接上 Job 链意味着 **Agent 执行异步化** ——
+  回复里给 `job_id` 而不是内联结果，`agent_cli.py` 与首页 `action=chat` 的交互语义随之改变，
+  `tests/unit/test_agent_boundary.py`（现在 monkeypatch `agent.action.run_tools` /
+  `agent.action.HttpxRunner`）需按新边界重写。
+* 本项真正的验收点是**「权限边界移动了」**，而不只是「函数调用换了」。
 
 ---
 
@@ -224,8 +241,13 @@ Observation（每次「某工具在某次任务里看到了什么」一行）
 Job / Run / Tool
 ```
 
-Diff 只看 `DIFFABLE_ATTRIBUTES`（`status_code` / `title` / `server` / `technology` / `url`），
-把时间戳之类的易变字段排除在外，否则每次扫描都会报 changed。
+Diff 只看 `DIFFABLE_ATTRIBUTES`，且比较的是**归一化后的 canonical key**
+（`status_code` / `title` / `webserver` / `technologies` / `url`）：
+`core/assets.py:ATTRIBUTE_ALIASES` 把工具两侧的不同写法（如 `server` / `webserver` /
+`web_server`、`technology` / `technologies` / `tech`）先映射到同一个名字再比。
+**注意这不是可有可无的兼容层**：`modules/httpx.py` 实际产出的键名是 `webserver` / `tech`，
+早期白名单写的是 `server` / `technology`，于是这两项在真实链路上**永远报不出变化**
+（已修，见 `CHANGELOG.md`）。时间戳之类的易变字段一律排除，否则每次扫描都会报 changed。
 
 ---
 
@@ -339,7 +361,7 @@ Diff 只看 `DIFFABLE_ATTRIBUTES`（`status_code` / `title` / `server` / `techno
 |---|---|
 | [`API.md`](API.md) | 每条接口的方法/路径/认证/参数/响应/错误码 |
 | [`DEPLOYMENT.md`](DEPLOYMENT.md) | 环境、安装、`.env`、启动 Web/Worker、健康检查、故障排查 |
-| [`CODEBASE_MAP.md`](CODEBASE_MAP.md) | 逐文件代码地图 + 27 条「症状 → 排查位置」+ 36 条已知薄弱点 |
+| [`CODEBASE_MAP.md`](CODEBASE_MAP.md) | 逐文件代码地图 + 29 条「症状 → 排查位置」+ 36 条已知薄弱点 |
 | [`DECISIONS.md`](DECISIONS.md) | 预授权单与永不授权的红线 |
 | [`../SECURITY.md`](../SECURITY.md) | 安全策略、已修/待修问题清单 |
 | [`../PROJECT_STATE.md`](../PROJECT_STATE.md) | 项目状态板（当前阶段、下一步） |

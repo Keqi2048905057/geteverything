@@ -60,8 +60,22 @@
 - `[本轮] P0-7a — jobs 表新增 idempotency_key 列 — 属第 2 节边界「需要改动数据库结构」，第 1 节九项均未覆盖 — 建议：单开一项预授权「jobs/job_steps 纯增量补列（ADD COLUMN，不动既有列与数据）」，与 E 项同规格。`
 - `[本轮] P0-7b — 重试退避（backoff）需要 next_attempt_at 列 + worker 领取条件改动 — 同上：改表结构 + 改认领 SQL 语义 — 建议：与 P0-7a 合并预授权后再做；当前已实现 max attempts（5 次）作为兜底。`
 - `[本轮] P1 §11 — 统一旧执行链（Legacy API → Adapter → Job Service → New Runner）—— 现状是 api/scan.py 同步扫描与 Job 链并存，两套模型不产同一份资产 — 合流要改的是「调用链拓扑」，不是单点实现，按第 4 节属大型重构 — 建议：单开一项预授权，并明确「旧同步接口保留、只是内部改走 Job Service」这一验收口径。`
-- `[本轮] P1 §13 — SQLAlchemy + Alembic 替换手写 SQL + 迁移 —— 引入新依赖并重写整个数据访问层，风险等级与第 4 节的「SQLite → PostgreSQL」同类 — 建议：本机联调版明确不做；若要做请单独排期并接受迁移期双写。`
-- `[本轮] P0-6 — Agent 改走 Job Service（不再直接调 run_tools / HttpxRunner.run_scan）—— 改的是「调用链拓扑」，按第 4 节属大型重构 — 建议：单开一项预授权，验收口径为「Agent 只产出计划，执行一律经 Job/Policy 链」，并保留 Agent 层现有的 upload_id 白名单。`
+- `[DEFERRED] P1 §13 — SQLAlchemy + Alembic 替换手写 SQL + 迁移 —— 引入新依赖并重写整个数据访问层，风险等级与第 4 节的「SQLite → PostgreSQL」同类 — **本机联调版明确不做**（见 3.1 本轮口径），从「待授权」改为「已延期」，不再逐轮追问。`
+- `[DEFERRED] P1 §20（生产迁移门槛相关项）—— 属方案第 25 节「P1 后续生产迁移门槛」，已在执行方案里标注 `[DEFERRED]`，当前阶段不列入验收。`
+
+> **已从本节移出**：`P0-6`（Agent 改走 Job Service）—— 用户本轮已授权，见 3.1。
+
+### 3.2 用户本轮追加（2026-10-02，第二次弹窗确认）已授权的项
+
+> 与 3.1 同规格：用户明确勾选后才生效，执行时按此口径，并在报告中复述。
+
+| 项 | 授权口径（用户原话要点） | 记录 |
+|---|---|---|
+| **P0-6** | ✅ **授权**：改造 Agent → Job/Policy 执行链。**当前是人工监督执行**，不再要求把这项任务限制为夜间保守模式。约束：① 先梳理现有调用拓扑，再分阶段改造，不要一次性大范围重构；② 每完成一个关键步骤就运行相关测试，确认通过后再继续；③ 目标链路 `Agent → Intent / Plan → Application Service → Policy / Scope → Job → Worker → Runner`；④ `agent/action.py` **不得**再直接调用 `run_tools` 或具体 Runner 的 `run_scan`；⑤ 保持 Flask 架构（禁 FastAPI / PostgreSQL / Redis-Celery / React）；⑥ **若某一步需要改变核心数据模型或执行架构，先停下来说明具体影响再继续**。**验收点：「权限边界移动了」，而不只是「函数调用换了」。** | 用户弹窗选择 2（授权） |
+| **Diff 属性别名** | ✅ **选择 1**：集中成 `ATTRIBUTE_ALIASES = {"server": "webserver", "webserver": "webserver", "technology": "technologies", "tech": "technologies"}` 这样的表，Diff 统一比较 canonical key，**禁止**写成散落的 `if key == "server": if key == "webserver": ...`。 | 用户弹窗选择 1 |
+| **§25 与 P1 验收口径冲突** | ✅ **选择 1**：拆成「### P1 当前阶段验收」与「### P1 后续生产迁移门槛（当前延期，不属于本阶段验收）」，后者带 `[DEFERRED]` 标记；**并顺手把文档表述修掉**。 | 用户弹窗选择 1 |
+| **未跟踪文件** | ✅ **维持现状，三者都不入库**：`.dsh/skills/geteverythingskill/`、`GetEverything_长期产品化总方案_Flask版.md`、`GetEverything_DSH执行方案_Flask版.md`。 | 用户弹窗多选结果 |
+| **推送** | ⏸ **先做 push 前安全审计，再 push**（选 2）—— 与 3.1 的「不 push」不同：本轮允许推送，但必须先产出安全审计结论。 | 用户弹窗选择 2 |
 
 ### 3.1 用户本轮（2026-10-02，弹窗确认）已授权的项
 
@@ -76,7 +90,7 @@
 | **缺失字典的错误码** | ✅ 用户选定：**新增 `config_error`**（而非复用 `tool_not_found`）。 | 用户弹窗选项二 |
 | **推送** | ❌ **不 push**：本轮结束时本地提交即可，等用户回来确认。 | 用户弹窗选项「不 push（推荐）」 |
 | **未跟踪文件** | ✅ 仅 `docs/DECISIONS.md` 纳入 Git；`.dsh/skills/geteverythingskill/` 与两份 `GetEverything_*_Flask版.md` 方案文档**继续不跟踪**。 | 用户弹窗多选结果 |
-| **P0-6** | ❌ **本轮未授权**（用户未勾选），继续留在第 3 节。 | 同上 |
+| **P0-6** | ⏳ 本轮（3.1 时点）未勾选 → **已在 3.2 授权**，见下节。 | 同上 |
 
 > **本轮已完成（P0-7a / P0-7b，按上表 3.1 口径）**：
 > `core/db.py` 对 `jobs` 表**纯增量补列** `idempotency_key` / `next_attempt_at`

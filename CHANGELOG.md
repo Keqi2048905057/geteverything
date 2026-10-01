@@ -628,12 +628,109 @@ Mock 模式 / Real 模式 / API / 测试 / 故障排查」，并**建议**增加
 `details`，
 另加「校验清单与 `SUPPORTED_FORMATS` 同源」「缺省仍是 csv」「大小写不敏感」三组。
 
+### 修复 — Diff 属性别名归一（真实缺陷）
+
+**症状**：方案第 10 节点名要求 Diff 的 `changed` 至少能指出 `status_code` / `title` /
+`server` / `technology` / URL，但在**真实 httpx 链路上只有三项能报出变化**。
+
+**根因**（已实测复现，不是读码推测）：`core/assets.py:DIFFABLE_ATTRIBUTES` 写的是
+`server` / `technology`，而 `modules/httpx.py:_read_json_results` 实际产出的键名是
+`webserver` / `tech`。用真实键名喂进 `_changed_attributes()` 返回 `{}` —— 属性白名单
+永远匹配不上，`webserver` 从 `nginx` 变成 `apache` 也不会被报成 changed。
+
+> 这个缺陷此前被测试掩盖：`tests/unit/test_assets.py` 的用例用的是**文档体例**的键名
+> （`server` / `technology`），而不是 httpx 的真实键名，于是测试全绿而线上失效。
+
+**修法**（用户选定：集中成表，禁止散落 `if`）：
+
+- `core/assets.py` 新增模块级 `ATTRIBUTE_ALIASES`，把两侧写法映射到 canonical key：
+  `server` / `webserver` / `web_server` → `webserver`；
+  `technology` / `technologies` / `tech` → `technologies`；
+  身份映射 `status_code` / `title` / `url`。
+- `DIFFABLE_ATTRIBUTES` 改为 canonical key：`("status_code", "title", "webserver", "technologies", "url")`。
+- 新增 `_canonical_attributes(data)`（键名小写 → 过别名表 → 每个 canonical 名只留第一个非空值），
+  `_changed_attributes(before, after)` 先对**两侧**都做归一化再比较。
+- **不变量**：`set(ATTRIBUTE_ALIASES.values()) == set(DIFFABLE_ATTRIBUTES)`，且每个
+  canonical key 映射到自身 —— 这条写成用例，防止以后只改一边。
+
+- `web/static/assets.js` 新增 `ATTRIBUTE_LABELS`，把 canonical key 渲染成中文标签
+  （`webserver` → `Web Server`、`technologies` → `技术栈`），避免页面直接露英文键名。
+
+回归测试（+9，838 → 847）：别名表与 `DIFFABLE_ATTRIBUTES` 同源且自映射、
+按 httpx 真实键名做的参数化归一（3 例）、别名值相同时不报变化（3 例）、
+白名单外属性不受别名表影响。全部既有断言改用 canonical key。
+
+### P0-6（阶段一）— Application Service 入口收拢
+
+用户本轮已授权 P0-6（见 `docs/DECISIONS.md` §3.2），并要求「先梳理现有调用拓扑，
+再分阶段改造，不要一次性大范围重构」。本轮只做**阶段一：把编排收到一处**，
+**不动数据模型、不动执行架构**；Agent 那条路留到阶段二。
+
+**改前的实际拓扑**（读码确认，不是推测）：
+
+```text
+POST /api/jobs → api/jobs.py:create_job
+   解析目标 → 校验工具 → 限流 → Policy 判定 → 模式解析 → 落库 → 审计 → 结构化日志
+   （以上全部**内联在视图函数里**）
+
+首页表单 POST / → app.py:index
+   from api.jobs import _resolve_targets   ← 反向导入 api 层的私有函数
+   + 把 Policy 判定抄了第二遍
+
+Agent → agent/action.py
+   tool_runner.run_tools(...) / HttpxRunner.run_scan(...)   ← 完全绕过 Job 链
+```
+
+同一套判定两份实现，改一处漏一处；而 Agent 那条路上，同一次「子域名收集」在主链上
+是可审计、可取消、可重试、可复检 Scope 的 Job，在 Agent 链上却只是一次同步函数调用。
+
+**新增 `core/application.py`（Application Service 层）**：
+
+- `create_scan_job(...)` —— 创建扫描任务的**唯一**编排入口。校验顺序与历史逐条一致
+  （刻意不重排，避免响应文案与错误码漂移）：目标非空 → 工具非空 → 幂等键合法 →
+  工具受支持 → 目标数上限 → Scope/Policy → 模式开关 → mock 场景名 → 落库 →
+  审计 + 结构化日志。
+- `resolve_targets(...)` / `split_str_list(...)` —— 目标来源解析（显式列表 + 受控
+  `upload_id`），从 api 层私有函数升为公开接口。
+- `JobSubmission` —— 返回 job / scope / 实际入库的 tools 与 targets；`to_dict()`
+  给出与 `POST /api/jobs` **完全一致**的响应体。
+
+**边界刻意收窄**（这是本轮的关键设计决定）：
+
+- **不碰 Flask**：认证、请求解析、HTTP 状态码仍由 `api/` 与 `app.py` 负责；
+  服务层只接收已解析好的标量/列表，返回结构化结果或抛 `core.errors` 的业务异常。
+- **不自实现 Scope 判定**：一律转交 `core.policy.validate_job_targets`。
+- **不改数据结构**：只调用 `core.jobs` 已有的写入函数。
+
+**调用方迁移**：`api/jobs.py:create_job` 缩成「认证 + 解析 JSON + 拼响应」；
+`app.py:index()` 的扫描分支改调同一个入口，反向导入 api 层私有函数的写法消失。
+
+回归测试（+27，847 → 874）：`tests/unit/test_application_service.py` —— 除了逐条覆盖
+历史口径（参数缺失 / 未知工具 / 越界 / 超限 / 非法幂等键 / 非法 scenario / real 双开关 /
+幂等 `reused` / 上传目标同样过 Scope），更关键的是三条**源码守卫**：
+
+- `api/jobs.py` 里不得再出现 `validate_job_targets` / `create_job_with_status` /
+  `normalize_idempotency_key` / `resolve_mode` / `audit.record(job_created)`
+  —— 防止有人把编排抄回视图函数，让「统一入口」悄悄失效；
+- `app.py` 里不得再出现 `from api.jobs import _resolve_targets`；
+- `core/application.py` 里不得出现 `allowed_domains` / `allowed_cidrs` / `fnmatch`
+  —— 服务层不得自己比较白名单。
+
+外加两条等价性断言：HTTP 与直调服务层的落库结果逐字段一致、响应体字段集合相等。
+
+> **阶段二未做（需先说明影响）**：`agent/action.py` 仍在直接调 `run_tools` /
+> `HttpxRunner.run_scan`。把它接到 Job 链会让 **Agent 执行异步化** —— 回复里给
+> `job_id` 而不是内联结果，`tests/unit/test_agent_boundary.py`（现在 monkeypatch
+> `agent.action.run_tools` / `agent.action.HttpxRunner`）需同步重写。按用户约束
+> 「若某一步需要改变核心数据模型或执行架构，先停下来说明具体影响再继续」，
+> 阶段二开工前会先出影响说明。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 838 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 60 source files
+$ python -m pytest           # 874 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 61 source files
 ```
 
 ### 已知仍未处理（不属 M0～M4 范围）
@@ -648,7 +745,10 @@ $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues 
   而不是静默零结果。要真跑目录爆破需自行下载字典或用 `FEROXBUSTER_WORDLIST` 指向本机字典。
 - `jobs` 表已有 `idempotency_key` / `next_attempt_at`（P0-7 落地，见上）；
   但**没有清理策略**：幂等键会随任务长期留在库里，暂不做过期回收。
-- Agent 尚未改走 Job Service（P0-6 未完成部分）。
+- **P0-6 阶段一已完成**（任务创建编排收拢到 `core/application.py`，见上）；
+  **阶段二未做**：`agent/action.py` 仍直接调 `tool_runner.run_tools` /
+  `HttpxRunner.run_scan`，未走 Job Service —— 接上会让 Agent 执行异步化
+  （回复改给 `job_id`），需先出影响说明（见上节与 `docs/DECISIONS.md` §3.2）。
 - **P1 遗留**：旧的 `/api/run` 同步扫描链路**不产生** `assets` 观测（只有 Job 链会），
   两套模型尚未合流（方案第 11 节，改的是调用链，属架构级改动，已登记 `docs/DECISIONS.md` §3）；
   旧库历史数据已有迁移脚本但**未执行真实迁移**（DECISIONS-F：等用户手动 `--apply`；

@@ -221,6 +221,9 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 * `mode=real` 未开环境开关时实测：**403** `{"error_code":"scope_violation",
   "details":{"env":"GEF_ALLOW_REAL_SCAN"}}`。
 * `mode=real` 且 Scope `active_scan=false` → 同样 403 `scope_violation`（第二道开关）。
+* **编排位置**：以上全部校验与落库都在 `core/application.py:create_scan_job()` 里完成
+  （P0-6 阶段一）。视图函数 `api/jobs.py:create_job` 只做「认证 + 解析 JSON + 拼响应」，
+  首页表单走的是同一个入口。因此错误文案与判定顺序对两个入口**天然一致**。
 
 `GET /api/jobs` 的 `status` 合法值 = `core/jobs.py:ALL_STATUSES`：
 `queued / running / succeeded / partial / failed / timeout / cancelled / interrupted`。
@@ -230,7 +233,10 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 
 `GET /api/jobs/<a>/diff/<b>` 的 `changed` 条目形如
 `{"asset_id":"asset_xxx","changes":{"status_code":{"from":200,"to":403}}}`；只比较
-`status_code / title / server / technology / url` 这些属性，时间戳这类易变字段被刻意排除。
+`status_code / title / webserver / technologies / url` 这几个 **canonical key**
+（`core/assets.py:ATTRIBUTE_ALIASES` 会把 `server` / `web_server` 归一到 `webserver`，
+把 `technology` / `tech` 归一到 `technologies` —— 因为 `modules/httpx.py` 实际产出的就是
+后者），时间戳这类易变字段被刻意排除。
 
 ### 6.5 原始证据（1 条，需认证）
 

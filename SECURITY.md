@@ -49,8 +49,11 @@
 | 已知项（`docs/DECISIONS.md` D） | `/api/tools`、`/api/databases`、`/api/results`、`/api/tool/<n>/results`、`/api/export`、`/api/export/<id>/download`、`/api/exports` 共 **7 个**仍可**匿名读取**。这是**有意保持的现状**（不破坏本机脚本兼容性），已在 `tests/integration/test_api_auth_contract.py` 与 `test_export_contract.py` 用测试锁定该契约；后续若要收口鉴权需用户明确授权 |
 | 待修复 | `storage.py` 旧结果库**仍无 WAL**（已加连接级 `busy_timeout=5000`，但 WAL 需重建库文件，属迁移范畴，未在无人值守期间执行） |
 | 待修复 | `scripts/*.exe` 等工具二进制不进仓库，需自行按 `README.md` 准备，缺失时报 `tool_not_found` |
-| 待评估（P0-6） | Agent 层已禁止任意 `file_path`（只能引用受控 `upload_id`），但**仍直接调用 `run_tools` / runner，未改走 Job Service**——即 Agent 提议与执行尚未彻底分离，需先授权再动 |
-| 待评估 | `GET /api/export?format=<非 csv/json>` 目前返回 **500 `unknown_error`**（`api/results.py` 未捕获 `exporter.export_results` 抛出的 `ValueError`），更合理的是 400 `bad_request` |
+| 已缓解（P0-6 阶段一） | 创建扫描任务的编排已收拢到**唯一入口** `core/application.py:create_scan_job()`（`POST /api/jobs` 与首页表单共用），视图函数不再内联 Policy/落库/审计，也不再有第二份 Scope 判定；三条源码守卫（`tests/unit/test_application_service.py`）阻止其退化 |
+| 未完成（P0-6 阶段二，用户已授权） | Agent 层已禁止任意 `file_path`（只能引用受控 `upload_id`），但**仍直接调用 `run_tools` / runner，未改走 Job Service**——即 Agent 提议与执行尚未彻底分离。授权见 `docs/DECISIONS.md` §3.2；开工前需先确认「Agent 执行异步化」的影响（详见 `docs/CODEBASE_MAP.md` §9.19.5） |
+
+> 已修复（曾登记在本表）：`GET /api/export?format=<非 csv/json>` 原返回 **500 `unknown_error`**，
+> 现为 **400 `bad_request`** + `details.supported`（校验清单与 `exporter.SUPPORTED_FORMATS` 同源）。
 
 ## 使用约定
 

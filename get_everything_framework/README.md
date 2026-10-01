@@ -169,7 +169,7 @@ curl http://127.0.0.1:5000/health
 ### 测试与验收
 
 ```bash
-python -m pytest                                       # 828 passed, 2 skipped
+python -m pytest                                       # 874 passed, 2 skipped
 python -m ruff check .                                 # All checks passed!
 python -m mypy app.py core api jobs storage.py modules  # Success: no issues found
 ```
