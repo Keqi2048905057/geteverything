@@ -419,8 +419,8 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-8d0afd07ad0ae9e356f41cf5f9de879bb76dbf6a   ← 最近一次代码提交（P1 §19 Observability）
-8d0afd0  feat: P1 §19 Observability——结构化日志 + 四个关联 ID（request/job/step/worker）(2026-10-02)
+98ea46f   ← 最近一次代码提交（§14 文档三件套 + 导出格式 500→400）
+98ea46f  fix: GET /api/export?format=xlsx 500→400 + P1 §14 文档三件套与文档脱节修正 (2026-10-02)
 ```
 
 自检：
@@ -432,10 +432,12 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
 
 与 `origin/main` **不同步**：本地领先（`git status -sb` 会显示 `[ahead N]`，N 含本文件自身的提交，
 所以这里不写死数字）。M0～M4 之后的全部里程碑提交都还在本地 —— 夜间无人值守期间
-**不做 `git push`**，等你确认后再推。下表是**除本文件提交之外**的全部 16 个提交：
+**不做 `git push`**，等你确认后再推。下表是**除本文件提交之外**的全部 18 个提交：
 
 | 提交 | 说明 |
 |---|---|
+| `98ea46f` | fix: GET /api/export?format=xlsx 500→400 + P1 §14 文档三件套与文档脱节修正 |
+| `5f27e6d` | test: §19 端到端验收——一个 job_id 串起整条执行链 + 反向守卫 |
 | `8d0afd0` | feat: P1 §19 Observability——结构化日志 + 四个关联 ID（request/job/step/worker） |
 | `70f3c30` | docs: 同步 M7 本地全链路 E2E（状态板 + CHANGELOG + README） |
 | `50d04cc` | feat: M7 本地 fixture HTTP 全链路 E2E（方案第 18 节）+ 修证据读取被预览规则截断 |
