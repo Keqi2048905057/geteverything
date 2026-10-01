@@ -46,7 +46,7 @@
 
 | 状态 | 问题 |
 |---|---|
-| 已知项（`docs/DECISIONS.md` D） | `/api/tools`、`/api/databases`、`/api/results`、`/api/tool/<n>/results`、`/api/export`、`/api/export/<id>/download`、`/api/exports` 共 **7 个**仍可**匿名读取**。这是**有意保持的现状**（不破坏本机脚本兼容性），已在 `tests/integration/test_api_auth_contract.py` 与 `test_export_contract.py` 用测试锁定该契约；后续若要收口鉴权需用户明确授权 |
+| 已知项（`docs/DECISIONS.md` D） | `/api/tools`、`/api/databases`、`/api/results`、`/api/tool/<n>/results`、`/api/export`、`/api/export/<id>/download`、`/api/exports` 共 **7 个**仍可**匿名读取**。这是**有意保持的现状**（不破坏本机脚本兼容性），已在 `tests/integration/test_api_auth_contract.py` 与 `test_export_contract.py` 用测试锁定该契约；后续若要收口鉴权需用户明确授权。<br>**口径提醒**：`test_api_auth_contract.py` 的 `ANONYMOUS_READABLE` 目前只列了其中 **5 条**，`/api/tool/<n>/results` 与 `/api/export/<id>/download` 只有间接覆盖 —— 见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §3.1 |
 | 待修复 | `storage.py` 旧结果库**仍无 WAL**（已加连接级 `busy_timeout=5000`，但 WAL 需重建库文件，属迁移范畴，未在无人值守期间执行） |
 | 待修复 | `scripts/*.exe` 等工具二进制不进仓库，需自行按 `README.md` 准备，缺失时报 `tool_not_found` |
 | 已缓解（P0-6 阶段一） | 创建扫描任务的编排已收拢到**唯一入口** `core/application.py:create_scan_job()`（`POST /api/jobs` 与首页表单共用），视图函数不再内联 Policy/落库/审计，也不再有第二份 Scope 判定；三条源码守卫（`tests/unit/test_application_service.py`）阻止其退化 |

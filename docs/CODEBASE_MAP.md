@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md`（2026-10-01）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -806,13 +806,13 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 900 passed, 2 skipped, 0 failures
+$ python -m pytest           # 901 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 63 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 $ python scripts/check_env.py      # 退出码 0/1/2；只读，不建库、不执行任何扫描（见 §9.20）
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → **M6 环境自检脚本 `900`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检脚本 `900` → **M7 测试报告 + 测试运行期目录隔离修复 `901`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -2024,4 +2024,106 @@ CI runner 上本来就没有 `.env`、也没有那 17 个 Go 工具，warn（退
 
 > **本轮的 mypy 范围变化**：`mypy ... modules scripts`（61 → **63** source files）。
 > `scripts/` 里的三个 `.py` 原先完全不在类型检查范围内。
+
+---
+
+### 9.21 M7 测试报告 `docs/TEST_REPORT.md`（本轮）：三条实测事实 + 一个被它抓出来的缺陷
+
+本轮报告本身零业务代码改动，但**为了修它实测出来的测试隔离缺陷**动了四个测试/配置文件
+（`tests/conftest.py`、`tests/unit/test_agent_boundary.py`、`tests/unit/test_jobs_executor.py`、
+`tests/unit/test_repo_layout.py`）与 `config.py` 的一行出口。报告用三个一次性探针把
+「哪些代码真的被测过」从印象变成了数字，这三条都有定位价值，记录在此（复现方式在报告里）。
+
+#### 9.21.1 路由覆盖：41 条方法绑定，40 条被真实走到
+
+做法：包装 `flask.Flask.full_dispatch_request` 跑一遍全量测试，收集实际命中的
+`method + rule`，再与 `app.url_map` 求差。
+
+```text
+声明的方法绑定: 41
+测试命中的:     40
+
+== 没有被任何用例走到的方法绑定 ==
+    GET /api/tool/<tool_name>/results
+```
+
+这是**唯一**一条没有任何用例走到的路由。它是 `api/results.py` 的旧库查询接口
+（匿名可读），读 `results/scan_results.db`；测试从设计上不碰仓库旧库，
+且本机该库 **20 张表全为 0 行**，所以测了也只是空结果。
+另有一条「命中但不是声明路由」的记录 `GET /api/export/exp_x/../../etc/download`
+—— 那是穿越防护用例**故意打的 404 路径**，属预期。
+
+> **顺带发现的文档不一致**：`SECURITY.md` 与 `README.md` 都写「7 个匿名只读接口」，
+> 但 `tests/integration/test_api_auth_contract.py` 的 `ANONYMOUS_READABLE` **只列了 5 条**
+> （缺 `/api/tool/<n>/results` 与 `/api/export/<id>/download`）。也就是说这个「7」
+> 目前只有 5 条被参数化用例直接钉住，另外 2 条靠 `test_export_contract.py` 的
+> 匿名导出用例与代码审阅间接覆盖。**数字与测试清单不一致，但两边都没错** ——
+> 改法见 `docs/TEST_REPORT.md` §3.1。
+
+#### 9.21.2 有 10 个业务模块，测试源码从未提及
+
+做法：遍历 91 个业务 `.py`（排除 `tests/` 与缓存目录），检查其模块名是否出现在
+`tests/**/*.py` 的源码里。结果 **10 个从未被提及，全部在 `agent/`**：
+
+```text
+agent/model_result.py            agent/providers/{deepseek,ollama,openai_compat,qwen}.py
+agent/plan_state.py              agent/skills/osint_recon.py
+agent/strategy_templates.py      agent/system_prompt.py
+agent/target_ranker.py
+```
+
+这条与 §7.6「Agent 运行时不调用大模型」是同一件事的两面：
+`agent/client.py` 与 `agent/providers/*` **没有调用方**，规划由
+`agent/intent.py` 的正则 + `agent/planner.py` 的模板决定。**没有调用方就没有可测的
+运行时行为** —— 给这套未接线的 provider 写单测，测的是「这段死代码本身能不能跑」，
+会得到一张好看但误导的覆盖图。真接线时应与接线同一轮补测试。
+
+#### 9.21.3 测试静态检查的三条命令都覆盖了什么（口径提醒）
+
+| 命令 | 覆盖 | **不覆盖** |
+|---|---|---|
+| `ruff check .` | 全部 `.py`（含 `tests/`、`scripts/`） | 规则集保守（`E4/E7/E9/F`），不管风格与复杂度 |
+| `mypy ... modules scripts` | 63 个业务源文件 | `tests/` 与 `agent/providers/*`（后者见 §9.13 末） |
+| `node --check` | `web/static/*.js` 的**语法** | 任何运行时行为，没有浏览器执行过 |
+
+`coverage` / `pytest-cov` **不在依赖清单里**，本轮也没有为了出覆盖率图而引入它们
+（属依赖变更）。报告里的「覆盖」一律是**粗口径代理**（路由命中、模块提及），
+路由命中不代表分支覆盖，模块被提及不代表逻辑被断言。
+
+> 报告里另有一节专门证明 `901 passed` 不等于可信：Diff 属性别名那个缺陷
+> （§9.12 末 / 第 6 节第 28 条）在 847 条全绿的用例下藏了很久，
+> 因为既有用例写的是**文档体例**键名 `server`/`technology`，而 httpx 实际产出
+> `webserver`/`tech`。**用例写的是真实输入还是文档体例，比用例数量更重要。**
+> 同一节还记下第三个缺陷：**测试自己往仓库运行期目录里写**（`exports/` 每次 +1 个空 CSV、
+> `results/local.db` 每次 +3 行、`worker_heartbeat` 被真实 Worker 刷新），详见 §9.21.4。
+
+#### 9.21.4 「测试从不污染仓库」原先只是一条约定，不是一个断言
+
+写报告时逐文件跑测试、对运行期目录做 SHA-256 快照比对，抓出三处稳定泄漏：
+
+| 泄漏 | 成因 | 单跑一次的后果 |
+|---|---|---|
+| `exports/` 多一个空 CSV | `test_agent_boundary.py` 的 fixture 只 patch `UPLOAD_DIR`；`_tool_export_results` 走 `exporter` 的**模块级** `EXPORT_DIR` | 文件数 +1 |
+| `results/local.db` 多 3 行 | `test_security_baseline.py` 的两个上传用例直接调 `core_uploads.save_upload()`，它内部 `db.ensure_schema()` + `db.transaction()` 用的是仓库库路径 | `audit_events` / `uploads` 各 +3 |
+| `results/worker_heartbeat` 被刷新 | 三个文件起真实 `Worker`；`jobs/worker.py` 从 `config` 导入的 `OUTPUT_DIR` 是自己的副本，patch `core.health` 无效 | mtime 被改写 |
+
+**根因是保障挂错了位置**：原先只有 `tests/conftest.py:app_module` 一个夹具在 patch，
+而**绕过它的用例（只用 `local_db` 或不用任何夹具）根本不受约束**。
+
+修法（三件一起才成立）：
+
+1. 新增 autouse 夹具 `tests/conftest.py:_isolate_runtime_dirs`：`config.LOCAL_DB_CONFIG["path"]`
+   + `core_db.reset_schema_cache()`，外加 `exporter.EXPORT_DIR`、`core_uploads.UPLOAD_DIR`、
+   `core_health.OUTPUT_DIR`、`jobs.worker.OUTPUT_DIR`、`core_artifacts.ARTIFACT_DIR` 五处模块属性。
+   **autouse 是关键** —— 不再依赖用例「记得」要哪个夹具。
+2. 子进程读不到父进程的 monkeypatch，所以给 `config.OUTPUT_DIR` 加了 `GEF_OUTPUT_DIR`
+   环境变量出口（与既有的 `GEF_SCAN_DB_PATH` / `LOCAL_DB_PATH` 同规格），
+   `test_jobs_executor.py` 的 kill/restart 用例把它传给子进程。
+3. 新增回归锁 `test_repo_layout.py::test_autouse_fixture_redirects_every_runtime_path`：
+   逐条断言这些路径都不在仓库目录下。**夹具被删或漏项时立刻变红**，
+   而不是等下次提交才发现工作区脏了。
+
+**仍然成立的脆弱点**：`modules/base.py` / `modules/httpx.py` / `modules/dnsx.py` 的
+`OUTPUT_DIR` 也是导入期绑定，autouse 夹具只覆盖 `jobs.worker` 这一处；
+起真实子进程的用例必须**父进程 patch + 子进程传 `GEF_OUTPUT_DIR`** 两件都做。
 

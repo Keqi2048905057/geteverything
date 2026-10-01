@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · 已推送 origin/main · M5/M7 剩余项待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 已推送 origin/main · M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → P0-6 阶段二 + M5/M7 剩余 ⬜**
-- 更新日期：2026-10-02（M6 环境自检脚本 + push 前安全审计与推送）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ P0-6 阶段二 + M5 剩余 ⬜**
+- 更新日期：2026-10-01（M7 测试报告；同轮 M6 环境自检脚本 + push 前安全审计与推送按 `2026-10-02` 记）
 
 ---
 
@@ -282,6 +282,38 @@
 - 测试：`tests/unit/test_check_env.py` +26 → **900 passed / 2 skipped**；
   `_PRINT_ALLOWLIST` 登记 `("scripts/check_env.py", "main")`（人读报告本就该走 stdout）
 
+**M7 测试报告（本轮，M7 最后一项交付物）**
+- 新增 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)，按方案第 23 节的里程碑格式写
+  （里程碑 / 分支 / 提交 / 改动文件 / 关键改动 / 新增测试 / 执行命令 / 测试结果 /
+  已知问题 / 未完成项 / 下一阶段），并**明确分开**「已验证」与「仅代码审查、尚未实测」
+- **本轮报告之外，为修一个实测抓出来的测试隔离缺陷动了 5 个文件**（详见下一条），
+  并新增 1 条回归锁用例 → **901 passed / 2 skipped**
+- 三条**实测得出**、之前只是「感觉没测」的结论（都带复现方式）：
+  ① **41 条方法绑定里 40 条被真实命中** —— 用一次性探针包装 `Flask.full_dispatch_request`
+  跑全量得到；唯一没被走到的是 `GET /api/tool/<tool_name>/results`（读旧库，本机 20 张表全 0 行）；
+  ② **91 个业务 `.py` 里 10 个测试源码从未提及**，全部在 `agent/`（推论：Agent 路径不调大模型，
+  这 10 个模块没有调用方，不存在可测的运行时行为）；
+  ③ **`ANONYMOUS_READABLE` 只列了 5 条，而 `SECURITY.md` 说 7 条** ——
+  `/api/tool/<n>/results` 与 `/api/export/<id>/download` 目前只有间接覆盖，登记为缺口与建议
+- 「已验证 / 仅代码审查」的分界按方案第 23 节硬要求写成独立小节：Linux 侧行为（CI 只在 push 后跑）、
+  真实外部扫描（按硬约束从未执行）、前端 JS 运行时（只有 `node --check` 与服务端字符串断言）
+  全部归入「仅代码审查、尚未实测」
+- 顺手修正 `README.md` 里 `warn 5` 的过期数字（实测 `{'ok': 14, 'warn': 4, 'fail': 0}`，
+  四条 warn 依次是 `.env 文件` / `SECRET_KEY` / `LOCAL_ADMIN_TOKEN` / `worker 心跳`）
+- **写报告时抓出并修掉第三个真实缺陷：测试自己往仓库运行期目录里写。**
+  逐文件跑测试 + 对 `results/` / `exports/` 做 SHA-256 快照比对，实测三处稳定泄漏：
+  ① `test_agent_boundary.py` 每跑一次给 `exports/` 多一个空 CSV（fixture 只 patch 了
+  `UPLOAD_DIR`，而 `_tool_export_results` 走 `exporter` 的模块级 `EXPORT_DIR`）；
+  ② `test_security_baseline.py` 的两个上传用例直接调 `core_uploads.save_upload()`，
+  写的是**仓库** `results/local.db`（实测单跑 `audit_events`/`uploads` 各 +3 行）；
+  ③ 三个起真实 `Worker` 的文件刷新仓库 `results/worker_heartbeat`。
+  **根因是保障挂错了位置**：原先只有 `app_module` 一个夹具在 patch，
+  绕过它的用例根本不受约束。修法三件：新增 autouse 夹具
+  `tests/conftest.py:_isolate_runtime_dirs`（库路径 + 五处模块级目录）、
+  给 `config.OUTPUT_DIR` 加 `GEF_OUTPUT_DIR` 环境变量出口让**子进程**也能改道、
+  新增回归锁 `test_repo_layout.py::test_autouse_fixture_redirects_every_runtime_path`。
+  验证方式是全量跑完后 `results/`(5) / `exports/`(81) / `uploads/`(3) 逐文件哈希完全不变
+
 ---
 
 ## 部分完成
@@ -325,13 +357,14 @@
 - [x] 本机启动文档（`docs/DEPLOYMENT.md` + README 的「环境要求」「启动 Worker」两节）
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（900 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（901 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [x] SQLite 并发测试（`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
 - [x] **本地 fixture HTTP 测试**（`tests/fixtures/local_http_server.py` + `tests/integration/test_m7_local_e2e.py`，
   真实 httpx 打 `127.0.0.1`，一条用例走完方案第 18 节全链路；无 httpx 可执行文件时自动 skip）
 - [x] **mypy 通过**（34 errors → 0，未改 mypy 配置）
-- [ ] 一份测试报告
+- [x] **一份测试报告**（[`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)：方案第 23 节里程碑格式 +
+  测了什么 / 没测什么 / 为什么没测 + 「已验证」与「仅代码审查、尚未实测」分界）
 
 **P1 §19 — Observability**（方案第 25 节 P1 验收 `[ ] Observability 完成基础版本`、第 26 节顺序第 16 条）
 - [x] `core/observability.py`：结构化单行 JSON 事件（唯一日志出口，无新依赖）
@@ -457,11 +490,11 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（M6 环境自检脚本 + push 前安全审计与推送）
+验证时间：2026-10-01（M7 测试报告；同轮的 M6 环境自检按 2026-10-02 记）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 900 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+pytest: 901 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
 mypy:   Success: no issues found in 63 source files        ← 本轮把 scripts/ 纳入范围（61 → 63）
 python scripts/check_env.py: 退出码 1（fail 0；warn 均为「本机确实没配 .env / worker 没在跑」）
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
@@ -470,7 +503,7 @@ git diff --check: 退出码 0
         stderr 输出结构化 JSON 事件（含 request_id / path / status / duration_ms）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → **M6 环境自检 `900`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → **M7 测试报告 + 测试运行期目录隔离修复 `901`**
 
 ---
 
@@ -540,8 +573,10 @@ git status -sb                  # ## main...origin/main = 与远端同步（本�
    观测 `data_json` 按字段拆列、旧库真实迁移（等你手动 `--apply`）。
 5. **M6 已完成**（含 `scripts/check_env.py`，见「已完成」专段）。若还想加固，
    下一格是「导出记录的清理策略」——`exports/` 与 `exports` 表都只增不减。
-6. **M7 只剩「一份测试报告」**：现有 `900` 项用例已可由 pytest 直接产出，
-   报告要写的是「测了什么、没测什么、为什么」。
+6. **M7 已全部完成**（含 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)）：报告写清了
+   「测了什么、没测什么、为什么」，并给出三处可复现的缺口证据。
+   若想补，报告 §3.1 列了两条最便宜的建议（把匿名清单从 5 条补到 7 条、
+   给 `/api/tool/<n>/results` 加一条灌数据的集成用例）。
 7. **顺手可做（不需要决策）**：
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
    - 把 §19 的日志能力继续往前推一小步（文件输出 + 轮转是最自然的下一格）。
@@ -555,17 +590,29 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                  # 期望 All checks passed!
-python -m pytest                                        # 期望 900 passed, 2 skipped
+python -m pytest                                        # 期望 901 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules scripts  # 期望 Success: no issues found in 63 source files
 python scripts/check_env.py                             # 期望退出码 0/1（未配 .env 时为 1），fail 项为 0
 ```
 
-**运行期产物隔离（重要）**：测试**从不**写仓库的 `results/`。`tests/conftest.py` 会 patch
-`storage.SQLITE_CONFIG["path"]`、`config.LOCAL_DB_CONFIG["path"]`、`core.uploads.UPLOAD_DIR`、
-`core.health.OUTPUT_DIR`。**任何一处漏 patch 都会让测试污染仓库 `results/`。**
-另外 `modules/base.py`、`modules/httpx.py`、`jobs/worker.py` 的 `OUTPUT_DIR` 是**导入期**绑定的
-模块级字符串，conftest 管不到 —— `tests/integration/test_m7_local_e2e.py` 里额外 patch 了三处
-（因为那条用例会起**真实 httpx 子进程**，输出与心跳都会落到 `OUTPUT_DIR`）。
+**运行期产物隔离（重要）**：测试**从不**写仓库的 `results/`、`exports/` 与
+`results/local.db`。**保障有两层，缺一不可**：
+
+1. `tests/conftest.py:_isolate_runtime_dirs`（**autouse**）—— 不依赖用例「记得」要哪个夹具：
+   `config.LOCAL_DB_CONFIG["path"]` + `core_db.reset_schema_cache()`，
+   外加 `exporter.EXPORT_DIR`、`core_uploads.UPLOAD_DIR`、`core_health.OUTPUT_DIR`、
+   `jobs.worker.OUTPUT_DIR`、`core_artifacts.ARTIFACT_DIR` 五处模块级属性。
+   `app_module` 夹具另有一套同类 patch，两者叠加安全（`monkeypatch` 按调用顺序回退）。
+2. **起真实子进程的用例必须两件都做**：父进程 patch + 给子进程传 `GEF_OUTPUT_DIR`
+   （`config.OUTPUT_DIR` 唯一的**环境变量出入口**，与 `GEF_SCAN_DB_PATH` / `LOCAL_DB_PATH` 同规格）。
+   子进程读不到父进程的 monkeypatch —— `test_jobs_executor.py` 的 kill/restart 用例就靠这个。
+
+`modules/base.py` / `modules/httpx.py` / `modules/dnsx.py` 的 `OUTPUT_DIR` 同样是**导入期**绑定，
+autouse 夹具只覆盖了 `jobs.worker` 这一处；`test_m7_local_e2e.py` 与 `test_runners_m4*.py` /
+`test_runner_interface.py` 各自额外 patch 这三个模块。
+**回归锁**：`tests/unit/test_repo_layout.py::test_autouse_fixture_redirects_every_runtime_path`
+逐条断言这些路径都不在仓库目录下 —— 夹具被删或漏项时立刻变红。
+修这段的由来与实测证据见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §4.1。
 
 ## 硬约束（不要违反）
 

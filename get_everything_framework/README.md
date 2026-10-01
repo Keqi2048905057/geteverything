@@ -174,7 +174,9 @@ python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
 `GEF_ALLOW_REAL_SCAN`）、17 个外部工具、两个 SQLite 库、worker 心跳与队列。
 
 **它是只读的**：不写文件、不建库、不发网络请求、不执行任何扫描工具，也不会输出任何密钥值。
-本机没配 `.env` 时典型结果是 `warn 5 / fail 0`、退出码 1 —— 那是如实反映现状，不是脚本坏了。
+本机没配 `.env` 时典型结果是 `warn 4 / fail 0`、退出码 1（四条警告依次是
+`.env 文件`、`SECRET_KEY`、`LOCAL_ADMIN_TOKEN`、`worker 心跳`）—— 那是如实反映现状，
+不是脚本坏了。
 细节见 [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) §2.1。
 
 ### 结构化日志
@@ -185,7 +187,7 @@ python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
 ### 测试与验收
 
 ```bash
-python -m pytest                                          # 900 passed, 2 skipped
+python -m pytest                                          # 901 passed, 2 skipped
 python -m ruff check .                                    # All checks passed!
 python -m mypy app.py core api jobs storage.py modules scripts  # Success: no issues found in 63 source files
 python scripts/check_env.py                               # 环境自检（只读）
@@ -193,6 +195,9 @@ python scripts/check_env.py                               # 环境自检（只�
 
 测试**从不**触碰仓库的 `results/`：`tests/conftest.py` 会把两个数据库、上传目录、
 产物目录、导出目录全部指向临时目录。
+
+**测了什么、没测什么、为什么没测**（含「已验证」与「仅代码审查、尚未实测」的分界）
+见 [`docs/TEST_REPORT.md`](../docs/TEST_REPORT.md)。
 
 其中 `tests/integration/test_m7_local_e2e.py` 是方案第 18 节要求的**本地全链路 E2E**：
 它用**真实 httpx 子进程**打 `tests/fixtures/local_http_server.py`（只绑 `127.0.0.1`、
@@ -517,7 +522,7 @@ framework-main/
 │   └── run_local.ps1         # 本机联调版一键拉起 Web + worker
 │                             # （可选工具二进制请用安装脚本获取，不入库）
 │
-├── tests/                    # pytest（900 例）；conftest 把运行期目录全指向临时目录
+├── tests/                    # pytest（901 例）；conftest 把运行期目录全指向临时目录
 │   ├── unit/                 # 单元 + 真实子进程用例（runner 接口、并发、Diff、迁移…）
 │   ├── integration/          # API / 鉴权 / 导出契约 / 资产 API / 本地全链路 E2E
 │   │   └── test_m7_local_e2e.py   # 方案第 18 节：真实 httpx 打本地 fixture 走完全链路

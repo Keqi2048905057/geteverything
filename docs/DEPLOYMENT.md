@@ -318,13 +318,18 @@ curl -H "X-Local-Token: <Token>" http://127.0.0.1:5000/api/assets
 ```powershell
 cd <仓库根>\get_everything_framework
 python -m ruff check .                                          # 期望：All checks passed!
-python -m pytest                                                # 期望：900 passed, 2 skipped
+python -m pytest                                                # 期望：901 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules scripts   # 期望：Success: no issues found in 63 source files
 python scripts/check_env.py                                     # 环境自检（只读），退出码 0/1/2
 ```
 
-* 2 个 skip 是 `tests/integration/test_m7_local_e2e.py` 在**本机没有 httpx 可执行文件**时跳过，
-  属正常，不是失败。
+* 2 个 skip 都在 `tests/unit/test_runner_interface.py`：
+  `test_run_subprocess_detaches_child_process_group` 与
+  `test_kill_process_tree_never_kills_own_process_group` —— 这两条用 `setsid` / `killpg`
+  语义验证「杀进程树不会连调用方一起杀」，**只在 POSIX 上成立**，因此 Windows 上主动跳过、
+  Linux CI runner 上会真跑。属正常，不是失败。
+* `tests/integration/test_m7_local_e2e.py` 需要 PATH 上有 `httpx` 可执行文件，
+  **没有时会 skip 而不是失败**（本机实测有 httpx，该用例真的跑完了，约 5 秒）。
 * 测试会把两个数据库、`uploads/`、`artifacts/`、`exports/` 全部重定向到临时目录
   （`tests/conftest.py`），**不会污染你的 `results/`**。
 * 测试过程中会输出一个 `ResourceWarning` 与一条 `UnicodeDecodeError: 'gbk' codec ...`
@@ -332,6 +337,9 @@ python scripts/check_env.py                                     # 环境自检�
 * 冒烟子集：`-m "not slow"` 跳过需要真实子进程/等待租约过期的用例。
 * 想跑全量严格模式可加 `-W error::ResourceWarning`（`tests/unit/test_storage_connection.py`
   就是这么复现旧库连接泄漏的）。
+* **「测了什么、没测什么、为什么」的完整交代见 [`TEST_REPORT.md`](TEST_REPORT.md)**
+  —— 包括唯一一条没被任何用例走到的路由、10 个测试源码从未提及的 `agent/` 模块，
+  以及「已验证」与「仅代码审查、尚未实测」的分界。
 
 ---
 
@@ -491,7 +499,8 @@ python scripts\migrate_legacy_results.py --apply    # 真正写入
 > （README 的基线、健康检查入口、worker 启动方式、Q6、模板部署、安全文档位置）。
 > 保留原文是为了留下痕迹，**不代表这些坑现在还在** —— 逐条现状见行内标注。
 
-1. ~~**README 的测试基线是 `759 passed`**~~ ▶ **已修**：当时实际为 826，现为 **900 passed / 2 skipped**。
+1. ~~**README 的测试基线是 `759 passed`**~~ ▶ **已修**：当时实际为 826，现为 **901 passed / 2 skipped**。
+   同轮还修掉了 README 里过期的 `check_env.py` 警告数（`warn 5` → 实测 `warn 4 / fail 0`）。
 2. ~~**README 的健康检查写成 `curl /api/tools`**~~ ▶ **已修**：README 现写明正确入口是 `GET /health`。
 3. ~~**README 完全没提 worker 的启动方式**~~（全文无 `jobs.worker`）、没提 `LOCAL_ADMIN_TOKEN`、
    没提 `GEF_ALLOW_REAL_SCAN`、没提 `WEB_HOST`/`WEB_PORT`、没提 `local.db`——

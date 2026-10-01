@@ -790,19 +790,93 @@ python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 
 坏库与缺表分别报 fail、检查维度不可悄悄变少、warn/fail 必须带 hint、
 以及「探测过程不得启动子进程」。
 
+### M7（收尾）— 测试报告 `docs/TEST_REPORT.md`
+
+方案 M7 的最后一项交付物：一份**测试报告**。
+
+它按 DSH 执行方案第 23 节的里程碑格式组织（里程碑 / 分支 / 提交 / 改动文件 / 关键改动 /
+新增测试 / 执行命令 / 测试结果 / 已知问题 / 未完成项 / 下一阶段），并按同一节的硬要求
+把「**已验证**」与「**仅代码审查、尚未实测**」分成两个互不混淆的小节。
+
+**报告的价值在「没测什么」，且每条都带复现方式**（不是「感觉没测」）：
+
+- **41 条方法绑定里 40 条被真实命中**：用一次性探针包装
+  `flask.Flask.full_dispatch_request` 跑全量得到命中清单，再与 `app.url_map` 求差。
+  唯一没被走到的是 `GET /api/tool/<tool_name>/results`（读旧库，本机该库 20 张表全为 0 行，
+  测试从设计上不碰它）；另记一条「命中但不是声明路由」的
+  `GET /api/export/exp_x/../../etc/download`，那是穿越防护用例**故意打的 404**。
+- **91 个业务 `.py` 里 10 个测试源码从未提及**，全部在 `agent/`
+  （`providers/*`、`system_prompt`、`strategy_templates`、`target_ranker`、`plan_state`、
+  `model_result`、`skills/osint_recon`）。根源是既知事实：Agent 路径不调大模型，
+  这 10 个模块**没有调用方** —— 所以不是「懒得测」，而是没有可测的运行时行为；
+  真接线时测试应与接线同一轮写。
+- **`ANONYMOUS_READABLE` 只列了 5 条，而 `SECURITY.md` 说 7 条**：
+  `/api/tool/<n>/results` 与 `/api/export/<id>/download`（后者靠 `test_export_contract.py`
+  的匿名用例间接覆盖）目前没有被参数化用例直接钉住，登记为缺口并给出两条建议。
+- 其余缺口：无覆盖率数字（`coverage`/`pytest-cov` 不在依赖清单，未擅自引入）、
+  运维脚本（`run_local.ps1` / `install_*.ps1|sh`）无自动化测试、
+  前端 JS 只有 `node --check` 与服务端字符串断言、真实外部扫描按硬约束**从未执行**。
+
+**方案第 15 节测试矩阵逐项对照后无缺项**（API 6 项、安全 7 项、Worker 5 项、Runner 7 项、
+平台 Windows + Linux），代表用例逐条列出。
+
+**顺手修正**：`README.md` 里过期的 `warn 5` 改为实测的 `warn 4 / fail 0`，
+并点明四条 warn 依次是 `.env 文件` / `SECRET_KEY` / `LOCAL_ADMIN_TOKEN` / `worker 心跳`。
+
+### 修测试隔离：测试不再往仓库运行期目录里写
+
+**这是写上面那份报告时抓出来的第三个真实缺陷**，也是本轮唯一的行为改动
+（+1 用例：900 → 901）。逐文件跑测试、对运行期目录做逐文件 SHA-256 快照比对后，
+实测出三处**稳定复现**的泄漏：
+
+| 泄漏 | 成因 | 单跑一次的后果 |
+|---|---|---|
+| `exports/` 多一个空 CSV | `tests/unit/test_agent_boundary.py` 的 fixture 只 patch 了 `UPLOAD_DIR`，而 `_tool_export_results` 走 `exporter` 的**模块级** `EXPORT_DIR` | 文件数 +1 |
+| **仓库** `results/local.db` 多 3 行 | `tests/unit/test_security_baseline.py` 的两个上传用例直接调 `core_uploads.save_upload()`，它内部 `db.ensure_schema()` + `db.transaction()` 用的是仓库库路径 | `audit_events` / `uploads` 各 +3 |
+| `results/worker_heartbeat` 被刷新 | `test_m4_runner_result.py` / `test_observability_chain.py` / `test_jobs_executor.py` 起真实 `Worker`；`jobs/worker.py` 从 `config` 导入的 `OUTPUT_DIR` 是自己的副本，patch `core.health` 对它无效 | mtime 被改写 |
+
+**根因是保障挂错了位置**：原先只有 `tests/conftest.py:app_module` 一个夹具在 patch，
+而**绕过它的用例（只用 `local_db` 或不用任何夹具）根本不受约束**。
+
+改法（三件一起才成立）：
+
+1. 新增 autouse 夹具 `tests/conftest.py:_isolate_runtime_dirs` ——
+   `config.LOCAL_DB_CONFIG["path"]` + `core_db.reset_schema_cache()`，
+   外加 `exporter.EXPORT_DIR`、`core_uploads.UPLOAD_DIR`、`core_health.OUTPUT_DIR`、
+   `jobs.worker.OUTPUT_DIR`、`core_artifacts.ARTIFACT_DIR` 五处模块属性。
+   **autouse 是关键**：不再依赖用例「记得」要哪个夹具。
+2. `config.py`：`OUTPUT_DIR` 支持 `GEF_OUTPUT_DIR` 环境变量改道
+   （与既有的 `GEF_SCAN_DB_PATH` / `LOCAL_DB_PATH` 同规格）。
+   子进程读不到父进程的 monkeypatch，这是**唯一**能拦住 `python -m jobs.worker`
+   往仓库写心跳的办法；`test_jobs_executor.py` 的 kill/restart 用例据此传参。
+3. 新增回归锁 `tests/unit/test_repo_layout.py::test_autouse_fixture_redirects_every_runtime_path`
+   —— 逐条断言两个库路径与五处模块级目录都不在仓库目录下。
+   夹具被删或漏项时立刻变红，而不是等下次提交才发现工作区脏了。
+
+**验证方式**：全量跑一次，对 `results/`、`exports/`、`uploads/`、`backups/`
+做跑前跑后的**逐文件 SHA-256 比对** —— 完全一致（`results` 5 个文件、`exports` 81 个、
+`uploads` 3 个、`backups/` 不存在）。
+**未动**：任何业务逻辑、Scope/Policy/审计/认证、数据库结构。
+`app_module` 与 `local_db` 的既有 patch 原样保留（与 autouse 夹具叠加安全）。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 900 passed, 2 skipped, 0 failures
+$ python -m pytest           # 901 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 63 source files
-$ python scripts/check_env.py   # 退出码 1（fail 0；warn 均为「本机确实没配 .env / worker 没在跑」）
+$ python scripts/check_env.py   # 退出码 1（fail 0；warn 4：.env 文件 / SECRET_KEY / LOCAL_ADMIN_TOKEN / worker 心跳）
 ```
+
+测试报告的完整版见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（测了什么 / 没测什么 / 为什么没测）。
 
 ### 已知仍未处理（不属 M0～M4 范围）
 
-- `/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports` 仍可匿名只读
-  （按 `docs/DECISIONS.md` D 有意保持，已用契约测试锁定）。
+- 匿名只读接口：按 `docs/DECISIONS.md` D 有意保持，已用契约测试锁定。
+  **共 7 条** —— `/api/tools`、`/api/databases`、`/api/results`、`/api/tool/<n>/results`、
+  `/api/export`、`/api/export/<id>/download`、`/api/exports`。
+  注意 `test_api_auth_contract.py` 的 `ANONYMOUS_READABLE` 目前只列了其中 5 条
+  （见 `docs/TEST_REPORT.md` §3.1），差额 2 条只有间接覆盖。
 - `storage.py`（旧库）仍无 WAL；已加连接级 `busy_timeout`，但 WAL 需重建库文件，属迁移范畴。
 - `/api/jobs` 只有 `limit`，没有游标分页。
 - 单并发 worker（`SCAN_LIMITS["max_concurrency"] = 2` 目前未使用）。
