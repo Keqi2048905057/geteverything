@@ -24,47 +24,11 @@ from flask import jsonify, request
 from api import api_bp
 from core import artifacts as artifacts_store
 from core import assets as assets_store
-from core import audit, jobs as jobs_store, uploads
-from core import observability
+from core import audit
+from core import jobs as jobs_store
+from core.application import create_scan_job
 from core.auth import require_admin
 from core.errors import BadRequestError, NotFoundError
-from core.mock import SCENARIOS, normalize_scenario
-from core.policy import validate_job_targets
-from core.safety import MODE_MOCK, MODE_REAL, resolve_mode
-from config import SCAN_LIMITS
-
-
-def _split_list(value, field: str) -> list[str]:
-    """把请求字段规范化为字符串列表。"""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [item.strip() for item in value.split(",") if item.strip()]
-    if not isinstance(value, list):
-        raise BadRequestError(f"{field} 必须是字符串数组")
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
-def _resolve_targets(payload: dict) -> tuple[list[str], str | None]:
-    """从请求体解析目标：``targets`` 显式列表，或 ``upload_id`` 受控上传。
-
-    Returns:
-        tuple[list[str], str | None]: ``(targets, upload_id)``。
-    """
-    upload_id = (payload.get("upload_id") or "").strip() or None
-    targets = _split_list(payload.get("targets"), "targets")
-
-    if upload_id:
-        targets.extend(uploads.load_targets(upload_id))
-
-    # 去重保序
-    seen = set()
-    unique: list[str] = []
-    for target in targets:
-        if target not in seen:
-            unique.append(target)
-            seen.add(target)
-    return unique, upload_id
 
 
 @api_bp.route("/jobs", methods=["POST"])
@@ -91,6 +55,11 @@ def create_job():
         202 + ``{"ok": true, "job_id": ..., "status": "queued", "reused": false}``。
         这里用 202 Accepted 而不是 200：请求已被接受，但**尚未**完成。
         命中幂等键时状态码仍是 202（响应体形状不变），调用方看 ``reused``。
+
+    实现位置：本视图只做「认证 + 解析 JSON + 拼响应」。目标解析、幂等、
+    工具校验、限流、Scope/Policy、模式开关、落库、审计与结构化日志**全部**
+    在 :func:`core.application.create_scan_job` 里 —— 那条链是包括 Agent 在内
+    所有调用方共用的唯一入口（总方案第 5.2 节 / DSH 方案第 6 节）。
     """
     require_admin()
 
@@ -98,106 +67,17 @@ def create_job():
     if not isinstance(payload, dict):
         raise BadRequestError("请求体必须是 JSON 对象")
 
-    scope_id = str(payload.get("scope_id") or "").strip()
-
-    targets, upload_id = _resolve_targets(payload)
-    if not targets:
-        raise BadRequestError("必须提供 targets 或 upload_id")
-
-    tools = _split_list(payload.get("tools") or payload.get("tool"), "tools")
-    if not tools:
-        raise BadRequestError("必须提供至少一个工具", details={"field": "tools"})
-
-    # 幂等键由调用方提供，非法（非字符串 / 超长）一律 400，不做静默截断。
-    try:
-        idempotency_key = jobs_store.normalize_idempotency_key(payload.get("idempotency_key"))
-    except ValueError as exc:
-        raise BadRequestError(str(exc), details={"field": "idempotency_key"}) from exc
-
-    # 工具名与 /api/run 走同一套校验。
-    from tool_runner import load_tools
-
-    try:
-        tools = load_tools(tools)
-    except ValueError as exc:
-        raise BadRequestError(str(exc)) from exc
-
-    max_targets = SCAN_LIMITS["max_targets_per_job"]
-    if len(targets) > max_targets:
-        raise BadRequestError(
-            f"单个任务最多 {max_targets} 个目标，当前 {len(targets)} 个",
-            details={"max_targets_per_job": max_targets},
-        )
-
-    # scope_id 缺失 / Scope 不存在 / 目标越界，全部由统一 Policy 入口判定：
-    # 缺失 → 400，不存在或越界 → 403（整体拒绝，不部分执行）。
-    scope, validated_targets = validate_job_targets(scope_id, targets)
-
-    mode = resolve_mode(payload.get("mode"))
-    if mode == MODE_REAL:
-        scope.require_active_scan()
-
-    scenario = None
-    if mode == MODE_MOCK:
-        raw_scenario = payload.get("scenario")
-        if raw_scenario is not None and str(raw_scenario).strip().lower() not in SCENARIOS:
-            raise BadRequestError(
-                f"scenario 仅支持 {', '.join(SCENARIOS)}",
-                details={"field": "scenario"},
-            )
-        scenario = normalize_scenario(raw_scenario) if raw_scenario is not None else None
-
-    job, reused = jobs_store.create_job_with_status(
-        scope_id=scope.id,
-        targets=validated_targets,
-        tools=tools,
-        mode=mode,
-        upload_id=upload_id,
-        scenario=scenario,
-        idempotency_key=idempotency_key,
-    )
-    detail = {
-        "scope_id": scope.id,
-        "mode": mode,
-        "tools": tools,
-        "targets": validated_targets,
-        "total_steps": job["total_steps"],
-    }
-    if reused:
-        # 命中已有任务：这不是一次「新建」，因此只记一条「重复请求被折叠」
-        # 的可追溯记录（审计事件类型仍是 job_created，target 指向那个已存在的任务）。
-        detail["idempotency_key"] = idempotency_key
-        detail["reused"] = True
-    audit.record(audit.EVENT_JOB_CREATED, target_id=job["id"], detail=detail)
-
-    # 方案第 19 节：任务创建也进结构化日志。request_id 由 app.py 的
-    # before_request 绑定，这里不用透传；**只记工具名与数量，不记目标列表**
-    # （完整目标在 audit_events 与 job 快照里，那是有意留存的审计数据）。
-    observability.log_event(
-        observability.EVENT_JOB_CREATED,
-        job_id=job["id"],
-        scope_id=scope.id,
-        mode=mode,
-        tools=tools,
-        target_count=len(validated_targets),
-        total_steps=job["total_steps"],
-        reused=reused,
+    submission = create_scan_job(
+        scope_id=str(payload.get("scope_id") or "").strip(),
+        targets=payload.get("targets"),
+        tools=payload.get("tools") or payload.get("tool"),
+        upload_id=payload.get("upload_id"),
+        mode=payload.get("mode"),
+        scenario=payload.get("scenario"),
+        idempotency_key=payload.get("idempotency_key"),
     )
 
-    return (
-        jsonify(
-            {
-                "ok": True,
-                "job_id": job["id"],
-                "status": job["status"],
-                "mode": job["mode"],
-                "total_steps": job["total_steps"],
-                "scope_id": job["scope_id"],
-                "reused": reused,
-            }
-        ),
-        202,
-    )
+    return jsonify(submission.to_dict()), 202
 
 
 @api_bp.route("/jobs", methods=["GET"])

@@ -220,27 +220,20 @@ def index():
                 job_error = "请输入要扫描的域名。"
             else:
                 try:
-                    from api.jobs import _resolve_targets
+                    from core.application import create_scan_job
 
-                    targets, _ = _resolve_targets({"targets": [domain]})
-                    from core import jobs as jobs_store
-                    from core.policy import validate_job_targets  # 统一 Policy 入口
-                    from core.safety import resolve_mode
-
-                    # 首页与 POST /api/jobs 走完全相同的 Scope 判定路径
-                    # （scope_id 缺失 → 400；不存在或越界 → 403）。
-                    scope, validated = validate_job_targets(scope_id, targets)
-                    mode = resolve_mode("mock")
-
-                    job = jobs_store.create_job(
-                        scope_id=scope.id,
-                        targets=validated,
+                    # 首页与 POST /api/jobs 走**同一个** Application Service 入口，
+                    # 不再反向导入 api 层的私有函数、也不再抄第二遍 Scope 判定
+                    # （缺失 → 400；不存在或越界 → 403）。
+                    submission = create_scan_job(
+                        scope_id=scope_id,
+                        targets=[domain],
                         tools=["subfinder"],
-                        mode=mode,
+                        mode="mock",
                     )
-                    job_id = job["id"]
+                    job_id = submission.job["id"]
                     job_message = (
-                        f"任务已创建：{job_id}（{job['status']}）。"
+                        f"任务已创建：{job_id}（{submission.job['status']}）。"
                         "worker 会异步执行，进度自动刷新。"
                     )
                 except ScopeViolationError as exc:
