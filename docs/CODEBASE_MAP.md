@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + M7 SQLite 并发测试（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、**本地 fixture HTTP 全链路 E2E**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -229,11 +229,13 @@
 
 | 文件 | 职责 | 关键函数 | 说明 |
 |---|---|---|---|
-| `tests/conftest.py` | 把项目根塞进 `sys.path` | 模块级代码 | 让 pytest 能 `import app` |
+| `tests/__init__.py` | 让 `tests` 成为**常规包** | — | **不可删**：site-packages 里存在一个常规包 `tests`，会把本仓库的命名空间包 `tests` 顶掉，`import tests.fixtures...` 直接 ModuleNotFound |
+| `tests/conftest.py` | 把项目根塞进 `sys.path` | 模块级代码 | 让 pytest 能 `import app`；另提供 `admin_client` 等 fixture，并把数据库/上传/产物/导出目录压到 `tmp_path` |
 | `tests/unit/test_smoke.py` | 冒烟：核心模块可导入、`/api/` 路由存在、上传上限 2MB、`OUTPUT_DIR` 名为 results、registry 恰好 17 个 | `test_core_modules_importable` 等 5 个 | **不 mock 外部工具、不联网** |
 | `tests/unit/test_repo_layout.py` | 仓库布局与 `.gitignore` 规则存在性 | `test_project_files_exist`、`test_repo_files_exist`、`test_ci_workflow_exists`、`test_gitignore_covers_runtime_artifacts` | 断言仓库根有 LICENSE/SECURITY.md/CONTRIBUTING.md/CHANGELOG.md |
 | `tests/integration/__init__.py` | 占位文档，**无任何集成用例** | — | 注明 M1 起再加 |
-| `tests/fixtures/__init__.py` | 空占位 | — | 无 fixture 文件 |
+| `tests/fixtures/__init__.py` | 占位文档 | — | 声明 fixtures 包 |
+| `tests/fixtures/local_http_server.py` | **M7 本地全链路 E2E 的目标** | `LocalHttpServer`（`port` / `base_url` / `url()` / `set_status()` / `start()` / `stop()`） | 只用标准库 `ThreadingHTTPServer`，**硬绑定 `127.0.0.1`**、端口 `0` 由系统分配；固定路由 `/`(200) `/stable`(200) `/extra`(200) `/forbidden`(403) `/missing`(404) `/redirect`(302→`/`)，未知路径 404；`Server` 头固定 `GefFixture/1.0`。**不引入任何真实外网目标** |
 
 ---
 
@@ -449,7 +451,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ---
 
-## 6. BUG 定位索引表（共 25 条症状；第 23～25 条为 P1/M7 新增）
+## 6. BUG 定位索引表（共 26 条症状；第 23～26 条为 P1/M7 新增）
 
 | # | 典型症状 | 最可能的 3 个排查位置 | 该处典型失败模式 |
 |---|---|---|---|
@@ -478,6 +480,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 23 | 任务跑完了，资产页却「一条都没有」/ 少了几条 | ① `jobs/executor.py:execute_job` 里的 `ingest_step_observations` 调用 ② `core/assets.py:CATEGORY_TO_TYPE`（`web`/`alive`/`dns` 的映射）③ 任务详情里的 `step.assets_ingested` 事件（含 `skipped` 与 `reasons`） | **先看事件，不要先看代码**：`step.assets_ingested` 的 `written`/`skipped`/`reasons` 直接说明这批观测落了几条、为什么跳过。三种常见原因：① 工具的 `Observation.category` 不在 `CATEGORY_TO_TYPE` 里（返回 `None` → 整条跳过，不猜类型）；② 步骤只有字符串结果且工具是 `httpx`/`naabu`/`nmap`（形态不确定 → 故意不落，见 §9.12.3）；③ `canonical.normalize()` 判定值非法（如把本地路径当 URL）。**注意落观测是派生产物**：它失败不会让任务变 failed，所以「任务 succeeded 但没资产」是合法状态，必须靠事件区分 |
 | 24 | 对比两次任务时「未变」总是 0，看起来像两次扫描毫无交集 | ① `core/assets.py:diff_jobs` 里 `counts["unchanged"]` 与 `unchanged` 明细的关系 ② 页面「含未变」复选框（`#diff-include-unchanged`）③ `web/static/assets.js:renderDiff` 对空明细的措辞 | `include_unchanged=False`（勾掉「含未变」）**只应影响明细、不应影响计数**。曾经两者一起清零，于是「扫到了但没变化」与「什么都没扫到」变得不可区分。先看 `counts.unchanged`：**它非 0 而明细为空，说明是这次没要明细，不是两次没有交集**（前端会显示「按设置未取明细，共 N 条」）。真正的 0 才是「两次任务的资产集合完全不相交」 |
 | 25 | Agent 回复里出现 `AttributeError: 'str' object has no attribute 'get'`（只在**真有存活结果**时） | ① `agent/action.py:_tool_httpx` 的 `items` 字段 ② `agent/action.py:_summarize_httpx_items`（逐条 `item.get(...)`）③ `modules/httpx.py:run_scan` 的返回值语义 | 同一个 `rows` 变量在两条链上有两种形态：`run_scan` 返回 **URL 字符串列表**（旧签名，兼容用），而元数据在 `runner.last_items`（dict 列表）。`items` 错取了 `rows`，于是 `_summarize_httpx_items` 收到一堆 `str` 就炸。**零结果时不炸** —— 所以「本地跑不通、真机上必炸」是它的典型表现。`results` 里的 `total` 也就会与 `items` 长度对不上 |
+| 26 | 原始证据打开后「只有一行」/ 明明跑出很多结果却只看到一条；`truncated` 还是 `false` | ① `core/artifacts.py:read_artifact`（脱敏用的是哪支函数）② `core/runner_result.py:scrub_text`（脱敏且默认不截断）vs `scrub_command`（**命令预览**，末尾截到 300 字符）③ API 的 `limit` 与 `SCAN_LIMITS["max_artifact_bytes"]` | **M7 已修**：`read_artifact()` 曾误用 `scrub_command()`，于是 `GET /api/artifacts/<id>` 的 `text` 永远只有头 300 字符，而 `truncated` 仍为 `False`（截断标记只看 `max_artifact_bytes`）。**症状的判别点**：`truncated is False` 但文本长度恰好 ≈300 且以 `...` 结尾。修法是 `scrub_text()`（只脱敏、默认不截断）；命令预览仍走 `scrub_command()`（语义与 300 字符上限未变）|
 
 ---
 
@@ -545,6 +548,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 31. **敏感产物已进 Git**（`git ls-files` 实测 83 个跟踪文件中包含）：`results/scan_results.db`、`results/*.txt`、`results/outs/*.json`（真实企业名与域名）、`uploads/*.txt`（真实目标清单）、`scripts/dirsearch.exe`、`scripts/OneForAll.exe`、`scripts/oneforall.exe`、`SecLists/raft-small-directories.txt`。仓库根的 `.gitignore` 虽有 `**/results/`、`**/uploads/`、`*.db`，但对**已跟踪文件无效**。
 32. **首页无模板**：`app.py:160` 渲染 `index.html`，仓库无 `web/` 目录（当时的实施方案也把它列为 P0）。▶ **M1 已解决**：`web/templates/` 与 `web/static/` 已补齐。
 33. **测试覆盖极薄**：`tests/` 下只有 2 个单元测试文件（导入、布局、常量），`tests/integration/` 与 `tests/fixtures/` 均为占位 `__init__.py`；**没有任何针对 Runner、storage、intent/planner 的测试**，也没有 mock runner。
+   ▶ **早已解决**：现在 `tests/unit/` + `tests/integration/` 共 759 项（不含 2 项 skip），`tests/fixtures/` 有了真实 fixture（`local_http_server.py`，见 §9.17）。
 34. **`app.py` 只有单个应用实例**（模块级 `app = Flask(...)`），没有 `create_app()` 工厂；`tests/unit/test_smoke.py:21` 直接 `import app` 并检查 `app.app.url_map`。
 35. **`_is_storage_question` 关键词过宽**：`agent/action.py:25-38` 的 `DATABASE_QUERY_KEYWORDS` 含 `"数据库"`、`"保存位置"`、`"db"` 等；`:138` 的条件只在"非 analyze 意图且无扫描词"时短路，边界用例（如"把结果保存位置告诉我然后扫一下"）容易被误判成纯问答而**静默不执行扫描**。
 36. **`modules/registry.py` 的 import 期全量加载**：任何单个 adapter 的语法/依赖错误都会让 `import modules` 失败，进而 `/api/tools`、`/api/run`、`/api/tools` 全部 500（例如 `modules/enscan.py` 若缺依赖）。没有按需加载或容错注册。
@@ -619,8 +623,8 @@ get_everything_framework/
 │   ├── security.py           SECRET_KEY 弱值检测 + 进程级一次性密钥
 │   ├── auth.py               单一管理员 Token + Session + X-Local-Token
 │   ├── health.py             /health 采集（database / worker / queue / tools / modes / security）
-│   ├── runner_result.py      M4：Observation / ToolHealth / RunnerResult + scrub_command
-│   ├── artifacts.py          M4：原始证据落盘（stdout/stderr/output）+ 登记 + 截断脱敏读取
+│   ├── runner_result.py      M4：Observation / ToolHealth / RunnerResult + scrub_command（命令预览，300 字符）+ scrub_text（任意文本，默认不截断）
+│   ├── artifacts.py          M4：原始证据落盘（stdout/stderr/output）+ 登记 + 截断脱敏读取（**脱敏用 scrub_text，不再被 300 字符预览规则截断**）
 │   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复
 ├── jobs/                     ← 进程层（刻意不放进 core/）
 │   ├── executor.py           执行逻辑（与进程无关，可直接单测调用）
@@ -784,12 +788,12 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 752 passed, 2 skipped, 0 failures
+$ python -m pytest           # 759 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → **M7 SQLite 并发测试 `752`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → **M7 本地 fixture HTTP 全链路 E2E `759`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -804,7 +808,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/unit/test_security_baseline.py` | SECRET_KEY 弱值、受控上传、`.env` 原子写（M2） |
 | `tests/unit/test_jobs_store.py` | 状态机、认领、租约、恢复、cancel、retry、**跃迁表 + max attempts**（M3 / P0-7）、**幂等键（复用/释放/规范化/不重复写事件）与退避窗口（写窗口、挡领取、清窗口、封顶）**（P0-7）、**旧库纯增量补列的迁移用例**、**`get_job_or_raise` 与 `get_job` 的可空性差异**（M7） |
 | `tests/unit/test_jobs_executor.py` | mock/real 分流、进度、取消边界、**真实子进程 kill/重启**、**执行期 Scope 复检**（M3 / P0-2） |
-| `tests/unit/test_runner_result.py` | 命令预览脱敏、`RunnerResult` 组装、artifact 落盘/读取（M4） |
+| `tests/unit/test_runner_result.py` | 命令预览脱敏（9 例，含 Windows/POSIX 长路径不被误打码）、**`scrub_text` 证据脱敏（长文本原样保留 / 只打码密钥 / 可选 limit / 默认上限不漂移）**、`RunnerResult` 组装、artifact 落盘/读取（M4 / M7） |
 | `tests/unit/test_runner_interface.py` | **真实子进程**：成功/零结果/未安装/非零/127/超时/SystemExit/残留文件清理（M4）；**基类未实现 `run_scan` 必须报失败**、**子类 `_write_input_file` 保留 `suffix`**（M7） |
 | `tests/unit/test_runners_m4.py` | subfinder / httpx / dnsx 的 `build_command` + `parse_output`（M4） |
 | `tests/unit/test_runners_m4_rollout.py` | **其余 14 个 runner** 的接口覆盖 + 解析 + 横切自检（M4 铺开）；**M5**：字典配置可移植（不是开发机绝对路径、必落在项目根内）、字典缺失时 `config_error` 且**不启动子进程**、`wordlist=None` 不算错、新错误码常量与前端标签同步 |
@@ -824,6 +828,7 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/integration/test_export_contract.py` | **P0-5**：导出响应无 `path`、可下载、未知/已清理 id → 404、`safe_prefix` 穿越表、前缀逃不出导出目录 |
 | `tests/integration/test_api_auth_contract.py` | **P0-1/D**：锁定「哪些只读接口匿名、哪些必须 401」的当前契约 + 响应体不夹带服务器路径 |
 | `tests/integration/test_assets_api.py` | **P1**：资产接口全部 401（未登录）、「任务跑完 → 资产可查」端到端链路、`summary` 未被 `<asset_id>` 吃掉、`/api/observations` 拒绝无条件全表扫描、Diff 端点 404 与 `include_unchanged`、**diff 条目必带可用的 `asset_id`**、资产页骨架与匿名时不下发 Scope 名、**静态脚本已把 diff 条目接成点击**、响应无服务器路径 |
+| `tests/integration/test_m7_local_e2e.py` | **M7（方案第 18 节）**：本地 fixture HTTP **全链路**——真实 httpx 子进程打只绑 `127.0.0.1` 的 fixture，一条用例走完 target → job → worker → runner → raw artifact → parser → observation → asset → diff → export；含「证据必须完整读出（只脱敏、不按 300 字符截断）」的回归。无 httpx 可执行文件时 `pytest.skip` |
 
 ### 9.9 第 6 节 BUG 索引表的**现状修正**
 
@@ -1536,5 +1541,122 @@ $ git diff --check                     # 退出码 0
 > 普通连接，`PRAGMA journal_mode=WAL` 是**库文件级**设置，因此「只读接口」也不会
 > 把库退回 `delete` 模式（`test_wal_mode_survives_reopening` 钉住这点）。
 > 另外，本文件**不覆盖** `mark_stale_assets()` / 资产过期那条线（属 M5 剩余项）。
+
+
+### 9.17 M7：本地 fixture HTTP 全链路 E2E（方案第 18 节）
+
+第 25 节的 P1 验收清单里一直挂着未勾选的 `[ ] 本地全链路 E2E`，第 26 节执行顺序第 15 条
+也是「本地真实 E2E」。在此之前 `mode=real` 只有**单元级**的真实子进程用例
+（`test_runner_interface.py` 起真进程验证成功/零结果/未安装/非零/127/超时），
+从未有**一条链路**把下面这些层接起来跑通：
+
+```text
+target → job → worker → runner(真实 httpx) → raw artifact
+       → parser → observation → asset → diff → export
+```
+
+#### 9.17.1 目标为什么必须是自己起的 fixture
+
+方案第 18 节的原话是「不要为了验证真实链路去扫未授权公网目标」。所以目标不是任何真实站点，
+而是 `tests/fixtures/local_http_server.py`：标准库 `ThreadingHTTPServer` + `daemon_threads`，
+**硬绑定 `127.0.0.1`**、端口 `0`（由系统分配，避免端口冲突）。路由与响应完全确定：
+
+| 路径 | 状态 | 标题 | 用途 |
+|---|---|---|---|
+| `/`、`/stable` | 200 | `Local Fixture Home` | 基线资产；`/` 之后被改成 403 用来造 changed |
+| `/extra` | 200 | `Local Fixture Extra` | 第二次扫描才出现 → added |
+| `/forbidden` | 403 | `Forbidden` | 第一次有、第二次没有 → removed |
+| `/missing` | 404 | `Not Found` | 未在用例中使用，但 404 也必须是**确定**的 |
+| `/redirect` | 302 → `/` | — | 留给 `-follow-redirects` 类用例 |
+| 其他 | 404 | `Not Found` | 兜底 |
+
+`Server` 头固定为 `GefFixture/1.0`，这样断言 `webserver` 字段时不必依赖 httpx 的版本行为。
+`set_status(path, code, title=...)` 用来在运行中途改单个路由 —— Diff 用例靠它把 `/` 从
+200 变成 403。
+
+为什么不用「加一个路由 / 删一个路由」来造 diff：httpx 的默认 match 集（`-mc`）跨版本会漂移，
+而 403/404 在不同版本里可能被过滤掉。用**显式路由 + 显式状态码**才不依赖工具版本。
+
+#### 9.17.2 唯一被替换的一步：候选集
+
+httpx 的候选来自 `ScanResultStore.get_results_by_domain()`，而 `storage.py` 按方案要求
+**只有写入、没有删除接口**（禁止删历史数据），所以同一域名的候选集在库里只增不减 ——
+方案第 10 节验收形态「A B C → A C D」需要候选集**收缩**一次，这在库层面无法表达。
+
+于是第二次任务显式替换 `HttpxRunner._load_candidates`（`monkeypatch.setattr`），
+模拟「上游子域发现这次给出了不同的集合」。**被替换的只是输入发现**；httpx 之后的一切
+——命令行构造、子进程执行、JSONL 解析、证据落盘、观测归一、资产归并、diff、导出 —— 全是真实代码。
+这是本条 E2E 与 `test_m4_runner_result.py`（整个 runner 都是假的）最本质的区别。
+
+#### 9.17.3 测试隔离：为什么 conftest 不够
+
+`tests/conftest.py` 只覆盖 config 层与 core 层（两个库、`ARTIFACT_DIR`、`EXPORT_DIR`、
+`UPLOAD_DIR`、`core_health.OUTPUT_DIR`）。但 `modules/base.py`、`modules/httpx.py`、
+`jobs/worker.py` 在**导入时**就把 `OUTPUT_DIR` 绑定成了各自的模块级字符串，
+conftest 管不到它们。若不管，真实 httpx 的 JSONL 与 worker 心跳会写进仓库的 `results/`
+（AGENTS.md 硬约束明确禁止）。
+
+因此测试内额外 `monkeypatch.setattr` 了 `modules.base.OUTPUT_DIR`、`modules.httpx.OUTPUT_DIR`、
+`jobs.worker.OUTPUT_DIR` 三处，并断言结果文件确实落在临时目录的 `127.0.0.1_httpx.jsonl`。
+
+> 同类陷阱还有一个：`HttpxRunner.__init__` 会立刻 `ScanResultStore()`，
+> 所以 `storage.SQLITE_CONFIG["path"]` 必须在**构造 runner 之前**就被改掉 —— conftest 的
+> `app_module` fixture 已经做了这件事，测试只需 `app_module` 出现在参数表里。
+
+#### 9.17.4 顺带修掉的既有缺陷：证据被命令预览的规则截断
+
+`core/artifacts.py:read_artifact()` 原本用 `scrub_command()` 处理证据，而该函数的语义是
+**命令预览** —— 末尾会截到 `MAX_COMMAND_PREVIEW = 300`。后果：
+
+* `GET /api/artifacts/<id>` 的 `text` **永远只有头 300 字符**；
+* 同时 `truncated` 仍然是 `False`（截断标记只看 `max_artifact_bytes`），对外说了假话；
+* 被截掉的正好是排查「跑通了但没数据」时要看的部分，与方案第 6.2 节
+  「结果详情能看到原始证据」直接冲突。
+
+改法是只加不减：把三轮正则替换抽成 `_redact()`，新增
+
+```python
+scrub_text(value: str, limit: int | None = None) -> str   # 只脱敏；默认不截断
+scrub_command(cmd, limit: int = MAX_COMMAND_PREVIEW) -> str  # 语义不变（签名多了可选 limit）
+preview_text(value, limit=2000)  # 改为委托给 scrub_text
+```
+
+`read_artifact()` 改用 `scrub_text()`。既有 9 条脱敏用例原样通过（`scrub_command` 的默认行为
+与 300 字符上限未变），另加 4 条把 `scrub_text` 的新语义钉住。
+
+> **一个必须知道的副作用**：`_LONG_TOKEN_RE` 的兜底规则（连续 ≥20 个字母数字 → 打码）
+> 现在真正作用于整份证据了。所以证据里**长的连续字母数字串会变成 `***`**；
+> `http://127.0.0.1:PORT/path` 这类带路径分隔符的值不受影响（该正则有前后视断言排除路径片段）。
+> 这是刻意的取舍：宁可过度脱敏，也不能让 API Key 进前端。
+
+#### 9.17.5 一处被刻意钉住的现状：导出读的是旧库
+
+`GET /api/export` 走 `exporter.gather_export_rows()` → **旧** `ScanResultStore`，
+不是新的资产模型。所以它导出的是上游候选的**原始字面值**（`127.0.0.1:PORT/path`），
+而不是归一化后的 `http://…` URL。测试里把这个现状写成断言，免得以后误以为它导出的是资产
+（那属于方案第 11 节「统一执行链」，见 `docs/DECISIONS.md` §3）。
+
+#### 9.17.6 断言清单（+7 例，752 → 759）
+
+| 组 | 断言 |
+|---|---|
+| fixture 自身 | 只监听回环地址；`core.safety.is_local_only_target("127.0.0.1")` 为真 |
+| target → job → worker → runner | 任务 `succeeded`、步骤 `error_code is None`、`found_count == 3`、`command_preview` 非空、`duration_ms` 非空 |
+| parser → observation | `parser_version == "1.0"`；3 条观测的 `category`/`status_code`/`title`/`webserver`/`source_tool` 全对 |
+| raw artifact | `stdout` 与 `output` 都在；无 `path`；`missing is False`；`truncated is False`；**内容恰好 3 行**（截断缺陷的回归）；文件确实在临时目录 |
+| observation → asset | 3 观测 → 3 个 `type=url` 资产；`summary.by_type == {"url": 3}`；详情带观测时间线 |
+| diff | `counts == {added:1, removed:1, changed:1, unchanged:1}`；`/` 的 `status_code: 200 → 403` 且 `title` 同步；`asset_id` 指向同一行资产；第二次扫描后资产总数是 **4 而不是 6**（归并生效） |
+| export | 登记成功、`download_url` 可下载、CSV 表头正确、响应与列表都不含 `path` |
+
+#### 9.17.7 一个环境依赖，必须知道
+
+`tests/__init__.py` 是**必需文件，不可删**。site-packages 里存在一个常规包 `tests`
+（某些依赖自带），它会把本仓库的**命名空间包** `tests` 顶掉，症状是
+`ModuleNotFoundError: No module named 'tests.fixtures'`。加上 `tests/__init__.py` 后
+`tests` 成为常规包，解析稳定落在仓库内。
+
+用例开头有 `shutil.which(HTTPX_CONFIG["path"])` 守卫：本机靠
+`E:\GoWorkspace\bin\http-x.CMD` 包装脚本指向 `httpx.exe` 才能跑；CI 上没有 Go 工具链时
+`pytest.skip`（不是 fail），所以这条 E2E 在 GitHub Actions 上会显示为 skipped 而不是失败。
 
 

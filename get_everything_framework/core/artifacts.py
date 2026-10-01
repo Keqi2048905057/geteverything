@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from config import OUTPUT_DIR, SCAN_LIMITS
 from core import db
 from core.ids import new_artifact_id
-from core.runner_result import scrub_command
+from core.runner_result import scrub_text
 
 # 产物目录：与 ``results/`` 同级，测试里会被 monkeypatch 到临时目录。
 ARTIFACT_DIR = os.path.join(OUTPUT_DIR, "artifacts")
@@ -239,7 +239,9 @@ def read_artifact(
         "truncated": bool(meta.get("truncated")) or read_truncated,
         "missing": missing,
         "created_at": meta.get("created_at"),
-        "text": scrub_command(text) if (scrub and text) else text,
+        # 原文证据动辄几十 KB；脱敏不能顺带截断（`scrub_command` 是命令预览用的
+        # 300 字符规则，套在证据上会把内容砍到只剩头一行）。
+        "text": scrub_text(text) if (scrub and text) else text,
     }
     return payload
 

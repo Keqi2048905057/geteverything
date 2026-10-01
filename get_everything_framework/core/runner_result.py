@@ -66,7 +66,15 @@ REDACTED = "***"
 MAX_COMMAND_PREVIEW = 300
 
 
-def scrub_command(cmd: list[str] | tuple[str, ...] | str) -> str:
+def _redact(text: str) -> str:
+    """只做脱敏，不做长度限制（长度策略由调用方决定）。"""
+    text = _URL_CREDENTIAL_RE.sub(rf"\1:{REDACTED}@", text)
+    text = _SECRET_FLAG_RE.sub(rf"\1{REDACTED}", text)
+    text = _SECRET_PAIR_RE.sub(rf"\1{REDACTED}", text)
+    return _LONG_TOKEN_RE.sub(REDACTED, text)
+
+
+def scrub_command(cmd: list[str] | tuple[str, ...] | str, limit: int = MAX_COMMAND_PREVIEW) -> str:
     """把命令行渲染成**可安全入库、可安全回显**的预览字符串。
 
     做三件事：
@@ -75,11 +83,17 @@ def scrub_command(cmd: list[str] | tuple[str, ...] | str) -> str:
     2. 打码 URL 中的 ``user:password@`` 段；
     3. 裸的长 token 串打码（兜底，防止工具把 Key 放在位置参数里）。
 
+    末尾再按 ``limit`` 截断：命令预览是**给人看的单行摘要**，不是证据本体，
+    所以保留头部的 :data:`MAX_COMMAND_PREVIEW` 个字符即可。
+    **不要**拿它处理整份工具输出——那会连带把证据截掉，长文本请用
+    :func:`scrub_text`。
+
     Args:
         cmd: 参数列表或已经拼好的命令字符串。
+        limit: 预览最大长度，默认 :data:`MAX_COMMAND_PREVIEW`。
 
     Returns:
-        str: 脱敏后的单行预览，最长 :data:`MAX_COMMAND_PREVIEW` 个字符。
+        str: 脱敏后的单行预览，最长 ``limit`` 个字符。
     """
     if isinstance(cmd, str):
         joined = cmd
@@ -91,14 +105,32 @@ def scrub_command(cmd: list[str] | tuple[str, ...] | str) -> str:
             parts.append(f'"{text}"' if (" " in text or "\t" in text) else text)
         joined = " ".join(parts)
 
-    joined = _URL_CREDENTIAL_RE.sub(rf"\1:{REDACTED}@", joined)
-    joined = _SECRET_FLAG_RE.sub(rf"\1{REDACTED}", joined)
-    joined = _SECRET_PAIR_RE.sub(rf"\1{REDACTED}", joined)
-    joined = _LONG_TOKEN_RE.sub(REDACTED, joined)
+    joined = _redact(joined)
 
-    if len(joined) > MAX_COMMAND_PREVIEW:
-        joined = joined[: MAX_COMMAND_PREVIEW - 3] + "..."
+    if len(joined) > limit:
+        joined = joined[: max(0, limit - 3)] + "..."
     return joined
+
+
+def scrub_text(value: str, limit: int | None = None) -> str:
+    """对**任意长度文本**脱敏，默认不截断。
+
+    :func:`scrub_command` 会把结果压到 300 字符，那是给命令预览用的；
+    原始证据（stdout / stderr / ``-o`` 结果文件）动辄几十 KB，
+    用命令预览的规则处理会直接把证据砍没（``read_artifact`` 曾因此
+    只能返回头 300 个字符）。文本类内容请走这里。
+
+    Args:
+        value: 待脱敏文本。
+        limit: 可选的硬上限；``None`` 表示只脱敏不截断。
+
+    Returns:
+        str: 脱敏（并按需截断）后的文本。
+    """
+    text = _redact(value)
+    if limit is not None and len(text) > limit:
+        text = text[: max(0, limit - 3)] + "..."
+    return text
 
 
 @dataclass
@@ -385,7 +417,4 @@ def preview_text(value: str | None, limit: int = 2000) -> str | None:
     """截断一段文本用于本地排查（stderr 预览），并做脱敏。"""
     if not value:
         return None
-    text = scrub_command(value) if len(value) > 0 else value
-    if len(text) > limit:
-        text = text[: limit - 3] + "..."
-    return text
+    return scrub_text(value, limit=limit)

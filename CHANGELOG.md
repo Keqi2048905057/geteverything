@@ -409,11 +409,73 @@ retry / cancel / **duplicate execution**」与第 7 节的队列要求。此前 
 直接 `join()` 会把「8 个线程挂了 3 个」读成绿色。本文件用 `_run_threads()` 收集并
 重抛线程内异常，同时断言无线程在 60 秒后仍存活（死锁要表现为失败而不是挂住）。
 
+### M7 补充 — 本地 fixture HTTP 全链路 E2E（本轮，方案第 18 节）
+
+来源：`GetEverything_DSH执行方案_Flask版.md` 第 18 节。原话是
+
+> 不要为了验证真实链路去扫未授权公网目标。
+> …… 这条链路必须至少有一条全流程测试。
+
+第 25 节的 P1 验收清单里也一直挂着未勾选的 `[ ] 本地全链路 E2E`，第 26 节的执行顺序第 15 条
+同样是「本地真实 E2E」。此前 `mode=real` 只有**单元级**的真实子进程用例
+（`test_runner_interface.py` 起真进程验证成功/超时/未安装），从未有**一条链路**把
+target → job → worker → runner → raw artifact → parser → observation → asset → diff → export
+接起来跑通过。这条链路跨越 6 层，任何一层的接口漂移都只有在这里才会暴露。
+
+授权：落在 `docs/DECISIONS.md` 第 2 节白名单「补充与更新测试」+「Bug 修复」内。
+
+新增三个文件：
+
+| 文件 | 作用 |
+|---|---|
+| `tests/fixtures/local_http_server.py` | 只绑 `127.0.0.1`、端口 `0` 由系统分配的标准库 `ThreadingHTTPServer`。固定路由 `/`(200) `/stable`(200) `/extra`(200) `/forbidden`(403) `/missing`(404) `/redirect`(302→`/`)，`Server` 头固定 `GefFixture/1.0`，带 `set_status()` 供 Diff 用例改单个路由的状态码与标题 |
+| `tests/integration/test_m7_local_e2e.py` | 跑**真实 httpx 子进程**打本地 fixture，一次走完全链路（+2 例 / 7 个断言组） |
+| `tests/__init__.py` | **必需**：site-packages 里存在一个常规包 `tests`，会把本仓库的命名空间包 `tests` 顶掉，`import tests.fixtures...` 直接 `ModuleNotFoundError`。加上这个文件后 `tests` 成为常规包，解析稳定落在仓库内 |
+
+被替换的**只有一步**：httpx 的候选来自 `ScanResultStore`，而 `storage.py` 按方案要求只有写入、
+没有删除接口（禁止删历史数据），所以同一域名的候选集在库里只增不减 —— 方案第 10 节验收形态
+「A B C → A C D」需要候选集**收缩**一次，这在库层面无法表达。因此第二次任务显式替换
+`HttpxRunner._load_candidates` 模拟「上游子域发现这次给了不同集合」。被替换的只是**输入发现**；
+httpx 之后的一切（命令行构造、子进程执行、JSONL 解析、证据落盘、观测归一、资产归并、diff、导出）全是真实代码。
+
+顺带修掉一个**既有缺陷**（本轮发现，非本次引入）：
+
+- `core/artifacts.py:read_artifact()` 用的是 `scrub_command()`，而该函数的语义是
+  **命令预览**：末尾会截到 `MAX_COMMAND_PREVIEW = 300` 字符。后果是
+  `GET /api/artifacts/<id>` 的 `text` 永远只有头 300 字符，同时 `truncated` 仍是 `False`
+  —— 既违反方案第 6.2 节「结果详情能看到原始证据」，又对外说了假话。
+  证据动辄几十 KB，被截的正好是排查时需要看的部分。
+- 改法（只加不减）：把脱敏规则抽成 `_redact()`，新增 `scrub_text(value, limit=None)`
+  —— **只脱敏、默认不截断**、可选硬上限；`read_artifact()` 改用它。
+  `scrub_command()` 的对外行为、默认 300 字符上限、`preview_text()` 的语义**均未变**
+  （既有 9 条脱敏用例原样通过，另加 4 条 `scrub_text` 用例把新语义钉住）。
+- 副作用说明：`_LONG_TOKEN_RE` 的兜底规则现在真正作用于整份证据，所以证据里
+  **连续 20 字符以上的字母数字串会被打码成 `***`**（URL 里的 `127.0.0.1:PORT/path` 不受影响，
+  该正则有路径片段的前后视断言）。这是刻意的取舍：宁可过度脱敏，也不能让 API Key 进前端。
+
+回归测试（+7，752 → 759）：
+
+- fixture 自身只监听回环地址，且 `core.safety.is_local_only_target("127.0.0.1")` 为真
+  —— 把「不扫未授权目标」这条硬约束钉进测试；
+- 第一次任务：任务 `succeeded`、步骤 `error_code is None`、`found_count == 3`、
+  `parser_version == "1.0"`、三条观测的 `status_code` / `title` / `webserver` / `source_tool` 全部正确；
+- 原始证据：`stdout` 与 `output` 两份都在、响应里没有 `path`、`missing is False`、
+  `truncated is False`、内容恰好 3 行（**这条就是上面那个截断缺陷的回归**）、
+  且结果文件确实落在临时目录 `127.0.0.1_httpx.jsonl` 而不是仓库 `results/`；
+- 观测→资产：3 条观测 → 3 个 `type=url` 资产，`summary.by_type == {"url": 3}`，详情带观测时间线；
+- Diff：`counts == {added: 1, removed: 1, changed: 1, unchanged: 1}`，
+  `/` 的 `status_code: 200 → 403` 且 `title` 同步变化，`asset_id` 指向同一行资产（资产是**归并**的：
+  第二次扫描后总数是 4 而不是 6）；
+- 导出：`/api/export` 登记成功、`download_url` 可下载、CSV 表头与上游候选值正确、
+  响应与列表都不含 `path`。
+  这里刻意把现状写进断言：`/api/export` 读的是**旧** `ScanResultStore`，
+  导出的是候选的原始字面值（`host:port/path`），**不是**归一化后的资产 —— 免得以后误以为它导出的是资产模型。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 752 passed, 2 skipped, 0 failures
+$ python -m pytest           # 759 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
 ```
 

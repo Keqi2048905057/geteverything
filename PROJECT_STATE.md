@@ -161,7 +161,7 @@
 
 | 项 | 现状 | 差什么 |
 |---|---|---|
-| **`mode=real` 真实链路** | 代码层与真实子进程用例齐备（`tool_not_found` / `timeout` / `nonzero_exit` 都有测试）；状态机、错误码、超时、进程树清理都已验证 | **从未用真实工具打真实目标**（按硬约束刻意不做），「工具 + 真实目标」这条链路零实证 |
+| **`mode=real` 真实链路** | ✅ **已有本地实证（本轮）**：`tests/integration/test_m7_local_e2e.py` 用**真实 httpx 子进程**打只绑 `127.0.0.1` 的 fixture 服务，一条用例走完 target → job → worker → runner → raw artifact → parser → observation → asset → diff → export（方案第 18 节）。此外 `tool_not_found` / `timeout` / `nonzero_exit` 等失败分类都有真实子进程用例 | 仍然**从未用真实工具打真实外部目标**（按硬约束刻意不做）—— 这是设计选择，不是缺口；CI 上若无 httpx 可执行文件，该用例会 `pytest.skip` |
 | **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库，**并已进资产页的观测时间线** | 资产页展示的是 `data_json` 原样 JSON，**没有按字段拆列**；任务详情页那一侧仍是原样 JSON |
 | **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
 | **M6 本机启动文档** | `CONTRIBUTING.md` 有环境搭建说明；`scripts/run_local.ps1` 可用 | 没有面向「新开发者 10 分钟启动」的完整文档；`scripts/check_env.py` 不存在 |
@@ -197,10 +197,11 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（752 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（759 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
-- [x] SQLite 并发测试（本轮：`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
-- [ ] 本地 fixture HTTP 测试
+- [x] SQLite 并发测试（`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
+- [x] **本地 fixture HTTP 测试**（本轮：`tests/fixtures/local_http_server.py` + `tests/integration/test_m7_local_e2e.py`，
+  真实 httpx 打 `127.0.0.1`，一条用例走完方案第 18 节全链路；无 httpx 可执行文件时自动 skip）
 - [x] **mypy 通过**（本轮：34 errors → 0，未改 mypy 配置）
 - [ ] 一份测试报告
 
@@ -317,17 +318,17 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（M7 SQLite 并发测试轮）
+验证时间：2026-10-02（M7 本地 fixture HTTP 全链路 E2E 轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 752 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+pytest: 759 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
 mypy:   Success: no issues found in 59 source files        ← M7 验收命令，仍为 0
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → **M7 SQLite 并发 `752`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → **M7 本地全链路 E2E `759`**
 
 ---
 

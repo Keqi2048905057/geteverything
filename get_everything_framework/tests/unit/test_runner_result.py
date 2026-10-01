@@ -28,6 +28,7 @@ from core.runner_result import (
     ToolHealth,
     result_from_exception,
     scrub_command,
+    scrub_text,
 )
 
 
@@ -96,6 +97,49 @@ def test_scrub_command_truncates_long_preview():
     preview = scrub_command(["tool"] + [f"arg{i}" for i in range(200)])
     assert len(preview) <= 300
     assert preview.endswith("...")
+
+
+# ── 文本脱敏（证据用，不截断） ────────────────────────────
+
+
+def test_scrub_text_keeps_long_text_intact():
+    """长文本必须是「原样长度」——证据不能被命令预览的 300 字符规则砍掉。"""
+    text = "GET /stable 200\n" * 200  # 3200 字符
+    assert scrub_text(text) == text
+    assert len(scrub_text(text)) == len(text)
+
+
+def test_scrub_text_redacts_secrets_within_long_text():
+    secret = "ghp_" + "d" * 40
+    text = "\n".join(['{"url":"http://127.0.0.1/stable","title":"Local Fixture Home"}'] * 50)
+    text += f"\nauth failed: token={secret}"
+    scrubbed = scrub_text(text)
+    assert secret not in scrubbed
+    assert "127.0.0.1/stable" in scrubbed  # 前面的内容没有被连带砍掉
+    # 只有那个密钥串被打码（44 字符 → 3 字符）。
+    assert len(text) - len(scrubbed) == len(secret) - 3
+
+
+def test_scrub_text_honours_optional_limit():
+    text = "some log line\n" * 400
+    scrubbed = scrub_text(text, limit=100)
+    assert len(scrubbed) == 100
+    assert scrubbed.endswith("...")
+
+
+def test_scrub_text_redacts_bare_long_token_in_evidence():
+    """兜底规则同样作用于证据：没有 ``key=`` 上下文的裸长 token 也要打码。
+
+    代价是「一长串连续的字母数字」也会被当成疑似密钥（宁可过度脱敏，
+    也不能让 API Key 出现在前端）——这条测试把这个取舍钉住。
+    """
+    assert scrub_text("ghp_" + "e" * 40) == "***"
+
+
+def test_scrub_command_default_limit_is_unchanged():
+    """``limit`` 参数化后默认行为不能漂移（既有调用方依赖 300）。"""
+    preview = scrub_command(["tool"] + [f"arg{i}" for i in range(200)])
+    assert len(preview) == 300
 
 
 # ── RunnerResult 语义 ─────────────────────────────────────

@@ -124,6 +124,22 @@
 > ② `agent/action.py:_tool_httpx` 的 `items` 由 URL 字符串列表改为元数据字典列表
 > （原先在有存活结果时必抛 `AttributeError`）。两者都补了回归测试。
 > **未动**：Scope / Policy / 审计 / 认证 / 数据库结构 / `pyproject.toml` 的 mypy 配置。
+>
+> **本轮已完成（M7 本地全链路 E2E，全落在第 2 节白名单内）**：
+> 新增 `tests/fixtures/local_http_server.py`（只绑 `127.0.0.1` 的确定性 fixture 服务）、
+> `tests/integration/test_m7_local_e2e.py`（方案第 18 节要求的 target → job → worker →
+> runner → raw artifact → parser → observation → asset → diff → export 全链路）、
+> 以及必需的 `tests/__init__.py`（修 site-packages 的常规包 `tests` 顶掉本仓库命名空间包
+> 导致 `import tests.fixtures...` 失败）。
+> 期间发现并修复一个**既有缺陷**：`core/artifacts.py:read_artifact()` 用
+> `scrub_command()` 处理原始证据，而该函数的语义是「命令预览」（末尾截到 300 字符），
+> 于是 `/api/artifacts/<id>` 返回的 `text` 永远只有头 300 字符 —— 既违反方案第 6.2 节
+> 「结果详情能看到原始证据」，也让 `truncated=False` 变成假信息。
+> 改法：抽出 `_redact()`，新增 `scrub_text()`（只脱敏、默认不截断，可选 `limit`），
+> `read_artifact()` 改用它；`scrub_command()` 行为与默认长度**未变**（既有 9 条用例原样通过）。
+> **未动**：Scope / Policy / 审计 / 认证 / 数据库结构 / 脱敏正则本身 / `MAX_COMMAND_PREVIEW`。
+> **未扫任何外部目标**：E2E 的目标是 fixture 自己监听的 `127.0.0.1`，Scope 也只放行
+> `127.0.0.0/8`，`GEF_ALLOW_REAL_SCAN` 只在用例内 `monkeypatch.setenv`。
 
 ---
 
