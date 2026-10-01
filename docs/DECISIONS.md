@@ -75,7 +75,30 @@
 | **Diff 属性别名** | ✅ **选择 1**：集中成 `ATTRIBUTE_ALIASES = {"server": "webserver", "webserver": "webserver", "technology": "technologies", "tech": "technologies"}` 这样的表，Diff 统一比较 canonical key，**禁止**写成散落的 `if key == "server": if key == "webserver": ...`。 | 用户弹窗选择 1 |
 | **§25 与 P1 验收口径冲突** | ✅ **选择 1**：拆成「### P1 当前阶段验收」与「### P1 后续生产迁移门槛（当前延期，不属于本阶段验收）」，后者带 `[DEFERRED]` 标记；**并顺手把文档表述修掉**。 | 用户弹窗选择 1 |
 | **未跟踪文件** | ✅ **维持现状，三者都不入库**：`.dsh/skills/geteverythingskill/`、`GetEverything_长期产品化总方案_Flask版.md`、`GetEverything_DSH执行方案_Flask版.md`。 | 用户弹窗多选结果 |
-| **推送** | ⏸ **先做 push 前安全审计，再 push**（选 2）—— 与 3.1 的「不 push」不同：本轮允许推送，但必须先产出安全审计结论。 | 用户弹窗选择 2 |
+| **推送** | ✅ **已按「先做 push 前安全审计，再 push」执行**（选 2）—— 审计结论与推送结果见下方专节。 | 用户弹窗选择 2 |
+
+### 3.3 推送前安全审计（本轮，按 3.2 的口径执行）
+
+审计对象：`origin/main..HEAD` 全部 24 个提交（`364ea25` → `40c5771`）。
+
+| 检查项 | 方法 | 结论 |
+|---|---|---|
+| 运行期产物是否入库 | `git diff --name-only origin/main..HEAD` 按 `results/ uploads/ exports/ backups/ SecLists/ *.db *.db-wal *.db-shm *.exe .env heartbeat *.xlsx *.jsonl *_subfinder.txt docs/milestones/` 匹配 | ✅ 命中 0 条 |
+| 全仓库已跟踪文件是否含数据库/密钥/样本 | `git ls-files` 同上模式（共 158 个已跟踪文件） | ✅ 命中 0 条 |
+| 新增行是否含硬编码密钥 | 全 24 提交的 `git log -p` 新增行匹配 `secret_key/api_key/token = "<8+ 字符>"` | ✅ 命中 0 条 |
+| 新增行是否含高强度密钥形状 | 同上匹配 `sk-…` / `ghp_…` / `AKIA…` / `eyJ….` | ✅ 命中 0 条 |
+| `.env.example` 是否为占位值 | 直接读文件 | ✅ 全部占位（`LLM_API_KEY=sk-xxxx`、`LOCAL_ADMIN_TOKEN=` 空、`SECRET_KEY=dev-secret-key` 注释里已警告必须改） |
+| `.gitignore` 是否仍覆盖产物 | 读 `.gitignore` | ✅ 覆盖 `**/results/ uploads/ exports/ backups/`、`*.db*`、`.env`、`SecLists/`、`*.exe` |
+| 是否从旧 clone 泄露绝对路径 | 新增行匹配 `Programmingtools` | ✅ 仅 `docs/DECISIONS.md` 第 1 节 C 项**本来就有的**旧 clone 路径（描述一条「默认不执行」的待授权操作），不含敏感内容；其余命中都是**反例断言**（`assert "C:\\" not in …`）与文档示例 |
+| 是否与远端分叉 | `git rev-list --left-right --count origin/main...HEAD` | ✅ `0 24` —— 纯快进，**无需** force push |
+| 最大文件 | 逐个 `Get-Item` | ✅ 最大 `docs/CODEBASE_MAP.md` 181 KB、`CHANGELOG.md` 54 KB，均为纯文本文档 |
+
+**推送结果**：`git push origin main` → `364ea25..40c5771 main -> main`（快进，无 force）。
+推送后 `git status -sb` 显示 `## main...origin/main`（无 `[ahead]`），
+`git ls-remote --heads origin` 与 `git log -1 origin/main` 均指向 `40c5771`。
+
+> 命令退出码为 1 是 PowerShell 把 git 的 stderr 进度输出当异常处理所致（`NativeCommandError`），
+> 不是推送失败 —— 已用远端 ref 复核确认落地。
 
 ### 3.1 用户本轮（2026-10-02，弹窗确认）已授权的项
 

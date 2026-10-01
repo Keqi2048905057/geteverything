@@ -53,6 +53,40 @@ powershell -ExecutionPolicy Bypass -File scripts\install_windows.ps1
 可用开关：`-CheckOnly`、`-SkipSystem`、`-SkipPythonDeps`、`-SkipGoTools`、`-WithOptional`、`-DryRun`。
 Linux 对应 `scripts/install_linux.sh`。
 
+### 2.1 一键环境自检（装完先跑这个）
+
+```powershell
+python scripts/check_env.py            # 人读报告
+python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
+python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 用）
+```
+
+退出码：**0** = 全部通过；**1** = 有警告（能跑，但有东西没配好）；**2** = 有阻塞项。
+
+十四项检查分四类，默认就是排障顺序：
+
+| 类 | 检查什么 |
+|---|---|
+| 解释器与依赖 | Python 版本；`requirement.txt` 逐项核对（缺失 = 阻塞）；`requirement-dev.txt` 按 `>=` 判定（缺失 = 警告，只是跑不了测试） |
+| 运行期目录 | `results/`（工具产物与心跳）、`uploads/`、`exports/`、`backups/` 的权限 |
+| `.env` 与安全开关 | 弱/缺失 `SECRET_KEY`、空 `LOCAL_ADMIN_TOKEN`、`WEB_DEBUG=true`（**阻塞**，会暴露调试器）、非回环 `WEB_HOST`、`GEF_ALLOW_REAL_SCAN` |
+| 运行时 | 17 个外部工具在 PATH 上的可用数；两个 SQLite 库能否只读打开（应用库还核对 10 张关键表是否齐全）；worker 心跳与队列计数 |
+
+> **它是只读的。** 不写任何文件、不建库、不发网络请求、不执行任何扫描工具。
+> 目录权限只用 `os.access` 判定，**刻意不写探针文件再删**（那会在仓库里留痕）；
+> 应用库不存在时只报 `warn`，并确认文件真的没被创建出来。
+> 报告里也**不会**出现 `SECRET_KEY` / `LOCAL_ADMIN_TOKEN` 的值，只给
+> 「已配置 / 未配置 / 为弱值」这类状态串。这三点都有用例锁定
+> （`tests/unit/test_check_env.py`），不是注释里的承诺。
+
+**本机未配 `.env` 时的典型输出**是 `fail 0`、退出码 1 —— 那几条警告
+（`.env` 不存在、`SECRET_KEY` 未配置、`LOCAL_ADMIN_TOKEN` 为空、worker 心跳 stale、
+以及可能的目录待创建）都是**如实反映现状**，不是脚本坏了。先按每条的 `→` 提示处理。
+（`ok` / `warn` 的具体条数会随本机环境浮动，看的是 `fail` 有几条。）
+
+`fail`（退出码 2）才是真的跑不起来，典型只有两类：`WEB_DEBUG=true`、或应用库存在但
+关键表缺失/文件损坏。
+
 ---
 
 ## 3. 配置 `.env`
@@ -283,8 +317,10 @@ curl -H "X-Local-Token: <Token>" http://127.0.0.1:5000/api/assets
 
 ```powershell
 cd <仓库根>\get_everything_framework
-python -m ruff check .        # 期望：All checks passed!
-python -m pytest              # 期望：826 passed, 2 skipped
+python -m ruff check .                                          # 期望：All checks passed!
+python -m pytest                                                # 期望：900 passed, 2 skipped
+python -m mypy app.py core api jobs storage.py modules scripts   # 期望：Success: no issues found in 63 source files
+python scripts/check_env.py                                     # 环境自检（只读），退出码 0/1/2
 ```
 
 * 2 个 skip 是 `tests/integration/test_m7_local_e2e.py` 在**本机没有 httpx 可执行文件**时跳过，
@@ -451,16 +487,22 @@ python scripts\migrate_legacy_results.py --apply    # 真正写入
 
 ## 11. 与文档的不一致（部署相关）
 
-1. **README 的测试基线是 `759 passed`**，实际为 `826 passed, 2 skipped`。
-2. **README 的健康检查写成 `curl /api/tools`**，正确入口是 `GET /health`。
-3. **README 完全没提 worker 的启动方式**（全文无 `jobs.worker`）、没提 `LOCAL_ADMIN_TOKEN`、
+> **本节是「发现时」的快照**，其中 1～6 已在 P1 §14 文档同步轮修掉
+> （README 的基线、健康检查入口、worker 启动方式、Q6、模板部署、安全文档位置）。
+> 保留原文是为了留下痕迹，**不代表这些坑现在还在** —— 逐条现状见行内标注。
+
+1. ~~**README 的测试基线是 `759 passed`**~~ ▶ **已修**：当时实际为 826，现为 **900 passed / 2 skipped**。
+2. ~~**README 的健康检查写成 `curl /api/tools`**~~ ▶ **已修**：README 现写明正确入口是 `GET /health`。
+3. ~~**README 完全没提 worker 的启动方式**~~（全文无 `jobs.worker`）、没提 `LOCAL_ADMIN_TOKEN`、
    没提 `GEF_ALLOW_REAL_SCAN`、没提 `WEB_HOST`/`WEB_PORT`、没提 `local.db`——
    也就是说照着 README 装完，任务会永远停在 `queued`。
-4. **README 的 Q6 仍在说首页 `TemplateNotFound`**（已修复）。
-5. **`README.md:111` 说「需在 `web/templates/index.html` 部署前端模板」**——
+   ▶ **已修**：README 补了「启动 Worker」「环境要求」「Mock / Real 双开关」三节。
+4. ~~**README 的 Q6 仍在说首页 `TemplateNotFound`**~~ ▶ **已修**（该问题 M1 已修复）。
+5. ~~**`README.md:111` 说「需在 `web/templates/index.html` 部署前端模板」**~~ ▶ **已修**：
    模板已在仓库里，不需要额外部署。
 6. **`docs/SECURITY.md` 不存在**（方案建议的四份文档之一），安全文档实际在仓库根 `SECURITY.md`。
 7. **`SECURITY.md` 的「仍待处理」仍把 `FEROXBUSTER_CONFIG` 的字典写成开发机绝对路径**——
    `config.py:247` 现在已是仓库相对路径 + `FEROXBUSTER_WORDLIST` 覆盖，该条目已过期。
 8. **`PROJECT_STATE.md` 的硬约束提到 `scripts/OneForAll.exe` 的未提交差异**——
-   `.gitignore` 忽略 `*.exe`，当前 `scripts/` 下没有该文件，该约束文本已失效。
+   `.gitignore` 忽略 `*.exe`，当前 `scripts/` 下没有该文件，该约束文本已失效
+   （保留作为防御性约束，见 `AGENTS.md`「硬约束」）。

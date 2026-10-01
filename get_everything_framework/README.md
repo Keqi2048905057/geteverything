@@ -161,6 +161,22 @@ curl http://127.0.0.1:5000/health
 `/health` 会返回数据库状态、worker 状态（`ok` / `stale` / `missing`，stale 阈值 30 秒）、
 队列计数（只给计数）与各工具的可用性快照。
 
+`/health` 问的是「**服务跑起来之后**各项是否正常」；问「**这台机器上能不能跑起来**」
+用环境自检（装完依赖、还没启动服务时也能跑）：
+
+```bash
+python scripts/check_env.py            # 人读报告；退出码 0=全通过 1=有警告 2=有阻塞项
+python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
+```
+
+它检查解释器与依赖版本、四个运行期目录权限、`.env` 与安全开关
+（弱 `SECRET_KEY` / 空 `LOCAL_ADMIN_TOKEN` / `WEB_DEBUG=true` / 非回环 `WEB_HOST` /
+`GEF_ALLOW_REAL_SCAN`）、17 个外部工具、两个 SQLite 库、worker 心跳与队列。
+
+**它是只读的**：不写文件、不建库、不发网络请求、不执行任何扫描工具，也不会输出任何密钥值。
+本机没配 `.env` 时典型结果是 `warn 5 / fail 0`、退出码 1 —— 那是如实反映现状，不是脚本坏了。
+细节见 [`docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) §2.1。
+
 ### 结构化日志
 
 每个 HTTP 响应都带 `X-Request-Id`；日志是一行一个 JSON 事件，详见
@@ -169,9 +185,10 @@ curl http://127.0.0.1:5000/health
 ### 测试与验收
 
 ```bash
-python -m pytest                                       # 874 passed, 2 skipped
-python -m ruff check .                                 # All checks passed!
-python -m mypy app.py core api jobs storage.py modules  # Success: no issues found
+python -m pytest                                          # 900 passed, 2 skipped
+python -m ruff check .                                    # All checks passed!
+python -m mypy app.py core api jobs storage.py modules scripts  # Success: no issues found in 63 source files
+python scripts/check_env.py                               # 环境自检（只读）
 ```
 
 测试**从不**触碰仓库的 `results/`：`tests/conftest.py` 会把两个数据库、上传目录、
@@ -500,7 +517,7 @@ framework-main/
 │   └── run_local.ps1         # 本机联调版一键拉起 Web + worker
 │                             # （可选工具二进制请用安装脚本获取，不入库）
 │
-├── tests/                    # pytest（759 例）；conftest 把运行期目录全指向临时目录
+├── tests/                    # pytest（900 例）；conftest 把运行期目录全指向临时目录
 │   ├── unit/                 # 单元 + 真实子进程用例（runner 接口、并发、Diff、迁移…）
 │   ├── integration/          # API / 鉴权 / 导出契约 / 资产 API / 本地全链路 E2E
 │   │   └── test_m7_local_e2e.py   # 方案第 18 节：真实 httpx 打本地 fixture 走完全链路

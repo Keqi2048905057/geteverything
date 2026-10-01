@@ -725,12 +725,78 @@ Agent → agent/action.py
 > 「若某一步需要改变核心数据模型或执行架构，先停下来说明具体影响再继续」，
 > 阶段二开工前会先出影响说明。
 
+### M6（收尾）— 一键环境自检 `scripts/check_env.py`
+
+方案 M6 的最后一项。回答一个问题：**这台机器上，本机联调版能不能跑起来、能不能跑真任务？**
+
+命令：
+
+```powershell
+python scripts/check_env.py            # 人读报告
+python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
+python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 用）
+```
+
+**十四项检查，四类**：
+
+- **解释器与依赖**：Python 版本（<3.10 fail，≥3.13 warn —— 依赖清单按 3.11 钉版本）；
+  `requirement.txt` 逐项核对（缺失 = fail）；`requirement-dev.txt` 按 `>=` 判定
+  （缺失 = warn，只是跑不了测试）。
+- **运行期目录**：`results/`（工具产物与心跳）、`uploads/`、`exports/`、`backups/` 的权限。
+- **`.env` 与安全开关**：弱/缺失 `SECRET_KEY`（warn，会话重启即失效）、
+  空 `LOCAL_ADMIN_TOKEN`（warn）、`WEB_DEBUG=true`（**fail**，会暴露调试器）、
+  非回环 `WEB_HOST`（warn）、`GEF_ALLOW_REAL_SCAN`（warn，改为正向提示）。
+- **外部工具 / 数据库 / worker**：17 个工具在 PATH 上的可用数、两个 SQLite 库能否只读打开
+  （应用库还要核对 10 张关键表是否齐全）、worker 心跳（ok / stale / missing）与队列计数。
+
+**三条硬性质**（都有用例锁定，不是注释里的承诺）：
+
+1. **只读**：不写任何文件、不建库、不发网络请求、不执行任何扫描工具。用例用「目录逐条目
+   mtime + size 快照比对」验证；应用库不存在时只报 warn，并确认文件**真的没被创建**。
+   目录权限只用 `os.access` 判定，**刻意不写探针文件再删** —— 那会在仓库里留痕
+   （AGENTS.md 硬约束：脚本与测试不得污染 `results/`）。
+2. **不泄密**：报告里不得出现 `SECRET_KEY` / `LOCAL_ADMIN_TOKEN` 的值。用例塞哨兵串后
+   在**人读报告与 `--json` 两种输出**里各搜一遍，同时要求仍然报出「已配置」而不是装作看不见。
+3. **退出码语义**：`ok` → 0、`warn` → 1、`fail` → 2，`--strict` 把 warn 也当 2（CI 用）。
+   自检脚本的退出码错了，挂进 CI 等于没挂。
+
+**设计取舍**：
+
+- 版本比较自己实现 `_version_key`，**不引入 `packaging`** —— 它不在依赖清单里，
+  而这个脚本要能在「依赖还没装」时也跑得动。顺带避开 `"3.10" < "3.9"` 为真的字符串比较坑
+  （那会把合法的 Python 3.10 判成过旧），并处理 `2.0 == 2.0.0` 与 `1.0.0rc1 < 1.0.0`；
+  `==` / `>=` / `~=` 等规格用 `_satisfies` 判定，认不出的规格**不误报**。
+- 工具探测只用 `shutil.which`；用例把 `subprocess.run` / `Popen` / `check_output` 与
+  `os.system` 全换成会抛异常的桩，证明它**不会启动任何子进程**。
+- 每个 warn/fail 都必须带 `hint`（用例强制）：只说「有问题」不说「怎么办」的报告没人能用。
+
+**顺手改动**：
+
+- mypy 范围纳入 `scripts/`：`mypy app.py core api jobs storage.py modules scripts`
+  → **63** source files（61 → 63），仍 0 error。
+- `.github/workflows/ci.yml` 增加「环境自检冒烟」步骤：CI runner 上本来就没有 `.env`
+  与那 17 个 Go 工具，warn（退出码 1）是**预期**结果，因此只把退出码 2 当失败 ——
+  它证明的是「一台干净机器上也能跑完并给出可读结论」，而不是抛异常。
+- `tests/unit/test_observability.py` 的 `_PRINT_ALLOWLIST` 登记
+  `("scripts/check_env.py", "main")`：人读报告本就该走 stdout。
+- **测试加载该脚本时必须先注册进 `sys.modules`**：它用了
+  `from __future__ import annotations` + 冻结 dataclass，`dataclasses` 处理字符串注解时
+  会去 `sys.modules[cls.__module__]` 查名字字典，没注册就拿到 `None`，
+  直接 `AttributeError: 'NoneType' object has no attribute '__dict__'`。
+
+回归测试（+26，874 → 900）：`tests/unit/test_check_env.py` —— 版本比较与规格判定、
+退出码三态与 `--strict`、`--json` 可解析且字段齐全、哨兵串不进任何输出、
+`WEB_DEBUG`/非回环绑定的判定、四个目录「跑完一模一样」、库不存在时不建库、
+坏库与缺表分别报 fail、检查维度不可悄悄变少、warn/fail 必须带 hint、
+以及「探测过程不得启动子进程」。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 874 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 61 source files
+$ python -m pytest           # 900 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 63 source files
+$ python scripts/check_env.py   # 退出码 1（fail 0；warn 均为「本机确实没配 .env / worker 没在跑」）
 ```
 
 ### 已知仍未处理（不属 M0～M4 范围）

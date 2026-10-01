@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M5/M6/M7 剩余项待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · 已推送 origin/main · M5/M7 剩余项待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → P0-6 阶段二 + M5/M6/M7 剩余 ⬜**
-- 更新日期：2026-10-01（Diff 属性别名修复 + P0-6 阶段一轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → P0-6 阶段二 + M5/M7 剩余 ⬜**
+- 更新日期：2026-10-02（M6 环境自检脚本 + push 前安全审计与推送）
 
 ---
 
@@ -82,9 +82,11 @@
 
 **已完成的 M6 条目**
 - `scripts/run_local.ps1`（一键拉起 Web + worker，退出时收尾）
+- `scripts/check_env.py`（一键环境自检，**只读**；见下方专段）
 - `/health` 的完整字段（database / worker / queue / tools / modes / security）
 - `/api/export` 改为**下载链接**（登记 + `download_url`），不再是服务器路径
 - 导出记录（`exports` 表 + `GET /api/exports`）
+- 本机启动文档（`docs/DEPLOYMENT.md` + README 的「环境要求」「启动 Worker」两节）
 
 **P1 = M5 首批：统一资产模型与 Diff（本轮，方案第 8、9、10 节）**
 - `core/canonical.py`：`canonical_key` 规则（七种类型；host 小写/IDNA、CIDR `strict=False`、
@@ -258,6 +260,28 @@
   `tests/unit/test_agent_boundary.py` 需重写），按用户约束「需要改变核心数据模型或执行架构时
   先停下来说明影响」—— 阶段二开工前先出影响说明
 
+**M6 环境自检脚本（本轮，方案 M6 最后一项）**
+- 新增 `scripts/check_env.py`：回答「这台机器上本机联调版能不能跑」。十四项检查分四类
+  —— 解释器与依赖（`requirement.txt` 逐项核对、`requirement-dev.txt` 按 `>=` 判定）、
+  运行期目录权限、`.env` 与安全开关（弱 `SECRET_KEY`、空 `LOCAL_ADMIN_TOKEN`、
+  `WEB_DEBUG`、非回环 `WEB_HOST`、`GEF_ALLOW_REAL_SCAN`）、外部工具 / 两个 SQLite 库 /
+  worker 心跳与队列
+- **三条硬性质**（都有用例锁定，不是注释里的承诺）：
+  ① **只读** —— 不写任何文件、不建库（用「目录逐条目 mtime+size 快照比对」验证，
+  应用库不存在时只报 warn 且确认文件真没被创建）；② **不泄密** —— 报告里不得出现
+  `SECRET_KEY` / `LOCAL_ADMIN_TOKEN` 的值（用例塞哨兵串后在**人读报告与 JSON 两种输出**里搜）；
+  ③ **退出码语义** —— `ok` → 0 / `warn` → 1 / `fail` → 2，`--strict` 把 warn 也当 2（CI 用）
+- 设计取舍：目录权限只用 `os.access` 判定，**刻意不写探针文件再删**（那会在仓库里留痕）；
+  依赖版本比较自己实现 `_version_key`，不引入 `packaging`（它不在依赖清单里，
+  而这个脚本要能在「依赖还没装」时也跑得动）—— 顺带避开 `"3.10" < "3.9"` 为真的字符串比较坑；
+  工具探测只用 `shutil.which`，用例把 `subprocess.run/Popen/check_output` 与 `os.system`
+  全换成会抛异常的桩，证明它**不会启动任何子进程**
+- 顺手把 `scripts/` 纳入 mypy 范围（`mypy ... modules scripts`，61 → **63** source files）；
+  `.github/workflows/ci.yml` 增加一步「环境自检冒烟」—— CI runner 上 warn（退出码 1）
+  是**预期**结果，只把退出码 2 当失败，验的是「干净机器上也能跑完给结论」
+- 测试：`tests/unit/test_check_env.py` +26 → **900 passed / 2 skipped**；
+  `_PRINT_ALLOWLIST` 登记 `("scripts/check_env.py", "main")`（人读报告本就该走 stdout）
+
 ---
 
 ## 部分完成
@@ -267,8 +291,8 @@
 | **`mode=real` 真实链路** | ✅ **已有本地实证（本轮）**：`tests/integration/test_m7_local_e2e.py` 用**真实 httpx 子进程**打只绑 `127.0.0.1` 的 fixture 服务，一条用例走完 target → job → worker → runner → raw artifact → parser → observation → asset → diff → export（方案第 18 节）。此外 `tool_not_found` / `timeout` / `nonzero_exit` 等失败分类都有真实子进程用例 | 仍然**从未用真实工具打真实外部目标**（按硬约束刻意不做）—— 这是设计选择，不是缺口；CI 上若无 httpx 可执行文件，该用例会 `pytest.skip` |
 | **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库，**并已进资产页的观测时间线** | 资产页展示的是 `data_json` 原样 JSON，**没有按字段拆列**；任务详情页那一侧仍是原样 JSON |
 | **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
-| **M6 本机启动文档** | ✅ **已补齐**：`docs/DEPLOYMENT.md`（环境要求 / 安装 / `.env` 逐键说明 / 启动 Web 与 worker / 测试三条基线 / 故障排查），`README.md` 也补了「环境要求」与「启动 Worker」两节 | 仍缺 `scripts/check_env.py`（一键体检脚本） |
-| **M7 mypy** | ✅ **已完成**：`mypy app.py core api jobs storage.py modules` → `Success: no issues found in 61 source files`（新增 `core/application.py` 后 +1） | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
+| **M6 本机启动文档** | ✅ **已补齐**：`docs/DEPLOYMENT.md`（环境要求 / 安装 / `.env` 逐键说明 / 启动 Web 与 worker / 测试三条基线 / 故障排查），`README.md` 也补了「环境要求」与「启动 Worker」两节 | 已附 `scripts/check_env.py`（一键体检），见「已完成」专段 |
+| **M7 mypy** | ✅ **已完成**：`mypy app.py core api jobs storage.py modules scripts` → `Success: no issues found in 63 source files`（本轮把 `scripts/` 纳入范围，+2） | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
 | **P1 Diff 的前端** | ✅ **已完成**：`/assets` 页底部有「两次任务对比」表单（基线与对比任务下拉、可选限定范围、「含未变」开关），四类分段渲染 + 属性差异（`status_code: 200 → 403`）；**清单条目可点进资产详情**（带 `asset_id` 的条目可点，详情面板会滚入视口） | — |
 | **P1 资产过期** | `mark_stale_assets(scope_id, last_seen_before=...)` 已实现且有用例 | **没有任何计划任务/接口调用它**，所以 `stale` / `gone` 目前永远是空的 |
 | **P1 §19 Observability** | ✅ **基础版已完成（本轮）**：结构化单行 JSON 事件 + 四个关联 ID（`request_id` / `job_id` / `step_id` / `worker_id`，contextvars 绑定）+ 脱敏与容器上限 + 三条源码守卫；`GEF_LOG_LEVEL` / `GEF_LOG_FORMAT` 可配 | 仍属**基础版**：日志只写 stderr，**无文件输出与轮转**；**无 metrics / trace**；`configure_logging()` 只在两个进程入口调用，所以 `waitress-serve app:app` 这类外部启动方式不出结构化日志（在 `create_app()` 里配置会关掉 `propagate`、弄坏 pytest 的 `caplog`）；`request_id` 不跨进程（worker 是独立进程，跨进程串联要靠 `job_id`）；`/api/settings` 页未暴露日志级别开关 |
@@ -297,11 +321,11 @@
 - [x] `scripts/run_local.ps1`
 - [x] `/api/export` 改为直接下载（`export_id` + `download_url`，不再返回路径）
 - [x] 导出记录（`exports` 表 + `GET /api/exports`）
-- [ ] `scripts/check_env.py`
+- [x] `scripts/check_env.py`（一键环境自检，只读；`--json` / `--strict`；+26 用例）
 - [x] 本机启动文档（`docs/DEPLOYMENT.md` + README 的「环境要求」「启动 Worker」两节）
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（874 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（900 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [x] SQLite 并发测试（`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
 - [x] **本地 fixture HTTP 测试**（`tests/fixtures/local_http_server.py` + `tests/integration/test_m7_local_e2e.py`，
@@ -433,19 +457,20 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-01（Diff 属性别名修复 + P0-6 阶段一轮）
+验证时间：2026-10-02（M6 环境自检脚本 + push 前安全审计与推送）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 874 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
-mypy:   Success: no issues found in 61 source files        ← M7 验收命令，仍为 0
+pytest: 900 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+mypy:   Success: no issues found in 63 source files        ← 本轮把 scripts/ 纳入范围（61 → 63）
+python scripts/check_env.py: 退出码 1（fail 0；warn 均为「本机确实没配 .env / worker 没在跑」）
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
 实机冒烟：python app.py 起 waitress，GET /health 回 200 且响应头带 X-Request-Id；
         stderr 输出结构化 JSON 事件（含 request_id / path / status / duration_ms）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → **P0-6 阶段一（Application Service 入口收拢）`874`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → **M6 环境自检 `900`**
 
 ---
 
@@ -456,25 +481,25 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-6843c5b   ← 最近一次代码提交（P0-6 阶段一：Application Service 入口收拢）
-6843c5b  refactor(p0-6): 收拢 Application Service 入口——任务创建编排只留一处 (2026-10-01)
+e19c5d5   ← 最近一次代码提交（M6 环境自检脚本）
+e19c5d5  feat: M6 环境自检脚本 scripts/check_env.py（只读 / 不泄密 / 退出码可用） (2026-10-02)
 ```
 
 自检：
 
 ```powershell
 git log -1 --format="%H %s"     # 以这条输出为准
-git status -sb                  # ## main...origin/main [ahead N] = 本地已提交、尚未 push
+git status -sb                  # ## main...origin/main = 与远端同步（本地无未推送提交）
 ```
 
-与 `origin/main` **不同步**：本地领先（`git status -sb` 会显示 `[ahead N]`，N 含本文件自身的提交，
-所以这里不写死数字）。M0～M4 之后的全部里程碑提交都还在本地。
-**本轮用户已在弹窗中选定「先做 push 前安全审计，再 push」**（见 `docs/DECISIONS.md` §3.2），
-因此推送前必须先产出安全审计结论，不再是无条件不推。
-下表是**除本文件提交之外**的全部 20 个提交：
+与 `origin/main` **已同步**：本轮按用户选定的「先做 push 前安全审计，再 push」
+（见 `docs/DECISIONS.md` §3.3）完成审计并推送，24 个提交快进到 `40c5771`；
+此后只有本轮的 M6 提交（`e19c5d5`）与更新本文件的提交可能尚未推送。
+下表是**除本文件提交之外**的全部 21 个提交：
 
 | 提交 | 说明 |
 |---|---|
+| `e19c5d5` | feat: M6 环境自检脚本 scripts/check_env.py（只读 / 不泄密 / 退出码可用） |
 | `6843c5b` | refactor(p0-6): 收拢 Application Service 入口——任务创建编排只留一处 |
 | `0c48e25` | fix: Diff 属性别名归一——httpx 真实键名 webserver/tech 此前从不参与比较 |
 | `98ea46f` | fix: GET /api/export?format=xlsx 500→400 + P1 §14 文档三件套与文档脱节修正 |
@@ -513,9 +538,9 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
    `tests/unit/test_agent_boundary.py` 需重写。这是「权限边界移动」，是本项真正的验收点。
 4. **M5 剩余**（§11 统一执行链需授权，见 `docs/DECISIONS.md` §3）：资产过期自动化、
    观测 `data_json` 按字段拆列、旧库真实迁移（等你手动 `--apply`）。
-5. **M6 剩余**（纯白名单内，不需要决策）：`scripts/check_env.py`
-   （本机启动文档已由 `docs/DEPLOYMENT.md` 补上）。
-6. **M7 只剩「一份测试报告」**：现有 `874` 项用例已可由 pytest 直接产出，
+5. **M6 已完成**（含 `scripts/check_env.py`，见「已完成」专段）。若还想加固，
+   下一格是「导出记录的清理策略」——`exports/` 与 `exports` 表都只增不减。
+6. **M7 只剩「一份测试报告」**：现有 `900` 项用例已可由 pytest 直接产出，
    报告要写的是「测了什么、没测什么、为什么」。
 7. **顺手可做（不需要决策）**：
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
@@ -529,9 +554,10 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
 cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
-python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 874 passed, 2 skipped
-python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
+python -m ruff check .                                  # 期望 All checks passed!
+python -m pytest                                        # 期望 900 passed, 2 skipped
+python -m mypy app.py core api jobs storage.py modules scripts  # 期望 Success: no issues found in 63 source files
+python scripts/check_env.py                             # 期望退出码 0/1（未配 .env 时为 1），fail 项为 0
 ```
 
 **运行期产物隔离（重要）**：测试**从不**写仓库的 `results/`。`tests/conftest.py` 会 patch

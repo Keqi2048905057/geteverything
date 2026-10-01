@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）（2026-10-01）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -639,6 +639,11 @@ get_everything_framework/
 │   ├── observability.py      P1 §19：**唯一日志出口**——一行一个 JSON 事件 + 四个关联 ID（request_id/job_id/step_id/worker_id，contextvars 绑定）+ 脱敏与容器上限
 │   ├── application.py        P0-6 阶段一：**Application Service 层**——create_scan_job() 是创建扫描任务的唯一编排入口（解析目标 → 查重 → 限流 → Policy → 模式 → 落库 → 审计 → 结构化日志），HTTP 视图 / 首页表单 / 以后的 Agent 共用
 │   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复
+├── scripts/                  ← 运维脚本（不在包里，靠 sys.path 前插项目根自举）
+│   ├── run_local.ps1         一键拉起 Web + worker（退出时收尾）
+│   ├── migrate_legacy_results.py  P1 §12：旧库 → 新库迁移，**默认 dry-run**，`--apply` 才写
+│   ├── check_env.py          M6：一键环境自检（**只读**，见 §9.20）
+│   └── install_windows.ps1 / install_linux.sh  依赖与 Go 工具安装（可能联网）
 ├── jobs/                     ← 进程层（刻意不放进 core/）
 │   ├── executor.py           执行逻辑（与进程无关，可直接单测调用）
 │   └── worker.py             独立 worker 进程：python -m jobs.worker
@@ -801,12 +806,13 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 874 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 61 source files
+$ python -m pytest           # 900 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 63 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
+$ python scripts/check_env.py      # 退出码 0/1/2；只读，不建库、不执行任何扫描（见 §9.20）
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → **P0-6 阶段一（Application Service 入口收拢）`874`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → **M6 环境自检脚本 `900`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -1938,4 +1944,84 @@ Application Service → Job 链，**不是换个函数调用**，而是：
 逐条覆盖历史口径（参数缺失 / 未知工具 / 越界目标 / 超限 / 非法幂等键 /
 非法 `scenario` / real 模式双开关 / 幂等命中 `reused` / 上传目标同样过 Scope /
 `upload_id` 任意路径被拒 / 结构化日志确实打出 `job_created`）。
+
+### 9.20 M6：一键环境自检 `scripts/check_env.py`
+
+#### 9.20.1 它回答什么问题
+
+「**这台机器上，本机联调版能不能跑起来、能不能跑真任务？**」
+
+十四项检查分四类。这个分类本身就是排障顺序：先看解释器与依赖（起不来最常见的原因），
+再看目录权限与 `.env`，最后才是外部工具 / 数据库 / worker。
+
+| 类 | 检查项 | 判定 |
+|---|---|---|
+| 解释器与依赖 | Python 版本 | `<3.10` → fail；`>=3.13` → warn（依赖清单按 3.11 钉版本，新解释器未必有轮子） |
+| | `requirement.txt` 27 项 | 逐项 `==` 核对；缺失 → **fail**（起不来） |
+| | `requirement-dev.txt` 3 项 | 按 `>=` 判定；缺失 → warn（只是跑不了测试） |
+| 运行期目录 | `results/` `uploads/` `exports/` `backups/` | 目录不存在不算错（按需创建），改为检查项目根可写 |
+| `.env` 与安全 | `.env` 是否存在 | 不存在 → warn（会用全默认值） |
+| | `SECRET_KEY` | 弱/缺失 → warn（进程级一次性密钥，重启后会话全失效） |
+| | `LOCAL_ADMIN_TOKEN` | 空 → warn（启动打印临时凭据） |
+| | `WEB_DEBUG` | `true` → **fail**（会暴露调试器） |
+| | `WEB_HOST` | 非 `127.0.0.1`/`localhost`/`::1` → warn |
+| | `GEF_ALLOW_REAL_SCAN` | 开启 → warn（正向提示：真的会调外部工具） |
+| 运行时 | 17 个外部工具 | `shutil.which` 探测；0 个可用 → warn（mock 不受影响） |
+| | 旧结果库 | 不存在 → warn（正常）；存在但打不开 → fail |
+| | 本机应用库 | 不存在 → warn 且**不建库**；缺 10 张关键表之一 → fail |
+| | worker 心跳 / 队列 | `ok` / `stale` / `missing`；队列只给计数 |
+
+#### 9.20.2 三条硬性质（都有用例锁定，不是注释里的承诺）
+
+1. **只读** —— 不写任何文件、不建库、不发网络请求、不执行任何扫描工具。
+   用例用「目录逐条目 `mtime_ns` + `size` 快照比对」验证；应用库不存在时只报 warn，
+   并确认文件**真的没被创建出来**。目录权限只用 `os.access` 判定，
+   **刻意不写探针文件再删** —— 那会在仓库里留痕（AGENTS.md 硬约束）。
+2. **不泄密** —— 报告里不得出现 `SECRET_KEY` / `LOCAL_ADMIN_TOKEN` 的值。
+   用例塞哨兵串后在**人读报告与 `--json` 两种输出**里各搜一遍，
+   同时要求仍然报出「已配置」，而不是装作看不见这两个键。
+3. **退出码语义** —— `ok` → 0、`warn` → 1、`fail` → 2，`--strict` 把 warn 也当 2（CI 用）。
+   自检脚本的退出码错了，挂进 CI 等于没挂。
+
+#### 9.20.3 三个值得记住的实现决定
+
+* **不引入 `packaging`**。它不在依赖清单里，而这个脚本恰恰要能在「依赖还没装」时跑得动。
+  代价是自己实现 `_version_key` / `_satisfies` —— 但顺手避开了
+  `"3.10" < "3.9"` 为真的字符串比较坑（那会把合法的 Python 3.10 判成过旧），
+  并处理 `2.0 == 2.0.0` 与 `1.0.0rc1 < 1.0.0`；认不出的规格**不误报**。
+* **不用子进程探测工具**。只看 `shutil.which`；用例把
+  `subprocess.run` / `Popen` / `check_output` 与 `os.system` 全换成会抛异常的桩，
+  证明它不会启动任何进程（详见下面第 5 条高频坑：探测命令本身就是一次执行）。
+* **warn/fail 必须带 `hint`**（用例强制遍历）：只说「有问题」不说「怎么办」的报告没人能用。
+
+#### 9.20.4 测试加载它时的坑（`sys.modules` 必须先注册）
+
+`tests/unit/test_check_env.py` 用 `importlib.util.spec_from_file_location` 加载脚本
+（`scripts/` 不是包），**必须先 `sys.modules["gef_check_env"] = module` 再 `exec_module`**。
+
+原因：脚本用了 `from __future__ import annotations` + 冻结 `@dataclass`。
+`dataclasses` 处理字符串注解时会去 `sys.modules[cls.__module__]` 里取该模块的名字字典，
+取到 `None` 就直接 `AttributeError: 'NoneType' object has no attribute '__dict__'`。
+这个报错完全不提 dataclass，第一眼会让人以为是脚本本身写错了。
+
+#### 9.20.5 CI 里的定位：warn 是预期结果
+
+`.github/workflows/ci.yml` 增加了一步「环境自检冒烟」，但**只把退出码 2 当失败**：
+
+```yaml
+run: python -c "import subprocess,sys; r=subprocess.run([sys.executable,'scripts/check_env.py']); sys.exit(0 if r.returncode <= 1 else 1)"
+```
+
+CI runner 上本来就没有 `.env`、也没有那 17 个 Go 工具，warn（退出码 1）才是正常的。
+这一步要证明的不是「环境是好的」，而是「**一台干净机器上也能跑完并给出可读结论**」。
+
+#### 9.20.6 回归测试（+26，874 → 900）
+
+`tests/unit/test_check_env.py`：版本比较与规格判定（参数化）、退出码三态与 `--strict`、
+`--json` 可解析且字段齐全、哨兵串不进任何输出、`WEB_DEBUG` 与非回环绑定的判定、
+四个目录「跑完一模一样」、库不存在时不建库、坏库与缺表分别报 fail、
+检查维度不可悄悄变少、warn/fail 必须带 hint、探测过程不得启动子进程。
+
+> **本轮的 mypy 范围变化**：`mypy ... modules scripts`（61 → **63** source files）。
+> `scripts/` 里的三个 `.py` 原先完全不在类型检查范围内。
 
