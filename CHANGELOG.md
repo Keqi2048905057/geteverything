@@ -859,6 +859,35 @@ python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 
 **未动**：任何业务逻辑、Scope/Policy/审计/认证、数据库结构。
 `app_module` 与 `local_db` 的既有 patch 原样保留（与 autouse 夹具叠加安全）。
 
+### P0-6（阶段二）前置件 — Agent 同步 → 异步影响说明
+
+**本轮零代码改动**，只新增一份评估文档 [`docs/AGENT_ASYNC_IMPACT.md`](docs/AGENT_ASYNC_IMPACT.md)。
+依据：用户授权 P0-6 时的约束「**若某一步需要改变核心数据模型或执行架构，
+先停下来说明具体影响再继续**」（`docs/DECISIONS.md` §3.2）。
+
+**最重要的一个减负结论**：六个 handler 里只有 **2 个**是方案第 6 节说的
+「实际扫描动作」（`subdomain` / `httpx`）；`summary` / `view_results` / `alive_results`
+是只读查询、`export_results` 是导出登记，都不产生执行权，**不在方案第 6 节验收范围内**。
+迁移面因此从 6 个收窄到 2 个。
+
+**顺带查实的一处现存越权通道**（这是本次评估里最值得注意的发现）：
+`tool_runner.py` 与 `modules/httpx.py` 全文**没有任何 `resolve_mode` /
+`real_scan_enabled` / Scope 引用**（实测 grep 零命中）。这意味着 **Agent 这条路
+不需要 `GEF_ALLOW_REAL_SCAN=true`、也不需要 Scope，就能真实外发扫描请求**；
+而主链 `POST /api/jobs` 与首页都要过「环境开关 + `scope.require_active_scan()`」双重门槛。
+所以 P0-6 阶段二的收益不只是「可审计」，它把一条**实际存在的越权通道**收回同一道门。
+（按硬约束本项目从未用 Agent 打过真实外部目标，这是修潜在缺口，不是事故复盘。）
+
+文档其余内容：九条逐项影响（I-1～I-9，含「上传目标上限从无限制收窄到 20」
+「httpx 的 direct_domain / stored_subdomains 回退 / tech_detect 三条能力传不进 Job 链」
+「`scope_id` 必须贯穿三层，Agent 全包当前零 Scope 概念」）；五个必改文件与预估；
+`test_agent_boundary.py` 的 6 处 patch 目标逐条处置（含建议删掉已失去被测对象的
+`test_agent_httpx_returns_metadata_items`）；三条缺失能力的补救选项 A/B/C；
+以及唯一一个**需要用户拍板**的问题——Agent 的只读 handler 是否同轮改读新库。
+
+**未动任何代码**：`agent/action.py` 994 行原样未改，`docs/DECISIONS.md` 未改
+（授权口径无需变更，仍是「先出影响说明」这一步）。
+
 ### 测试与验收基线
 
 ```text

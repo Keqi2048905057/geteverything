@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md`（2026-10-01）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md`（2026-10-01）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -1925,6 +1925,11 @@ Agent → agent/action.py:_tool_subdomain / _tool_httpx
 
 #### 9.19.5 阶段二（未做）的影响说明
 
+> **完整版已单独成文**：[`docs/AGENT_ASYNC_IMPACT.md`](AGENT_ASYNC_IMPACT.md)
+> ——九条影响（I-1～I-9）、必改代码清单、测试同轮改法、三条缺失能力的补救选项、
+> 以及唯一一个需要用户拍板的问题（Agent 只读 handler 是否同轮改读新库）。
+> 下面保留压缩版。
+
 `agent/action.py` 仍在直接调 `run_tools` / `HttpxRunner.run_scan`。把它接到
 Application Service → Job 链，**不是换个函数调用**，而是：
 
@@ -1934,6 +1939,16 @@ Application Service → Job 链，**不是换个函数调用**，而是：
 * `tests/unit/test_agent_boundary.py` 现在 monkeypatch `agent.action.run_tools` /
   `agent.action.HttpxRunner` 来断言「被拒绝时两者都没被调用」——
   目标达成后这两个符号不该再存在于 `agent/action.py`，该文件需按新边界重写。
+
+**六个 handler 里只有 2 个是「实际扫描动作」**（`subdomain` / `httpx`），
+`summary` / `view_results` / `alive_results` 是只读查询、`export_results` 是导出登记，
+都不产生「执行权」，**不在方案第 6 节的验收范围内** —— 这把迁移面从 6 个收窄到 2 个。
+
+**顺带查实的一处现存越权通道**：`tool_runner.py` 与 `modules/httpx.py` 全文
+**没有任何 `resolve_mode` / `real_scan_enabled` / Scope 引用**（实测 grep 零命中），
+所以 Agent 这条路**不需要 `GEF_ALLOW_REAL_SCAN=true`、也不需要 Scope 就能真实外发扫描**，
+而主链 `POST /api/jobs` 与首页要过「环境开关 + `scope.require_active_scan()`」双重门槛。
+这才是用户定的验收点「**权限边界移动了**」的实质内容（详见影响说明 I-5）。
 
 按用户约束「**若某一步需要改变核心数据模型或执行架构，先停下来说明具体影响再继续**」，
 以上影响须先经确认，阶段二才开工。

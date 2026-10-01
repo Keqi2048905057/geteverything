@@ -3,6 +3,9 @@
 > 完整地图：`docs/CODEBASE_MAP.md`（2100+ 行，含 29 条「症状 → 排查位置」索引表）
 > 测试全景：`docs/TEST_REPORT.md`（测了什么 / 没测什么 / 为什么没测；含「已验证」与
 > 「仅代码审查、尚未实测」的分界，以及三条可复现的覆盖缺口证据）
+> Agent 改造影响：`docs/AGENT_ASYNC_IMPACT.md`（P0-6 阶段二前置件，未开工；
+> 含六个 handler 里只有两个是「实际扫描动作」的分类，以及 Agent 当前绕过
+> `GEF_ALLOW_REAL_SCAN` 与 Scope 的实测证据）
 > 配套技能：`.dsh/skills/codebase-map/`、`.dsh/skills/bug-triage/`。这两个是标准 `SKILL.md` 目录 bundle，但本 profile 里 `@deepseek-ai/dsh-skill-filesystem` 与 `@deepseek-ai/dsh-tool-skill` 处于停用状态，需在「设置 → 插件」启用后才会出现在技能目录中；在此之前直接读这两个目录下的 Markdown 即可，内容自足。
 
 ## 修任何 bug 之前

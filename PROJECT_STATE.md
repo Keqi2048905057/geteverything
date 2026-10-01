@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 已推送 origin/main · M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 本地领先 origin/main 4 个提交（纯快进，待确认后推送）· M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ P0-6 阶段二 + M5 剩余 ⬜**
-- 更新日期：2026-10-01（M7 测试报告；同轮 M6 环境自检脚本 + push 前安全审计与推送按 `2026-10-02` 记）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ P0-6 阶段二 + M5 剩余 ⬜**
+- 更新日期：2026-10-01（M7 测试报告 + 测试隔离修复 + P0-6 阶段二影响说明；同轮 M6 环境自检脚本 + push 前安全审计与推送按 `2026-10-02` 记）
 
 ---
 
@@ -314,6 +314,23 @@
   新增回归锁 `test_repo_layout.py::test_autouse_fixture_redirects_every_runtime_path`。
   验证方式是全量跑完后 `results/`(5) / `exports/`(81) / `uploads/`(3) 逐文件哈希完全不变
 
+**P0-6 阶段二前置件 — Agent 同步 → 异步影响说明（本轮）**
+- 新增 [`docs/AGENT_ASYNC_IMPACT.md`](docs/AGENT_ASYNC_IMPACT.md)，**零代码改动**。
+  依据是用户授权 P0-6 时定的约束「若某一步需要改变核心数据模型或执行架构，
+  先停下来说明具体影响再继续」（`docs/DECISIONS.md` §3.2）
+- **最重要的减负结论**：`agent/action.py` 的六个 handler 里只有 **2 个**是方案第 6 节
+  说的「实际扫描动作」（`subdomain` / `httpx`）；`summary` / `view_results` /
+  `alive_results` 是只读查询、`export_results` 是导出登记，都不产生执行权，
+  **不在方案第 6 节验收范围内** —— 迁移面从 6 个收窄到 2 个
+- **顺带查实一处现存越权通道**：`tool_runner.py` 与 `modules/httpx.py` 全文
+  **没有任何 `resolve_mode` / `real_scan_enabled` / Scope 引用**（实测 grep 零命中）。
+  即 **Agent 不需要 `GEF_ALLOW_REAL_SCAN=true`、也不需要 Scope 就能真实外发扫描**，
+  而主链 `POST /api/jobs` 与首页要过「环境开关 + `scope.require_active_scan()`」双重门槛。
+  这才是用户定的验收点「**权限边界移动了**」的实质内容（按硬约束从未用 Agent 打过真实目标）
+- 文档另含：九条逐项影响（I-1～I-9）、5 个必改文件与预估、`test_agent_boundary.py`
+  6 处 patch 目标的逐条处置、三条缺失能力的 A/B/C 补救选项、
+  以及**唯一一个待用户拍板**的问题（Agent 只读 handler 是否同轮改读新库）
+
 ---
 
 ## 部分完成
@@ -490,7 +507,8 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-01（M7 测试报告；同轮的 M6 环境自检按 2026-10-02 记）
+验证时间：2026-10-01（M7 测试报告 + 测试隔离修复 + P0-6 阶段二影响说明；
+        同轮的 M6 环境自检与 push 前安全审计按 2026-10-02 记）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
@@ -514,24 +532,31 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-e19c5d5   ← 最近一次代码提交（M6 环境自检脚本）
-e19c5d5  feat: M6 环境自检脚本 scripts/check_env.py（只读 / 不泄密 / 退出码可用） (2026-10-02)
+00e2216   ← 最近一次提交（M7 测试报告 + 全量基线同步 900 → 901）
+4712ad9  fix(tests): 测试运行期目录隔离——autouse 夹具 + GEF_OUTPUT_DIR 出口 + 回归锁
+00e2216  docs: M7 测试报告 docs/TEST_REPORT.md + 全量基线同步 900 → 901 (2026-10-01)
 ```
 
 自检：
 
 ```powershell
 git log -1 --format="%H %s"     # 以这条输出为准
-git status -sb                  # ## main...origin/main = 与远端同步（本地无未推送提交）
+git status -sb                  # ## main...origin/main [ahead 4] = 有 4 个提交待推送（纯快进）
 ```
 
-与 `origin/main` **已同步**：本轮按用户选定的「先做 push 前安全审计，再 push」
-（见 `docs/DECISIONS.md` §3.3）完成审计并推送，24 个提交快进到 `40c5771`；
-此后只有本轮的 M6 提交（`e19c5d5`）与更新本文件的提交可能尚未推送。
-下表是**除本文件提交之外**的全部 21 个提交：
+与 `origin/main` 的关系：本轮之前已按用户选定的「先做 push 前安全审计，再 push」
+（见 `docs/DECISIONS.md` §3.3）完成过一次审计并推送，24 个提交快进到 `40c5771`。
+**此后新增 4 个提交尚未推送**（`e19c5d5` M6 环境自检、`32a2774` M6 文档同步、
+`4712ad9` 测试隔离修复、`00e2216` M7 测试报告 + 基线同步），
+`git rev-list --left-right --count origin/main...HEAD` 为 `0 4` —— **纯快进，无需 force**。
+按用户偏好「提交可做但不做 push，需等确认」，**推送前请再确认一次**。
+下表是**除本文件提交之外**的全部 23 个提交：
 
 | 提交 | 说明 |
 |---|---|
+| `00e2216` | docs: M7 测试报告 docs/TEST_REPORT.md + 全量基线同步 900 → 901 |
+| `4712ad9` | fix(tests): 测试运行期目录隔离——autouse 夹具 + GEF_OUTPUT_DIR 出口 + 回归锁 |
+| `32a2774` | docs: 同步 M6 环境自检脚本 + 推送前安全审计结论 |
 | `e19c5d5` | feat: M6 环境自检脚本 scripts/check_env.py（只读 / 不泄密 / 退出码可用） |
 | `6843c5b` | refactor(p0-6): 收拢 Application Service 入口——任务创建编排只留一处 |
 | `0c48e25` | fix: Diff 属性别名归一——httpx 真实键名 webserver/tech 此前从不参与比较 |
@@ -567,8 +592,14 @@ git status -sb                  # ## main...origin/main = 与远端同步（本�
    因此**当前阶段没有新的「方案内大项」可推**，剩下的是收尾与加固。
 3. **P0-6 阶段二**（用户本轮已授权，见 `docs/DECISIONS.md` §3.2）：`agent/action.py`
    改走 Application Service → Job 链，让 Agent 只产出计划、执行一律经 Job/Policy。
-   **开工前先出影响说明**：Agent 执行会**异步化**（回复给 `job_id` 而非内联结果），
-   `tests/unit/test_agent_boundary.py` 需重写。这是「权限边界移动」，是本项真正的验收点。
+   **开工前的影响说明已单独成文 ✅**：[`docs/AGENT_ASYNC_IMPACT.md`](docs/AGENT_ASYNC_IMPACT.md)
+   —— 九条影响（I-1～I-9）、五个必改文件、`test_agent_boundary.py` 逐条用例的处置、
+   三条缺失能力的补救选项。**现在卡在文末那一个待拍板问题**：
+   Agent 的只读 handler（`summary` / `view_results` / `alive_results`）是否同轮改读新库
+   （不改 → 出现「Agent 查不到自己刚提交的任务结果」的中间态）。
+   **这是「权限边界移动」，是本项真正的验收点。**
+   顺带查实（影响说明 I-5）：`tool_runner.py` 与 `modules/httpx.py` 全文没有
+   `resolve_mode` / Scope 引用，**Agent 当前绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope 就能真扫**。
 4. **M5 剩余**（§11 统一执行链需授权，见 `docs/DECISIONS.md` §3）：资产过期自动化、
    观测 `data_json` 按字段拆列、旧库真实迁移（等你手动 `--apply`）。
 5. **M6 已完成**（含 `scripts/check_env.py`，见「已完成」专段）。若还想加固，
