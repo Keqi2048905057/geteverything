@@ -48,9 +48,16 @@ jobs:
       - name: 运行测试
         run: pytest -q
 
+      - name: 环境自检冒烟
+        # 这一步不是为了「环境必须是好的」—— CI runner 本来就没有 .env、也没有那 17 个
+        # Go 工具，warn（退出码 1）是预期结果。它要证明的是：自检脚本在一台**干净机器**上
+        # 也能跑完并给出可读结论，而不是抛异常或需要人先配好环境才能用。
+        # 因此只把「阻塞项」（退出码 2）当失败。
+        run: python -c "import subprocess,sys; r=subprocess.run([sys.executable,'scripts/check_env.py']); sys.exit(0 if r.returncode <= 1 else 1)"
+
       - name: 类型检查
         # 只在 ubuntu 上跑一次：mypy 结果与平台无关，Windows 再跑一遍纯属浪费配额。
         # 范围与本地验收命令一致（方案第 17 节）；agent/providers/* 不在范围内，
         # 原因见 docs/CODEBASE_MAP.md §9.13 末。
         if: matrix.os == 'ubuntu-latest'
-        run: mypy app.py core api jobs storage.py modules
+        run: mypy app.py core api jobs storage.py modules scripts

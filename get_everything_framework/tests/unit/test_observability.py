@@ -344,6 +344,7 @@ _PRINT_ALLOWLIST = {
     ("modules/shuffledns.py", "_run_dnsx"),
     ("modules/shuffledns.py", "run_scan"),
     ("scripts/migrate_legacy_results.py", "main"),  # stdout 被测试契约观察
+    ("scripts/check_env.py", "main"),  # 环境自检：报告本身就是要给人看的 stdout
     ("tool_runner.py", "run_tools"),  # 旧同步执行链的进度输出
 }
 
