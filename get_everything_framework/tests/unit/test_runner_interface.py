@@ -110,13 +110,29 @@ def test_run_builds_observations(output_dir):
 
 
 def test_run_command_preview_is_redacted(output_dir):
+    """命令预览必须对敏感参数值脱敏（方案第 8.2 节）。
+
+    这里只断言**脱敏形状**与**原值不出现**，刻意不检查路径片段是否出现在
+    预览里：``command_preview`` 有 300 字符上限（``MAX_COMMAND_PREVIEW``），
+    而 ``tmp_path`` 的长度随平台与 CI 变化 —— 本机短 ``%TEMP%`` 下
+    ``...\\pytest-1\\<case>0\\results\\m4_...`` 还在窗口内，GitHub Actions 的
+    ``runneradmin`` / ``D:\\a\\...`` 工作目录更长，截断点就落到了 ``results``
+    之前。那是长度策略的正常结果，不是脱敏缺陷。
+
+    「长目录名不会被兜底规则误打码」这条语义由 ``test_runner_result.py`` 的
+    ``test_scrub_command_keeps_windows_paths_intact`` /
+    ``test_scrub_command_keeps_posix_paths_intact`` 在不截断的前提下覆盖。
+    """
     runner = _PythonToolRunner(_WRITE_TWO_LINES, config={"extra_args": ["-api-key", "SECRETVALUE1234"]})
     result = runner.run("example.test")
     preview = result.command_preview or ""
+
     assert "SECRETVALUE1234" not in preview
-    assert "***" in preview
-    # 长目录名不能被误打码，否则预览失去排查价值。
-    assert "results" in preview
+    # 打码的是 ``-api-key`` 的**值**，参数名本身必须保留 —— 否则预览失去排查价值
+    # （看不出命令到底用了哪个参数）。
+    assert "-api-key ***" in preview
+    # 全串只有这一处打码：路径等非敏感内容没有被长 token 兜底规则误伤。
+    assert preview.count("***") == 1
 
 
 # ── 跑通但零结果（M4 最关键的一条） ────────────────────────
