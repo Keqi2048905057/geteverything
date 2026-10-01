@@ -497,3 +497,6 @@ $ python -m mypy app.py core api jobs storage.py modules   # Success: no issues 
   旧库历史数据已有迁移脚本但**未执行真实迁移**（DECISIONS-F：等用户手动 `--apply`；
   且本机旧库当前 17 张表全为 0 行）；`mark_stale_assets()` 已就绪但**还没有任何计划任务调用它**；
   观测的 `data_json` 在页面上仍按原样 JSON 渲染，没有按字段拆列。
+- **`GET /api/export` 读的是旧库（`ScanResultStore`），不是资产模型**：因此导出的是上游候选的
+  原始字面值（如 `127.0.0.1:8080/path`），而不是归一化后的 `http://…` URL。这是现状、已被
+  `tests/integration/test_m7_local_e2e.py` 写成断言钉住；要不要合流同样属方案第 11 节。

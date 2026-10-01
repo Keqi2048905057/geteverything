@@ -223,20 +223,21 @@
 ## Known Existing Failures
 
 > 这些是**已知且当前存在**的问题，不是「待办想法」。审查时不要重复报为新发现。
-> **已修掉 3 条**（原 #1、#2、#7），保留编号以便对照历史报告。
+> **已修掉 4 条**（原 #1、#2、#7，以及新增的 #11），保留编号以便对照历史报告。
 
 | # | 症状 | 位置 | 影响 |
 |---|---|---|---|
-| 1 | ~~`mypy` 报 34 个错误~~ **本轮已清零** | 曾分布于 `agent/action.py`(20)、`modules/base.py`(5)、`jobs/executor.py`(2)、`api/scan.py`(2)、`modules/httpx.py`(2)、`config.py`(1)、`core/jobs.py`(1)、`modules/shuffledns.py`(1) | 已全部修掉，**未改 mypy 配置**；详见 CHANGELOG「M7」一节 |
-| 2 | ~~`/api/export` 返回服务器文件路径~~ **本轮已修** | `api/results.py` + `core/exports.py` | 现在只返回 `export_id` / `filename` / `download_url`；有契约测试锁定 |
+| 1 | ~~`mypy` 报 34 个错误~~ **已清零** | 曾分布于 `agent/action.py`(20)、`modules/base.py`(5)、`jobs/executor.py`(2)、`api/scan.py`(2)、`modules/httpx.py`(2)、`config.py`(1)、`core/jobs.py`(1)、`modules/shuffledns.py`(1) | 已全部修掉，**未改 mypy 配置**；详见 CHANGELOG「M7」一节 |
+| 2 | ~~`/api/export` 返回服务器文件路径~~ **已修** | `api/results.py` + `core/exports.py` | 现在只返回 `export_id` / `filename` / `download_url`；有契约测试锁定 |
 | 3 | `/api/tools`、`/api/databases`、`/api/results`、`/api/export`、`/api/exports` 匿名可读 | `api/tools.py`、`api/results.py` | 未授权即可读到扫描结果与库元信息；**按 DECISIONS-D 故意保持**，已用 `test_api_auth_contract.py` 锁定现状 |
 | 4 | 旧库并发写 `database is locked` | `storage.py` | **已缓解**：连接级 `busy_timeout=5000`；仍无 WAL（WAL 属迁移范畴，未动）。新库 `core/db.py` 的 WAL + `busy_timeout` + `BEGIN IMMEDIATE` **本轮已用 8 线程真机验证**（`tests/unit/test_db_concurrency.py`） |
 | 5 | ~~`FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径~~ **已修** | `config.py` | 改为仓库相对路径 + `FEROXBUSTER_WORDLIST` 覆盖，路径统一按项目根解析；字典缺失时 `error_code=config_error`（**仍不分发字典**，需自行下载或指环境变量） |
 | 6 | `HTTPX_CONFIG.path` 默认 `"http-x"` | `config.py` | 本机靠 `E:\GoWorkspace\bin\http-x.cmd` 包装脚本指向 `httpx.exe` 才能跑；裸环境会 `tool_not_found` |
-| 7 | ~~`python -m pytest` 有 2 条 warning~~ **本轮已清零** | — | 见下节「已修的两条 warning」 |
+| 7 | ~~`python -m pytest` 有 2 条 warning~~ **已清零** | — | 见下节「已修的两条 warning」 |
 | 8 | `agent/client.py`、`agent/providers/*` 无任何调用方 | `agent/` | 「LLM 规划」实际由正则 + 模板决定，**不调用大模型**；「模型超时/返回格式错」类症状在当前路径不可达 |
 | 9 | Agent 仍可绕过 Job/Policy 直接调 `run_tools` / `HttpxRunner.run_scan` | `agent/action.py` | Agent 层已禁止任意 `file_path`（只能 `upload_id`），但**尚未改走 Job Service**；属 P0-6 未完成项 |
-| 10 | ~~`jobs` 表无 `idempotency_key`、无 `backoff`~~ **本轮已补** | `core/jobs.py` | 已按 DECISIONS §3.1 授权**纯增量补列**：幂等键（同键未终结任务复用）+ 退避窗口（`next_attempt_at`）；`MAX_ATTEMPTS` 与显式状态跃迁表此前已补 |
+| 10 | ~~`jobs` 表无 `idempotency_key`、无 `backoff`~~ **已补** | `core/jobs.py` | 已按 DECISIONS §3.1 授权**纯增量补列**：幂等键（同键未终结任务复用）+ 退避窗口（`next_attempt_at`）；`MAX_ATTEMPTS` 与显式状态跃迁表此前已补 |
+| 11 | ~~`/api/artifacts/<id>` 的 `text` 只返回头 300 字符，而 `truncated` 仍是 `false`~~ **已修** | `core/artifacts.py:read_artifact`（曾用命令预览语义的 `scrub_command()`） | 证据动辄几十 KB，被截掉的正是排查「跑通了但没数据」时要看的部分，且 `truncated=false` 是对外说假话。已抽出 `scrub_text()`（只脱敏、默认不截断），`read_artifact()` 改用它；`scrub_command()` 的语义与 300 字符上限**未变**。回归：`tests/integration/test_m7_local_e2e.py` 断言证据「恰好 3 行」 |
 
 ### 已修的两条 warning（原 Known Failure #7 / DECISIONS-I）
 
@@ -339,8 +340,8 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-32d404583c9717e48c6b74f2a3a4308ce143d1e3   ← 最近一次代码提交（Diff 条目可点进资产详情）
-32d4045  feat: Diff 条目可点进资产详情（P1 遗留最后一条前端） (2026-10-02)
+50d04cc8751ce5c0edc2b67bcc91e0aa3580ebfc   ← 最近一次代码提交（M7 本地 fixture HTTP 全链路 E2E）
+50d04cc  feat: M7 本地 fixture HTTP 全链路 E2E（方案第 18 节）+ 修证据读取被预览规则截断 (2026-10-02)
 ```
 
 自检：
@@ -352,11 +353,11 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
 
 与 `origin/main` **不同步**：本地领先（`git status -sb` 会显示 `[ahead N]`，N 含本文件自身的提交，
 所以这里不写死数字）。M0～M4 之后的全部里程碑提交都还在本地 —— 夜间无人值守期间
-**不做 `git push`**，等你确认后再推。下表是**除本文件提交之外**的全部 14 个提交：
+**不做 `git push`**，等你确认后再推。下表是**除本文件提交之外**的全部 15 个提交：
 
 | 提交 | 说明 |
 |---|---|
-| `32d4045` | feat: Diff 条目可点进资产详情（P1 遗留最后一条前端） |
+| `50d04cc` | feat: M7 本地 fixture HTTP 全链路 E2E（方案第 18 节）+ 修证据读取被预览规则截断 |
 | `9eb68f1` | docs: 同步 M7 mypy 清零（代码地图 + CHANGELOG + 状态板） |
 | `26c7246` | fix: M7 类型收口——mypy 34 errors 清零（未改 mypy 配置） |
 | `fa8d1c7` | feat: P1 §10 Diff 前端露出 + 修正「未变」计数被明细开关清零 |
@@ -384,7 +385,9 @@ git status -sb                  # ## main...origin/main [ahead N] = 本地已提
    - ~~修 `config.py` 里 `FEROXBUSTER_CONFIG.wordlist` 的开发机绝对路径~~ —— **已修（M5，
      连同「字典缺失不再静默空结果」一起）**；
    - 同步 `README.md`（`file_path` 已废弃、补鉴权与 Scope 说明）；
-   - M7 剩一项：本地 fixture HTTP 测试（SQLite 并发测试**本轮已完成**），以及一份测试报告。
+   - ~~M7：本地 fixture HTTP 测试~~ —— **已完成（`tests/integration/test_m7_local_e2e.py`，
+     真实 httpx 打 `127.0.0.1` 全链路）**；M7 只剩**一份测试报告**（`scripts/check_env.py`
+     与「10 分钟启动」文档属 M6）。
 4. **改完代码记得**：刷新 `docs/CODEBASE_MAP.md` 对应章节与 `last-mapped`，更新 `CHANGELOG.md`，
    并回来更新本文件的「最近一次验证 / 最近一次 commit」。
 
@@ -395,17 +398,21 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                # 期望 All checks passed!
-python -m pytest                                      # 期望 752 passed, 2 skipped
+python -m pytest                                      # 期望 759 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules # 期望 Success: no issues found
 ```
 
 **运行期产物隔离（重要）**：测试**从不**写仓库的 `results/`。`tests/conftest.py` 会 patch
 `storage.SQLITE_CONFIG["path"]`、`config.LOCAL_DB_CONFIG["path"]`、`core.uploads.UPLOAD_DIR`、
 `core.health.OUTPUT_DIR`。**任何一处漏 patch 都会让测试污染仓库 `results/`。**
+另外 `modules/base.py`、`modules/httpx.py`、`jobs/worker.py` 的 `OUTPUT_DIR` 是**导入期**绑定的
+模块级字符串，conftest 管不到 —— `tests/integration/test_m7_local_e2e.py` 里额外 patch 了三处
+（因为那条用例会起**真实 httpx 子进程**，输出与心跳都会落到 `OUTPUT_DIR`）。
 
 ## 硬约束（不要违反）
 
 - 不扫描任何**未授权的外部目标**；默认只用 mock runner 与 `127.0.0.1`
+  （本地全链路 E2E 用的是 `tests/fixtures/local_http_server.py`，它**只绑 `127.0.0.1`**）
 - 不执行 `git reset --hard`、`git clean -fd`
 - 不覆盖 `get_everything_framework/scripts/OneForAll.exe` 的未提交差异（在旧 clone 里）
 - 数据库、扫描结果、上传样本、密钥**不得提交进 Git**

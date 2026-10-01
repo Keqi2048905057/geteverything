@@ -124,6 +124,24 @@ python agent_cli.py
 curl http://127.0.0.1:5000/api/tools
 ```
 
+### 测试与验收
+
+```bash
+python -m pytest                                       # 759 passed, 2 skipped
+python -m ruff check .                                 # All checks passed!
+python -m mypy app.py core api jobs storage.py modules  # Success: no issues found
+```
+
+测试**从不**触碰仓库的 `results/`：`tests/conftest.py` 会把两个数据库、上传目录、
+产物目录、导出目录全部指向临时目录。
+
+其中 `tests/integration/test_m7_local_e2e.py` 是方案第 18 节要求的**本地全链路 E2E**：
+它用**真实 httpx 子进程**打 `tests/fixtures/local_http_server.py`（只绑 `127.0.0.1`、
+端口由系统分配、响应完全确定），一条用例走完
+`target → job → worker → runner → 原始证据 → parser → observation → asset → diff → export`。
+**不会扫描任何外部目标。** 本机没有 httpx 可执行文件时该用例会 `skip`（不是失败），
+所以非开发机的 CI 上显示为 skipped 属正常。
+
 ---
 
 ## 🔌 API 接口
@@ -419,6 +437,13 @@ framework-main/
 │   └── run_local.ps1         # 本机联调版一键拉起 Web + worker
 │                             # （可选工具二进制请用安装脚本获取，不入库）
 │
+├── tests/                    # pytest（759 例）；conftest 把运行期目录全指向临时目录
+│   ├── unit/                 # 单元 + 真实子进程用例（runner 接口、并发、Diff、迁移…）
+│   ├── integration/          # API / 鉴权 / 导出契约 / 资产 API / 本地全链路 E2E
+│   │   └── test_m7_local_e2e.py   # 方案第 18 节：真实 httpx 打本地 fixture 走完全链路
+│   └── fixtures/
+│       └── local_http_server.py   # 只绑 127.0.0.1 的确定性 fixture HTTP 服务
+│
 ├── SecLists/                 # 字典库（自行下载，不入库）
 └── venv/                     # Python 虚拟环境
 ```
@@ -563,6 +588,17 @@ ENScan 的数据源 Cookie 通过 Web 面板的"设置"页写入，存到 `~/.co
 
 **Q7: 缺 `python-dotenv` 模块？**
 `pip install -r requirement.txt` 即可，或单独 `pip install python-dotenv`。
+
+**Q8: pytest 收集阶段报 `ModuleNotFoundError: No module named 'tests.fixtures'`？**
+`get_everything_framework/tests/__init__.py` **必须存在且不可删**。某些依赖会在
+site-packages 里装一个常规包 `tests`，它会把本仓库的命名空间包 `tests` 顶掉；
+加上这个 `__init__.py` 后 `tests` 成为常规包，解析才会稳定落在仓库内。
+
+**Q9: `GET /api/artifacts/<id>` 明明跑出了很多结果，只看到很少的内容？**
+先看 `truncated` 字段。默认上限是 64 KB（`core/artifacts.py:DEFAULT_READ_LIMIT`），
+超过就截断并置 `truncated=true`；确需全量可用 `?limit=` 指定（上限 1 MB）。
+若 `truncated=false` 但内容异常短，那是 bug，不是配置问题 —— 曾经有一版把证据
+错误地按「命令预览」的 300 字符规则处理过（见 `CHANGELOG.md` 的 M7 一节）。
 
 ---
 
