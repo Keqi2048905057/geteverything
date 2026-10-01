@@ -34,6 +34,7 @@ if _PROJECT_ROOT not in sys.path:
 
 from config import OUTPUT_DIR  # noqa: E402
 from core import db, jobs as jobs_store  # noqa: E402
+from core import observability  # noqa: E402
 from jobs.executor import execute_job  # noqa: E402
 
 HEARTBEAT_FILENAME = "worker_heartbeat"
@@ -48,7 +49,15 @@ _running = True
 def _handle_signal(signum, _frame):  # pragma: no cover - 信号路径不易单测
     global _running
     _running = False
+    # 信号路径要**先**保证人能看见（日志 handler 可能还没装好），所以保留一行
+    # 人读提示，同时记结构化事件（方案第 19 节）。
     print(f"\n[worker] 收到信号 {signum}，准备在当前步骤结束后退出 ...", flush=True)
+    observability.log_event(
+        observability.EVENT_WORKER_SIGNAL,
+        level="WARNING",
+        signal=int(signum),
+        worker_id=observability.current_context().get("worker_id"),
+    )
 
 
 def heartbeat_path() -> str:
@@ -104,25 +113,63 @@ class Worker:
         self._last_heartbeat = 0.0
         self._idle_since: float | None = None
         self._current_job_id: str | None = None
+        # 方案第 19 节：startup() 时绑定的 worker_id 上下文 token，shutdown() 还原。
+        self._context_token: observability.ContextToken | None = None
 
     # ── 日志 ─────────────────────────────────────────────
 
     def log(self, message: str) -> None:
+        """人读进度提示（控制台）。
+
+        与方案第 19 节的结构化日志并存：控制台保留这一行方便本机盯屏，
+        同时以 ``worker_message`` 事件进结构化日志（带 worker_id 上下文）。
+        内容**不含目标列表**，只有任务 ID / 状态这类可公开信息。
+        """
         if self.verbose:
             print(f"[worker {self.worker_id}] {message}", flush=True)
+        observability.log_event(
+            observability.EVENT_WORKER_MESSAGE,
+            level="DEBUG",
+            worker_id=self.worker_id,
+            message=message,
+        )
 
     # ── 生命周期 ─────────────────────────────────────────
+
+    def __enter__(self) -> "Worker":
+        """作为上下文管理器使用：进入即 ``startup()``。
+
+        ``with Worker(...) as worker:`` 保证退出时一定走 ``shutdown()``，
+        从而精确还原 worker_id 上下文（否则同一线程里再跑别的活会继承一个
+        已经死掉的 worker 身份）。
+        """
+        self.startup()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.shutdown()
 
     def startup(self) -> list[str]:
         """启动准备：建表、写心跳、恢复过期任务。"""
         db.ensure_schema()
         write_heartbeat(self.worker_id)
+        # 方案第 19 节：worker_id 绑到当前执行流，之后所有事件自动带上它。
+        # 绑定只覆盖本 worker 的生命周期，``shutdown()`` 里精确还原 ——
+        # 否则同一线程里跑第二个 worker（或进程内嵌用法）会串号。
+        observability.reset_context("worker_id", self._context_token)
+        self._context_token = observability.set_context("worker_id", self.worker_id)
         recovered: list[str] = []
         if self.recover_on_start:
             recovered = jobs_store.recover_stale_jobs()
             for job_id in recovered:
                 self.log(f"恢复中断任务 {job_id} → interrupted")
         self.log(f"启动完成，数据库={db.db_path()}")
+        observability.log_event(
+            observability.EVENT_WORKER_STARTED,
+            worker_id=self.worker_id,
+            recovered=len(recovered),
+            lease_seconds=self.lease_seconds,
+        )
         return recovered
 
     def tick(self) -> dict | None:
@@ -135,9 +182,28 @@ class Worker:
 
         self._current_job_id = job["id"]
         self.log(f"领取任务 {job['id']}（{job['mode']}，{job['total_steps']} 步）")
+        observability.log_event(
+            observability.EVENT_WORKER_CLAIMED_JOB,
+            worker_id=self.worker_id,
+            job_id=job["id"],
+            mode=job["mode"],
+            total_steps=job["total_steps"],
+        )
         try:
-            result = execute_job(job["id"], renew=self._renew_lease, step_delay=self.step_delay)
+            # 任务级的 job_id 上下文：任务里每个步骤事件都会带上它。
+            with observability.bind(job_id=job["id"]):
+                started = time.perf_counter()
+                result = execute_job(job["id"], renew=self._renew_lease, step_delay=self.step_delay)
             self.log(f"任务 {job['id']} 结束：{result['status']}")
+            observability.log_event(
+                observability.EVENT_WORKER_JOB_FINISHED,
+                level="INFO" if result["status"] == jobs_store.STATUS_SUCCEEDED else "WARNING",
+                worker_id=self.worker_id,
+                job_id=job["id"],
+                status=result["status"],
+                error_code=result.get("error_code"),
+                duration_ms=int((time.perf_counter() - started) * 1000),
+            )
             return result
         finally:
             self._current_job_id = None
@@ -154,6 +220,13 @@ class Worker:
                 finished_any = result is not None
             except Exception as exc:  # noqa: BLE001 - worker 不能因为单个任务崩掉
                 self.log(f"任务执行异常：{exc!r}")
+                observability.log_event(
+                    observability.EVENT_WORKER_JOB_EXCEPTION,
+                    level="ERROR",
+                    worker_id=self.worker_id,
+                    job_id=self._current_job_id,
+                    error=repr(exc),
+                )
                 if self._current_job_id:
                     jobs_store.finish_job(
                         self._current_job_id,
@@ -169,6 +242,11 @@ class Worker:
                 self._idle_since = self._idle_since or time.time()
                 if self.idle_exit_seconds and time.time() - self._idle_since >= self.idle_exit_seconds:
                     self.log("空闲超时，退出")
+                    observability.log_event(
+                        observability.EVENT_WORKER_IDLE_EXIT,
+                        worker_id=self.worker_id,
+                        idle_seconds=round(time.time() - self._idle_since, 3),
+                    )
                     break
                 # 没有任务时也要能及时响应 Ctrl+C。
                 _sleep(self.poll_seconds)
@@ -184,6 +262,11 @@ class Worker:
             self._current_job_id = None
         write_heartbeat(self.worker_id)
         self.log("已退出")
+        observability.log_event(observability.EVENT_WORKER_SHUTDOWN, worker_id=self.worker_id)
+        # 退出时把 worker_id 上下文还原，避免同一线程里的后续代码（或测试）
+        # 继承一个已经死掉的 worker 身份。
+        observability.reset_context("worker_id", self._context_token)
+        self._context_token = None
 
     # ── 内部 ─────────────────────────────────────────────
 
@@ -251,11 +334,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.once:
-        worker.startup()
-        worker.tick()
+        # ``--once`` 也必须成对 startup/shutdown：方案第 19 节的 worker_id
+        # 上下文在 shutdown() 里还原，否则会泄漏给同一线程里的后续代码。
+        with worker:
+            worker.tick()
         return 0
     return worker.run()
 
 
 if __name__ == "__main__":  # pragma: no cover - 进程入口
+    # 方案第 19 节：worker 进程同样输出结构化单行日志（级别 / 格式取自
+    # GEF_LOG_LEVEL / GEF_LOG_FORMAT）。控制台的人读进度行由 --quiet 控制。
+    observability.configure_logging()
     raise SystemExit(main())

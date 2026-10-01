@@ -26,6 +26,7 @@ import time
 from core import artifacts as artifacts_store
 from core import assets as assets_store
 from core import jobs as jobs_store
+from core import observability
 from core.errors import ErrorCode
 from core.mock import run_mock
 from core.runner_result import PARSER_VERSION
@@ -230,7 +231,16 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
 
     Returns:
         dict: 执行后的 job。
+
+    方案第 19 节：整段执行都绑定 ``job_id`` 关联上下文，于是执行期内任何一层
+    （包括 runner 与派生资产落盘）打的结构化事件都自动带上 job_id，不需要
+    逐层透传参数。
     """
+    with observability.bind(job_id=job_id):
+        return _execute_job(job_id, renew=renew, step_delay=step_delay)
+
+
+def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
     if step_delay < 0:
         raise ValueError("step_delay 不能为负数")
     job = jobs_store.get_job(job_id)
@@ -242,6 +252,15 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
     steps = jobs_store.pending_steps(job_id)
     total = len(jobs_store.list_steps(job_id))
     done = total - len(steps)
+
+    # 方案第 19 节：任务开始事件。job_id 绑到本次执行，步骤事件自动继承。
+    observability.log_event(
+        observability.EVENT_JOB_STARTED,
+        job_id=job_id,
+        mode=job["mode"],
+        total_steps=total,
+        pending_steps=len(steps),
+    )
 
     mode = job["mode"]
     scenario = job["scenario"]
@@ -258,11 +277,22 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
             break
 
         jobs_store.start_step(step["id"])
-        if mode == "real":
-            # real 步骤在执行前重新读一次 Scope 并复检目标（方案第 5.3 节）。
-            outcome = _execute_real_step(step, scope_id)
-        else:
-            outcome = _execute_mock_step(step, scenario)
+        step_started = time.perf_counter()
+        # 方案第 19 节：把 step_id 绑到当前执行流，于是这一步内任何一层
+        # （runner / 脱敏 / artifact 落盘）打的结构化事件都自动带 step_id。
+        with observability.bind(step_id=step["id"]):
+            if mode == "real":
+                # real 步骤在执行前重新读一次 Scope 并复检目标（方案第 5.3 节）。
+                outcome = _execute_real_step(step, scope_id)
+            else:
+                outcome = _execute_mock_step(step, scenario)
+
+        duration_ms = outcome.get("duration_ms")
+        if duration_ms is None:
+            # mock 步骤本身不产出真实耗时（M4 契约：mock 不写假数据，库里
+            # duration_ms 必须保持 NULL）。但结构化事件里的 duration_ms 是
+            # **真实墙钟测量**，不是伪造值，所以事件里用测出来的值补上。
+            duration_ms = int((time.perf_counter() - step_started) * 1000)
 
         jobs_store.finish_step(
             step["id"],
@@ -289,6 +319,21 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
                 "found_count": outcome["found_count"],
                 "error_code": outcome["error_code"],
             },
+        )
+        # 方案第 19 节的示范事件：一行 JSON，带 job_id / step_id / tool / status /
+        # duration_ms。**不记完整目标列表**（target 只记当前这一步的目标）。
+        observability.log_event(
+            observability.EVENT_JOB_STEP_FINISHED,
+            level="INFO" if outcome["step_status"] == jobs_store.STEP_SUCCEEDED else "WARNING",
+            job_id=job_id,
+            step_id=step["id"],
+            tool=step["tool_name"],
+            target=step["target"],
+            status=outcome["step_status"],
+            found_count=outcome["found_count"],
+            error_code=outcome["error_code"],
+            duration_ms=duration_ms,
+            artifact_id=outcome.get("artifact_id"),
         )
 
         # P1（方案第 8 节）：把这一步的结构化观测落进 assets / observations。
@@ -324,6 +369,14 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         jobs_store.mark_remaining_steps_skipped(job_id)
         jobs_store.finish_job(job_id, status=jobs_store.STATUS_CANCELLED)
         jobs_store.add_event(job_id, jobs_store.EVENT_JOB_CANCELLED, {"reason": "user_requested"})
+        observability.log_event(
+            observability.EVENT_JOB_FINISHED,
+            level="WARNING",
+            job_id=job_id,
+            status=jobs_store.STATUS_CANCELLED,
+            done_steps=done,
+            total_steps=total,
+        )
         return jobs_store.get_job_or_raise(job_id)
 
     status, error_code = aggregate_status(step_statuses)
@@ -332,6 +385,15 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         status=status,
         error_code=error_code,
         error_message=None if error_code is None else _status_message(status),
+    )
+    observability.log_event(
+        observability.EVENT_JOB_FINISHED,
+        level="INFO" if status == jobs_store.STATUS_SUCCEEDED else "WARNING",
+        job_id=job_id,
+        status=status,
+        error_code=error_code,
+        done_steps=done,
+        total_steps=total,
     )
     return jobs_store.get_job_or_raise(job_id)
 

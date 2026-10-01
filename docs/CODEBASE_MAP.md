@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、**本地 fixture HTTP 全链路 E2E**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -451,7 +451,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ---
 
-## 6. BUG 定位索引表（共 26 条症状；第 23～26 条为 P1/M7 新增）
+## 6. BUG 定位索引表（共 27 条症状；第 23～27 条为 P1/M7 新增）
 
 | # | 典型症状 | 最可能的 3 个排查位置 | 该处典型失败模式 |
 |---|---|---|---|
@@ -481,6 +481,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 24 | 对比两次任务时「未变」总是 0，看起来像两次扫描毫无交集 | ① `core/assets.py:diff_jobs` 里 `counts["unchanged"]` 与 `unchanged` 明细的关系 ② 页面「含未变」复选框（`#diff-include-unchanged`）③ `web/static/assets.js:renderDiff` 对空明细的措辞 | `include_unchanged=False`（勾掉「含未变」）**只应影响明细、不应影响计数**。曾经两者一起清零，于是「扫到了但没变化」与「什么都没扫到」变得不可区分。先看 `counts.unchanged`：**它非 0 而明细为空，说明是这次没要明细，不是两次没有交集**（前端会显示「按设置未取明细，共 N 条」）。真正的 0 才是「两次任务的资产集合完全不相交」 |
 | 25 | Agent 回复里出现 `AttributeError: 'str' object has no attribute 'get'`（只在**真有存活结果**时） | ① `agent/action.py:_tool_httpx` 的 `items` 字段 ② `agent/action.py:_summarize_httpx_items`（逐条 `item.get(...)`）③ `modules/httpx.py:run_scan` 的返回值语义 | 同一个 `rows` 变量在两条链上有两种形态：`run_scan` 返回 **URL 字符串列表**（旧签名，兼容用），而元数据在 `runner.last_items`（dict 列表）。`items` 错取了 `rows`，于是 `_summarize_httpx_items` 收到一堆 `str` 就炸。**零结果时不炸** —— 所以「本地跑不通、真机上必炸」是它的典型表现。`results` 里的 `total` 也就会与 `items` 长度对不上 |
 | 26 | 原始证据打开后「只有一行」/ 明明跑出很多结果却只看到一条；`truncated` 还是 `false` | ① `core/artifacts.py:read_artifact`（脱敏用的是哪支函数）② `core/runner_result.py:scrub_text`（脱敏且默认不截断）vs `scrub_command`（**命令预览**，末尾截到 300 字符）③ API 的 `limit` 与 `SCAN_LIMITS["max_artifact_bytes"]` | **M7 已修**：`read_artifact()` 曾误用 `scrub_command()`，于是 `GET /api/artifacts/<id>` 的 `text` 永远只有头 300 字符，而 `truncated` 仍为 `False`（截断标记只看 `max_artifact_bytes`）。**症状的判别点**：`truncated is False` 但文本长度恰好 ≈300 且以 `...` 结尾。修法是 `scrub_text()`（只脱敏、默认不截断）；命令预览仍走 `scrub_command()`（语义与 300 字符上限未变）|
+| 27 | 日志里「找不到一个请求相关的任何记录」/ 结构化字段时有时无 | ① `core/observability.py:log_event`（关联字段来自 contextvar，不是参数）② 绑定处是否成对（`app.py` 的 `before_request`、`jobs/worker.py:startup`、`jobs/executor.py` 的 `with observability.bind(...)`）③ `configure_logging()` 是否在**进程入口**调过（`app.py:__main__` / `jobs/worker.py:__main__`）| 三个高发点：① 直接 `python -c "import app"` 或 `waitress-serve app:app` 起服务**不会**调 `configure_logging()`，事件只进 root logger（没人看）；② `Worker` 只 `startup()` 没 `shutdown()` → `worker_id` 一直挂着，同线程后续代码/测试会继承一个已死 worker 的身份；③ 用行号/字符串去 `grep "print("` 会撞上 `Blueprint("api", …)` 这类同形标识符，实际 print 清单以 `tests/unit/test_observability.py` 的 AST 守卫为准。**另注意**：401 的 `error_message` 里 `X-Local-Token` 后面的词会被脱敏规则打码（见 §9.18.3），不是日志丢了内容 |
 
 ---
 
@@ -625,6 +626,7 @@ get_everything_framework/
 │   ├── health.py             /health 采集（database / worker / queue / tools / modes / security）
 │   ├── runner_result.py      M4：Observation / ToolHealth / RunnerResult + scrub_command（命令预览，300 字符）+ scrub_text（任意文本，默认不截断）
 │   ├── artifacts.py          M4：原始证据落盘（stdout/stderr/output）+ 登记 + 截断脱敏读取（**脱敏用 scrub_text，不再被 300 字符预览规则截断**）
+│   ├── observability.py      P1 §19：**唯一日志出口**——一行一个 JSON 事件 + 四个关联 ID（request_id/job_id/step_id/worker_id，contextvars 绑定）+ 脱敏与容器上限
 │   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复
 ├── jobs/                     ← 进程层（刻意不放进 core/）
 │   ├── executor.py           执行逻辑（与进程无关，可直接单测调用）
@@ -788,12 +790,12 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 759 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 59 source files
+$ python -m pytest           # 826 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules   # Success: no issues found in 60 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → **M7 本地 fixture HTTP 全链路 E2E `759`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → **P1 §19 Observability（结构化日志与关联 ID）`826`**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -829,6 +831,8 @@ $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用�
 | `tests/integration/test_api_auth_contract.py` | **P0-1/D**：锁定「哪些只读接口匿名、哪些必须 401」的当前契约 + 响应体不夹带服务器路径 |
 | `tests/integration/test_assets_api.py` | **P1**：资产接口全部 401（未登录）、「任务跑完 → 资产可查」端到端链路、`summary` 未被 `<asset_id>` 吃掉、`/api/observations` 拒绝无条件全表扫描、Diff 端点 404 与 `include_unchanged`、**diff 条目必带可用的 `asset_id`**、资产页骨架与匿名时不下发 Scope 名、**静态脚本已把 diff 条目接成点击**、响应无服务器路径 |
 | `tests/integration/test_m7_local_e2e.py` | **M7（方案第 18 节）**：本地 fixture HTTP **全链路**——真实 httpx 子进程打只绑 `127.0.0.1` 的 fixture，一条用例走完 target → job → worker → runner → raw artifact → parser → observation → asset → diff → export；含「证据必须完整读出（只脱敏、不按 300 字符截断）」的回归。无 httpx 可执行文件时 `pytest.skip` |
+| `tests/unit/test_observability.py` | **P1 §19**：`request_id` 生成与入站校验（空格/过短/过长一律拒绝并重生成）、contextvar 绑定/还原/**线程隔离**、事件信封（`ts`/`level`/`event` + 自动并入的四个关联字段）、单行 JSON、级别常量与非法值退化、敏感字段名单只记占位符、自由文本脱敏、**关联 ID 不被裸 token 规则误打码**、长字段截断、**容器最多 20 项（不记完整目标列表）**、`format_event` 两种格式、`configure_logging` 幂等/分级/读配置/配置坏掉也不炸；另有三条**源码守卫**：`print` 里不得出现密钥形状、除 `core.observability` 外不得自建 logger、新增 `print` 必须在登记清单里 |
+| `tests/integration/test_observability_chain.py` | **P1 §19**：Web 层每个请求绑定并回写 `X-Request-Id`（合法入站值沿用、非法值拒绝、逐请求唯一、失败响应也带）、访问与失败事件的 `path` **只记路径不带 query**、`job_created` 事件与触发它的请求共用 `request_id` 且不记目标列表、401 事件的错误码且不回显 Token 值、执行层 `job_step_finished` 带 `job_id`/`step_id`/`tool`/`status`/`duration_ms`（失败为 WARNING）、多目标时只记当前步骤目标、worker 三层事件都带 `worker_id` 且上下文管理器退出后还原 |
 
 ### 9.9 第 6 节 BUG 索引表的**现状修正**
 
@@ -1659,4 +1663,129 @@ preview_text(value, limit=2000)  # 改为委托给 scrub_text
 `E:\GoWorkspace\bin\http-x.CMD` 包装脚本指向 `httpx.exe` 才能跑；CI 上没有 Go 工具链时
 `pytest.skip`（不是 fail），所以这条 E2E 在 GitHub Actions 上会显示为 skipped 而不是失败。
 
+### 9.18 P1：Observability —— 结构化日志与关联 ID（方案第 19 节）
+
+#### 9.18.1 单一出口：`core/observability.py`
+
+方案第 19 节要求「日志必须结构化」并逐步加入 `request_id` / `job_id` /
+`step_id` / `worker_id`。实现只加了一个新模块，没有引入任何第三方日志库
+（structlog / loguru 之类都不加），底层就是 stdlib `logging`：
+
+```text
+{"ts":"2026-10-01T02:27:38+00:00","level":"INFO","event":"job_step_finished",
+ "job_id":"job_xxx","worker_id":"host-1234","step_id":"step_xxx",
+ "tool":"httpx","target":"example.test","status":"succeeded","found_count":3,"duration_ms":1200}
+```
+
+对外只有两个动词：`log_event(event, level=..., **fields)` 与
+`configure_logging(level, fmt, stream)`。事件名集中成模块常量
+（`EVENT_HTTP_REQUEST` / `EVENT_JOB_CREATED` / `EVENT_JOB_STARTED` /
+`EVENT_JOB_FINISHED` / `EVENT_JOB_STEP_FINISHED` / `EVENT_AGENT_PLAN_STEP` /
+`EVENT_REQUEST_FAILED` / `EVENT_UNHANDLED_EXCEPTION` + 一组 `EVENT_WORKER_*`），
+避免各处手写字符串漂移。
+
+logger 名固定 `gef`，默认只挂 `NullHandler` 且 `propagate=True`：
+
+- **未调 `configure_logging()`**（库用法、pytest）→ 不往 stderr 乱写，
+  但 `caplog` 仍能抓到（测试全靠这个）；
+- **调了 `configure_logging()`**（两个进程入口）→ 挂自己的 stderr handler
+  并关掉 `propagate`，保证一条事件只输出一次。
+
+#### 9.18.2 四个关联字段怎么绑上去的
+
+用 `contextvars`（不是全局变量、不是 threading.local）——waitress 是多线程模型，
+contextvar 在线程内独立，天然不会串号；代价是**必须成对还原**。
+
+| 字段 | 绑定位置 | 还原位置 |
+|---|---|---|
+| `request_id` | `app.py:_bind_request_context`（`before_request`） | `teardown_request` |
+| `job_id` | `jobs/executor.py:execute_job` 的 `observability.bind(job_id=...)` | `with` 退出 |
+| `step_id` | `jobs/executor.py` 步骤循环的 `observability.bind(step_id=...)` | `with` 退出 |
+| `worker_id` | `jobs/worker.py:Worker.startup` | `Worker.shutdown` |
+
+于是「绑定一次，全链自动继承」：`execute_job` 绑了 `job_id` 后，它内部
+`_execute_real_step` → runner → artifact 落盘的任何事件都自动带 `job_id`；
+worker 绑了 `worker_id` 后，它跑的所有任务事件都带 `worker_id`。
+
+**`Worker.__enter__` / `__exit__`**：为了让「成对」不可能被忘掉，
+`with Worker(...) as worker:` 进入即 `startup()`、退出即 `shutdown()`。
+`main(--once)` 与 M7 的 E2E helper 都已改成这种写法。
+
+#### 9.18.3 脱敏：两条规则 + 一个必须知道的副作用
+
+1. **字段名命中敏感词** → 值只记 `***`，原文绝不落盘。敏感词：
+   `api_key` / `apikey` / `token` / `secret` / `password` / `passwd` /
+   `credential` / `authorization` / `cookie`。这条规则**优先于**下面的 ID 规则
+   （所以 `token_id` 也只会记 `***`）。
+2. **其余文本**先过 `core.runner_result.scrub_text`（沿用 M4 的唯一脱敏出口），
+   于是 `user:pw@host`、`--token VALUE`、裸长 token 都被打码。
+3. 单字段超过 500 字符截断；list / tuple / set / dict **最多记 20 项**
+   —— 方案第 19 节「不要记录完整目标列表到公共日志」的落点。
+
+**副作用（刻意接受）**：`scrub_text` 里的 `_SECRET_FLAG_RE` 会把
+`X-Local-Token 请求头` 这种散文写法里紧跟 `-Token ` 的词也打码。因此 401 的
+`error_message` 在日志里会变成 `…请携带 X-Local-Token ***`。
+这是**失败即关闭**的取舍：宁可多打码，也不能漏一个真实密钥；
+完整未打码的原文仍可在 HTTP 响应体与 `audit_events` 里看到。
+
+**关联 ID 为什么不能被误打码**：`job_` + 32 位十六进制恰好是 36 个字符，
+会被 `_LONG_TOKEN_RE`（≥20 个连续 `[A-Za-z0-9_-]`）当成裸 token 全部打成 `***`
+——那结构化日志就自废武功了。做法是按字段名区分：`*_id` 结尾的字段按**标识符**
+原样记录（只截断长度）；自由文本则先用占位符把 `(job|step|run|asset|obs|art|exp|scope|evt|req|wkr)_[0-9a-f]{6,}`
+挖出来，脱敏后再还原。
+
+#### 9.18.4 接线清单（都是加法）
+
+| 位置 | 加了什么 |
+|---|---|
+| `config.py` | `LOG_LEVEL`（`GEF_LOG_LEVEL`，默认 `INFO`）、`LOG_FORMAT`（`GEF_LOG_FORMAT`，默认 `json`）|
+| `.env.example` / `README.md` | 「结构化日志」配置段与排障用法（拿 `X-Request-Id` 去 `grep`）|
+| `app.py` | `before_request` 生成/沿用 `request_id`；`after_request` 回写同名响应头并记下状态码；`teardown_request` 记 `http_request_finished`（**只记 `path`，不记 query**）|
+| `core/errors_handlers.py` | 三个 handler 各加一条事件：`request_failed`（4xx=WARNING / 5xx=ERROR）、`unhandled_exception`（ERROR，另保留 `app.logger.exception` 打完整栈）|
+| `api/jobs.py` | 创建任务后记 `job_created`（带 `request_id`、工具名、**目标个数而不是目标列表**）|
+| `jobs/executor.py` | `execute_job` 包一层 `bind(job_id)`；开始记 `job_started`；每步记 `job_step_finished`（示范事件；失败为 WARNING）；收尾记 `job_finished`（取消路径同样记）|
+| `jobs/worker.py` | `startup`/`tick`/`run`/`shutdown` 记 `worker_started`/`worker_claimed_job`/`worker_job_finished`/`worker_job_exception`/`worker_idle_exit`/`worker_shutdown`；`Worker.log` 的人读行**同时**转成 `worker_message` 事件；`__main__` 里 `configure_logging()`|
+| `agent/action.py` | 原 `print(f"[debug] … result={tool_result}")`（会把整份结果含目标列表倒进控制台）改成 `agent_plan_step` 事件，只记 `tool` / `args` / `ok` / `error`|
+
+#### 9.18.5 三条源码守卫（把「禁止」写成会失败的测试）
+
+`tests/unit/test_observability.py` 末尾用 AST 扫源码（不是字符串匹配）：
+
+1. `test_no_print_of_secret_shaped_values_in_source` —— 方案第 19 节点名禁止的
+   `print(f"api_key={key}")` 形状。唯一豁免：`app._print_login_hint`（启动横幅，
+   M1 验收项「明确日志提示」，只写本机控制台）。
+2. `test_observability_is_the_only_logging_entry` —— 除 `core/observability.py`
+   与 `core/errors_handlers.py`（要打完整 traceback）外，不得出现
+   `logging.getLogger` / `logging.basicConfig`。
+3. `test_new_print_calls_must_be_registered` —— 现存 50 处 `print` 按
+   `文件:函数` 粒度登记（`_PRINT_ALLOWLIST`）。新增一处 `print` 就会失败，
+   从而被迫回答「这条信息该进结构化日志吗」。**注意粒度是函数而不是文件**：
+   `modules/base.py` 登记了 `_execute` / `_execute_stdout`，
+   但这不影响该文件里将来新增函数时被拦下。
+
+#### 9.18.6 `duration_ms` 的一处语义差异（别踩）
+
+`job_step_finished` 事件里的 `duration_ms` 是**真实墙钟测量**：`outcome` 里没有
+时（mock 步骤）用 `time.perf_counter()` 补。但**库里的 `job_steps.duration_ms`
+仍然是 NULL** ——M4 的契约是「mock 不写假数据」，测试
+`test_mock_steps_carry_parser_version_absent` 明确断言这一点。两者不矛盾：
+一个是「我花了几毫秒跑这一步」的观测，一个是「真实 runner 报告的耗时」。
+（第一版实现误把补出来的值也写进了库，被该用例当场拦下。）
+
+#### 9.18.7 新增用例（+67，759 → 826）
+
+| 文件 | 例数 | 覆盖 |
+|---|---|---|
+| `tests/unit/test_observability.py` | 50 | 事件信封、contextvar 绑定/还原/线程隔离、`request_id` 校验、脱敏（敏感字段 / 自由文本 / 关联 ID 不被误打码）、容器上限、长字段截断、两种格式、`configure_logging` 幂等与分级、三条源码守卫 |
+| `tests/integration/test_observability_chain.py` | 17 | Web 层（回写 `X-Request-Id`、逐请求唯一、失败响应也带、`path` 不带 query）、执行层（每步一条 `job_step_finished`、失败 WARNING、只记当前步骤目标）、worker 层（三层事件都带 `worker_id`、`with Worker` 退出后还原） |
+
+另外两处**测试隔离**修正：
+
+- `tests/conftest.py` 新增 autouse 的 `_reset_observability_context`：
+  每例前后清空四个 contextvar。这层兜底保证「某个用例漏还原」不会污染后续用例。
+- `tests/integration/test_m7_local_e2e.py:_drain_worker` 改用 `with Worker(...)`。
+  这条是实测踩到的：它原来只 `startup()` 不 `shutdown()`，于是 `worker_id`
+  泄漏到同线程里的**下一条用例**（症状：观测测试断言 `current_context() == {}`
+  却看到 `{'worker_id': 'm7-e2e-after'}`，而单独跑该文件时全绿）。
+  单文件跑没问题、全量跑才炸 —— 典型的测试间污染。
 

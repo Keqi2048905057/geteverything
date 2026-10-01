@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M5/M6/M7 剩余项待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · M5/M6/M7 剩余项待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M5/M6/M7 剩余 ⬜**
-- 更新日期：2026-10-02（M7 SQLite 并发测试轮）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → M5/M6/M7 剩余 ⬜**
+- 更新日期：2026-10-02（P1 §19 Observability 轮）
 
 ---
 
@@ -151,6 +151,43 @@
   会把失败读成绿色 —— 本文件用 `_run_threads()` 收集并重抛线程内异常
 - 测试：+13 → **752 passed / 2 skipped**
 
+**M7 本地 fixture HTTP 全链路 E2E（方案第 18 节）**
+- 新增 `tests/fixtures/local_http_server.py`（只绑 `127.0.0.1` 的标准库 `ThreadingHTTPServer`）
+  + `tests/integration/test_m7_local_e2e.py`：真实 httpx 子进程打本地 fixture，一次走完
+  target → job → worker → runner → raw artifact → parser → observation → asset → diff → export
+- 新增 `tests/__init__.py`（**必需**：否则 site-packages 里的同名常规包会把本仓库的
+  命名空间包 `tests` 顶掉，`import tests.fixtures` 直接 `ModuleNotFoundError`）
+- 顺带修掉既有缺陷：`read_artifact()` 误用 `scrub_command()`（命令预览语义，截到 300 字符），
+  于是 `GET /api/artifacts/<id>` 的 `text` 永远只有头 300 字符而 `truncated` 仍是 `False`；
+  改为新增的 `scrub_text()`（只脱敏、默认不截断）
+- 测试：+7 → **759 passed / 2 skipped**
+
+**P1 §19 Observability：结构化日志与关联 ID（本轮）**
+- 新增 `core/observability.py` 作为**唯一日志出口**（stdlib `logging`，未引入新依赖）：
+  一行一个 JSON 事件，四个关联字段 `request_id` / `job_id` / `step_id` / `worker_id`
+  用 `contextvars` 绑定，「绑定一次、全链继承」
+- 绑定/还原成对：`app.py` 的 `before_request` ↔ `teardown_request`（并回写
+  `X-Request-Id` 响应头）；`jobs/executor.py` 的 `with observability.bind(...)`；
+  `jobs/worker.py:Worker.startup` ↔ `Worker.shutdown`（新增 `with Worker(...)` 用法保证成对）
+- 接线：`http_request_finished`（只记 `path`，**不记 query**）、`request_failed`、
+  `unhandled_exception`、`job_created`（记目标**个数**不记列表）、`job_started` /
+  `job_step_finished` / `job_finished`、六个 `worker_*` 事件；
+  `agent/action.py` 的 debug `print`（会倒出整份结果）改成 `agent_plan_step` 事件
+- 脱敏：字段名命中 `api_key`/`token`/`secret`/`password`/`authorization`/`cookie`/`credential`
+  → 值只记 `***`；其余文本过 `core.runner_result.scrub_text`；单字段 500 字符截断；
+  **容器最多 20 项**（方案第 19 节「不要记录完整目标列表到公共日志」）
+- 关键细节：`job_` + 32 位 hex（36 字符）会被裸 token 兜底规则误打成 `***`，
+  因此 `*_id` 字段按标识符原样记录；自由文本里的 ID 先占位再还原
+- `config.py` + `.env.example` + `README.md`：新增 `GEF_LOG_LEVEL` / `GEF_LOG_FORMAT`
+  与「拿 `X-Request-Id` 去 grep」的排障用法
+- 三条**源码守卫**（AST 扫描）：`print` 里不得出现密钥形状、除
+  `core/observability.py` 与 `core/errors_handlers.py` 外不得自建 logger、
+  现存 50 处 `print` 按 `文件:函数` 粒度登记（新增即失败）
+- 两处测试隔离修正：`conftest.py` 新增 autouse 的 contextvar 清理；
+  M7 E2E 的 `_drain_worker` 改用 `with Worker(...)`（原来只 `startup()` 不 `shutdown()`，
+  `worker_id` 会泄漏到同线程的下一条用例 —— 单独跑绿、全量跑炸）
+- 测试：+67 → **826 passed / 2 skipped**
+
 **流程与沉淀**
 - 逐里程碑验收报告（M0～M4）在本机 `docs/milestones/`，**按约定不入库**
 - 给 Codex 的独立核查文档在桌面：`geteverything_项目汇总_给Codex检查.md`
@@ -165,9 +202,10 @@
 | **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库，**并已进资产页的观测时间线** | 资产页展示的是 `data_json` 原样 JSON，**没有按字段拆列**；任务详情页那一侧仍是原样 JSON |
 | **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
 | **M6 本机启动文档** | `CONTRIBUTING.md` 有环境搭建说明；`scripts/run_local.ps1` 可用 | 没有面向「新开发者 10 分钟启动」的完整文档；`scripts/check_env.py` 不存在 |
-| **M7 mypy** | ✅ **已完成（本轮）**：`mypy app.py core api jobs storage.py modules` → `Success: no issues found in 59 source files` | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
+| **M7 mypy** | ✅ **已完成**：`mypy app.py core api jobs storage.py modules` → `Success: no issues found in 60 source files` | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
 | **P1 Diff 的前端** | ✅ **已完成**：`/assets` 页底部有「两次任务对比」表单（基线与对比任务下拉、可选限定范围、「含未变」开关），四类分段渲染 + 属性差异（`status_code: 200 → 403`）；**清单条目可点进资产详情**（带 `asset_id` 的条目可点，详情面板会滚入视口） | — |
 | **P1 资产过期** | `mark_stale_assets(scope_id, last_seen_before=...)` 已实现且有用例 | **没有任何计划任务/接口调用它**，所以 `stale` / `gone` 目前永远是空的 |
+| **P1 §19 Observability** | ✅ **基础版已完成（本轮）**：结构化单行 JSON 事件 + 四个关联 ID（`request_id` / `job_id` / `step_id` / `worker_id`，contextvars 绑定）+ 脱敏与容器上限 + 三条源码守卫；`GEF_LOG_LEVEL` / `GEF_LOG_FORMAT` 可配 | 仍属**基础版**：日志只写 stderr，**无文件输出与轮转**；**无 metrics / trace**；`configure_logging()` 只在两个进程入口调用，所以 `waitress-serve app:app` 这类外部启动方式不出结构化日志（在 `create_app()` 里配置会关掉 `propagate`、弄坏 pytest 的 `caplog`）；`request_id` 不跨进程（worker 是独立进程，跨进程串联要靠 `job_id`）；`/api/settings` 页未暴露日志级别开关 |
 
 ---
 
@@ -197,13 +235,23 @@
 - [ ] 本机启动文档
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（759 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（826 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [x] SQLite 并发测试（`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
-- [x] **本地 fixture HTTP 测试**（本轮：`tests/fixtures/local_http_server.py` + `tests/integration/test_m7_local_e2e.py`，
+- [x] **本地 fixture HTTP 测试**（`tests/fixtures/local_http_server.py` + `tests/integration/test_m7_local_e2e.py`，
   真实 httpx 打 `127.0.0.1`，一条用例走完方案第 18 节全链路；无 httpx 可执行文件时自动 skip）
-- [x] **mypy 通过**（本轮：34 errors → 0，未改 mypy 配置）
+- [x] **mypy 通过**（34 errors → 0，未改 mypy 配置）
 - [ ] 一份测试报告
+
+**P1 §19 — Observability**（方案第 25 节 P1 验收 `[ ] Observability 完成基础版本`、第 26 节顺序第 16 条）
+- [x] `core/observability.py`：结构化单行 JSON 事件（唯一日志出口，无新依赖）
+- [x] `request_id`（`before_request` 生成/沿用 + `X-Request-Id` 回写 + `teardown_request` 清理）
+- [x] `job_id` / `step_id`（`jobs/executor.py` 的 `observability.bind(...)`）
+- [x] `worker_id`（`jobs/worker.py:Worker.startup`，`with Worker(...)` 保证成对）
+- [x] 禁止项落地：字段名黑白名单脱敏 + 容器上限 20 项（不记完整目标列表）+ 三条源码守卫
+- [x] `.env.example` / `README.md` 的配置与排障说明
+- [ ] 日志文件输出与轮转（当前仅 stderr）
+- [ ] metrics / trace（方案只要求「基础版本」）
 
 **其他待办（不在里程碑内，但已知）**
 - [x] `README.md` 未同步 M1～M4（已重写鉴权表、`upload_id`、导出下载示例）
@@ -319,17 +367,19 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（M7 本地 fixture HTTP 全链路 E2E 轮）
+验证时间：2026-10-02（P1 §19 Observability 轮）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 759 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
-mypy:   Success: no issues found in 59 source files        ← M7 验收命令，仍为 0
+pytest: 826 passed, 2 skipped, 0 failures / 0 errors      ← junitxml 计数，PowerShell 看不到汇总行
+mypy:   Success: no issues found in 60 source files        ← M7 验收命令，仍为 0
 node --check web/static/{app.js,assets.js}: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
+实机冒烟：python app.py 起 waitress，GET /health 回 200 且响应头带 X-Request-Id；
+        stderr 输出结构化 JSON 事件（含 request_id / path / status / duration_ms）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → **M7 本地全链路 E2E `759`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → **P1 §19 Observability `826`**
 
 ---
 

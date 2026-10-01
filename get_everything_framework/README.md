@@ -554,9 +554,46 @@ FOFA_KEY=xxx
 HUNTER_API_KEY=xxx
 QUAKE_API_KEY=xxx
 SHODAN_API_KEY=xxx
+
+# 结构化日志（方案第 19 节）
+GEF_LOG_LEVEL=INFO      # CRITICAL / ERROR / WARNING / INFO / DEBUG
+GEF_LOG_FORMAT=json     # json（一行一个事件）或 text（key=value）
 ```
 
 ENScan 的数据源 Cookie 通过 Web 面板的"设置"页写入，存到 `~/.config/enscan/config.yaml`。
+
+### 结构化日志与关联 ID（方案第 19 节）
+
+`core/observability.py` 是唯一的日志出口，一行一个 JSON 事件：
+
+```json
+{"ts":"2026-10-01T02:27:38+00:00","level":"INFO","event":"job_step_finished","job_id":"job_xxx","worker_id":"host-1234","step_id":"step_xxx","tool":"httpx","target":"example.test","status":"succeeded","found_count":3,"duration_ms":1200}
+```
+
+四个关联字段会自动带上，不需要逐层透传参数：
+
+| 字段 | 绑定位置 | 作用 |
+| --- | --- | --- |
+| `request_id` | `app.py` 的 `before_request` | 每次 HTTP 请求一个；入站带合法 `X-Request-Id` 就沿用，并回写同名响应头 |
+| `job_id` | `jobs/executor.py:execute_job` | 一次任务执行内所有事件共用 |
+| `step_id` | `jobs/executor.py` 的步骤循环 | 单个步骤内所有事件共用 |
+| `worker_id` | `jobs/worker.py:startup` | worker 进程生命周期内共用（`shutdown()` 还原） |
+
+排障用法：从浏览器响应头或 `curl -i` 拿到 `X-Request-Id`，然后
+
+```bash
+grep '"request_id":"req_xxx"' server.log
+```
+
+即可捞到这一跳的全部记录（访问日志、错误事件、以及它创建的任务）。
+
+**脱敏与容量约束**（方案第 19 节「不要把完整目标列表写进公共日志」）：
+
+- 字段名命中 `api_key` / `token` / `secret` / `password` / `authorization` /
+  `cookie` / `credential` → 值只记 `***`；
+- 其余文本先过 `core/runner_result.scrub_text`（URL 凭据、`--token VALUE`、
+  裸长 token 一律打码）；
+- 单字段超过 500 字符截断；list / dict 最多记 20 项。
 
 > ⚠️ **禁止**将 `.env` 提交到 Git，仓库已添加 `.gitignore` 默认忽略。
 

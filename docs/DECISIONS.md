@@ -140,6 +140,25 @@
 > **未动**：Scope / Policy / 审计 / 认证 / 数据库结构 / 脱敏正则本身 / `MAX_COMMAND_PREVIEW`。
 > **未扫任何外部目标**：E2E 的目标是 fixture 自己监听的 `127.0.0.1`，Scope 也只放行
 > `127.0.0.0/8`，`GEF_ALLOW_REAL_SCAN` 只在用例内 `monkeypatch.setenv`。
+>
+> **本轮已完成（P1 §19 Observability，全落在第 2 节白名单内）**：
+> 方案第 19 节要求的四件套全部落地，**第 2 节白名单第 1 条「日志改进」直接覆盖**，
+> 因此**没有新增未授权项**。新增 `core/observability.py` 作为唯一日志出口
+> （stdlib `logging`，**未引入任何新依赖**）：一行一个 JSON 事件 +
+> `request_id` / `job_id` / `step_id` / `worker_id` 四个关联字段（`contextvars` 绑定）+
+> 字段名黑白名单脱敏 + 容器上限 20 项。
+> 接线都在既有文件里加事件，未改任何业务判定：`app.py`（`before_request` /
+> `after_request` / `teardown_request` + `X-Request-Id` 回写）、`core/errors_handlers.py`、
+> `api/jobs.py`、`jobs/executor.py`、`jobs/worker.py`、`agent/action.py`
+> （原来那句会倒出整份结果的 debug `print` 改成结构化事件）。
+> **未动**：Scope / Policy / 审计 / 认证 / 数据库结构 / 脱敏正则本身 / 既有 `print` 的人读输出
+> （启动横幅、工具适配器提示、迁移脚本 stdout 全部保留原样）。
+> **刻意保留的现状**：401 的 `error_message` 里 `X-Local-Token` 后面的词会被脱敏规则打码
+> （失败即关闭的取舍，完整原文仍在 HTTP 响应体与 `audit_events` 里）；
+> 结构化日志只写 stderr，无文件输出与轮转。
+> 期间修掉一处**测试间污染**：M7 E2E 的 `_drain_worker` 只 `startup()` 不 `shutdown()`，
+> `worker_id` 上下文泄漏到同线程的下一条用例（单独跑绿、全量跑炸）；
+> 现改用 `with Worker(...)`，并在 `conftest.py` 加了 autouse 的 contextvar 清理兜底。
 
 ---
 

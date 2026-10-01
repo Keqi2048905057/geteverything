@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from exporter import export_results, gather_export_rows
 from core import exports as exports_store
+from core import observability
 from core import uploads
 from modules.httpx import HttpxRunner
 from storage import ScanResultStore, TOOL_DATABASES
@@ -354,7 +355,17 @@ class AgentAction:
             self._record_step(action, args, tool_result)
             tool_results.append(tool_result)
             if self.debug:
-                print(f"[debug] plan_step={action} args={args} result={tool_result}")
+                # 方案第 19 节：调试信息也走结构化日志（字段值自动脱敏、
+                # 容器最多记 20 项），不再裸 print 整个 result —— 那会把
+                # 目标列表与可能的密钥原样倒进控制台。
+                observability.log_event(
+                    observability.EVENT_AGENT_PLAN_STEP,
+                    level="DEBUG",
+                    tool=action,
+                    args=args,
+                    ok=bool(tool_result.get("ok")),
+                    error=tool_result.get("error"),
+                )
             if not tool_result.get("ok"):
                 break
 

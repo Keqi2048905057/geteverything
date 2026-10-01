@@ -33,6 +33,24 @@ os.environ.setdefault("SECRET_KEY", "test-only-" + "a1b2c3d4" * 6)
 TEST_ADMIN_TOKEN = "test-local-admin-token"
 
 
+@pytest.fixture(autouse=True)
+def _reset_observability_context():
+    """每个用例前后清空结构化日志的关联上下文（方案第 19 节）。
+
+    ``core.observability`` 用 ``contextvars`` 绑定 ``request_id`` / ``job_id`` /
+    ``step_id`` / ``worker_id``，其生命周期本应由 ``bind()`` / ``shutdown()``
+    成对管理。这层兜底保证：即便某个用例（或被测代码）漏了还原，也不会把
+    worker 身份串到后续用例里去 —— 测试之间必须互相独立。
+    """
+    from core import observability
+
+    for name in observability._CONTEXT_ORDER:
+        observability._CONTEXT_VARS[name].set(None)
+    yield
+    for name in observability._CONTEXT_ORDER:
+        observability._CONTEXT_VARS[name].set(None)
+
+
 @pytest.fixture
 def admin_token(monkeypatch):
     """固定的管理员 Token（通过 monkeypatch 注入 Config，不落盘）。"""

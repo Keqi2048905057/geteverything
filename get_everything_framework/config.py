@@ -25,6 +25,12 @@ class Config:
     WEB_DEBUG = os.getenv("WEB_DEBUG", "false").lower() == "true"
     WEB_THREADS = int(os.getenv("WEB_THREADS", "8"))
 
+    # 结构化日志（方案第 19 节 P1：Observability）。
+    # 值非法时由 core.observability 退化为 INFO / json，不在这里抛异常 ——
+    # 日志配置错误不应该让服务起不来。
+    LOG_LEVEL = os.getenv("GEF_LOG_LEVEL", "INFO")
+    LOG_FORMAT = os.getenv("GEF_LOG_FORMAT", "json")
+
     # 本地管理员 Token（M1 只在内存中生成并打印；M2 起落盘到 .env）
     LOCAL_ADMIN_TOKEN = os.getenv("LOCAL_ADMIN_TOKEN", "")
 

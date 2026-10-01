@@ -114,13 +114,14 @@ def _drain_worker(worker_id: str = "m7-e2e") -> int:
     """跑一轮 worker，把队列里的任务全部处理掉（不进常驻循环）。"""
     from jobs.worker import Worker
 
-    worker = Worker(worker_id=worker_id, verbose=False)
-    worker.startup()
-    processed = 0
-    while worker.tick() is not None:
-        processed += 1
-        if processed > 20:  # 防御：正常用例不会跑到这里
-            break
+    # 用 ``with`` 保证 startup/shutdown 成对：方案第 19 节的 worker_id 上下文
+    # 在 shutdown() 里还原，否则会泄漏到同一线程里的后续用例。
+    with Worker(worker_id=worker_id, verbose=False) as worker:
+        processed = 0
+        while worker.tick() is not None:
+            processed += 1
+            if processed > 20:  # 防御：正常用例不会跑到这里
+                break
     return processed
 
 

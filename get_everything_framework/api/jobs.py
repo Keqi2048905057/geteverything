@@ -25,6 +25,7 @@ from api import api_bp
 from core import artifacts as artifacts_store
 from core import assets as assets_store
 from core import audit, jobs as jobs_store, uploads
+from core import observability
 from core.auth import require_admin
 from core.errors import BadRequestError, NotFoundError
 from core.mock import SCENARIOS, normalize_scenario
@@ -168,6 +169,20 @@ def create_job():
         detail["idempotency_key"] = idempotency_key
         detail["reused"] = True
     audit.record(audit.EVENT_JOB_CREATED, target_id=job["id"], detail=detail)
+
+    # 方案第 19 节：任务创建也进结构化日志。request_id 由 app.py 的
+    # before_request 绑定，这里不用透传；**只记工具名与数量，不记目标列表**
+    # （完整目标在 audit_events 与 job 快照里，那是有意留存的审计数据）。
+    observability.log_event(
+        observability.EVENT_JOB_CREATED,
+        job_id=job["id"],
+        scope_id=scope.id,
+        mode=mode,
+        tools=tools,
+        target_count=len(validated_targets),
+        total_steps=job["total_steps"],
+        reused=reused,
+    )
 
     return (
         jsonify(

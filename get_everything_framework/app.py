@@ -16,12 +16,15 @@ API 接口已拆分至 api/ 目录, 便于独立维护和前端对接:
     api/results.py     GET  /api/results, /api/tool/<name>/results, /api/export
 """
 
-from flask import Flask, redirect, render_template, request, session, url_for
+import time
+
+from flask import Flask, g, redirect, render_template, request, session, url_for
 
 from agent import handle_agent_message
 from config import Config, MAX_UPLOAD_SIZE
 from core import assets as assets_store
 from core import auth as local_auth
+from core import observability
 from core.canonical import ASSET_TYPES
 from core.errors import BadRequestError, ScopeViolationError
 from core.errors_handlers import register_error_handlers
@@ -48,6 +51,65 @@ app.register_blueprint(api_bp)
 # /health 挂在根路径，且不要求登录（方案第 5.1 节）。
 from api.health import health_bp  # noqa: E402
 app.register_blueprint(health_bp)
+
+
+# ── 请求关联 ID 与访问日志（方案第 19 节：Observability） ─────
+# 每个请求绑定一个 ``request_id``：
+#   * 入站带了合法的 ``X-Request-Id`` 就沿用（便于跨进程追踪）；
+#   * 否则生成 ``req_<uuid4hex>``。
+# 该 ID 会带进本请求内所有 ``observability.log_event()`` 事件，并回写响应头，
+# 使用者可以拿 URL/头里的 ID 去日志里捞这一跳的全部记录。
+# 注意：绝不记录完整 URL（query 里可能带目标列表），只记 path。
+
+@app.before_request
+def _bind_request_context():
+    request_id = observability.accept_request_id(request.headers.get(observability.REQUEST_ID_HEADER))
+    if request_id is None:
+        request_id = observability.new_request_id()
+    g.request_id = request_id
+    g._request_started_at = time.perf_counter()
+    # 请求处理可能抛异常，``teardown_request`` 一定会跑，所以在这里补记访问日志。
+    g._request_logged = False
+    g._observability_token = observability.set_request_id(request_id)
+
+
+@app.after_request
+def _attach_request_id_header(response):
+    request_id = getattr(g, "request_id", None)
+    if request_id:
+        response.headers[observability.REQUEST_ID_HEADER] = request_id
+    # 状态码只在这里拿得到（响应对象）；teardown 阶段补记日志时用它。
+    g._request_status = response.status_code
+    return response
+
+
+@app.teardown_request
+def _log_request_finished(exc):
+    request_id = getattr(g, "request_id", None)
+    if not request_id or getattr(g, "_request_logged", False):
+        return  # 没进到 before_request（极早期失败）或已记过，不重复
+    g._request_logged = True
+
+    started = getattr(g, "_request_started_at", None)
+    duration_ms = None if started is None else int((time.perf_counter() - started) * 1000)
+    if exc is not None:
+        # after_request 不一定会跑（它自己之前的钩子抛了），异常路径用 exc 兜底。
+        status = getattr(exc, "code", None) or 500
+    else:
+        status = getattr(g, "_request_status", None)
+
+    observability.log_event(
+        observability.EVENT_HTTP_REQUEST,
+        level="ERROR" if exc is not None else "INFO",
+        request_id=request_id,
+        method=request.method,
+        # 只用 path：query 里可能带目标列表（方案第 19 节：不记录完整目标列表）。
+        path=request.path,
+        status=status,
+        duration_ms=duration_ms,
+        error=type(exc).__name__ if exc is not None else None,
+    )
+    observability.reset_request_id(getattr(g, "_observability_token", None))
 
 
 # ── 辅助函数 ──────────────────────────────────────────────
@@ -341,11 +403,20 @@ def _print_login_hint() -> None:
 
 
 def create_app() -> Flask:
-    """返回已配置好的 Flask 应用（供 waitress 与测试复用）。"""
+    """返回已配置好的 Flask 应用（供 waitress 与测试复用）。
+
+    结构化日志不在这里配置：``configure_logging()`` 会把 ``gef`` logger 的
+    ``propagate`` 关掉并挂上 stderr handler，那会干扰 pytest 的 ``caplog``
+    （测试要靠 root logger 抓事件）。因此只在实际启动进程的入口
+    （``python app.py`` / ``python -m jobs.worker``）里调用它。
+    """
     return app
 
 
 if __name__ == "__main__":
+    # 结构化日志接管（方案第 19 节）：默认 JSON 单行、级别取自 .env 的
+    # GEF_LOG_LEVEL / GEF_LOG_FORMAT。控制台登录提示走 print，保持人读友好。
+    observability.configure_logging()
     _print_login_hint()
     from waitress import serve
 
