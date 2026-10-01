@@ -10,7 +10,7 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 本地领先 origin/main 4 个提交（纯快进，待确认后推送）· M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 本地领先 origin/main 5 个提交（纯快进，待确认后推送）· M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
@@ -532,28 +532,29 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-00e2216   ← 最近一次提交（M7 测试报告 + 全量基线同步 900 → 901）
-4712ad9  fix(tests): 测试运行期目录隔离——autouse 夹具 + GEF_OUTPUT_DIR 出口 + 回归锁
-00e2216  docs: M7 测试报告 docs/TEST_REPORT.md + 全量基线同步 900 → 901 (2026-10-01)
+dc9969a   ← 最近一次提交（P0-6 阶段二前置件：Agent 同步 → 异步影响说明）
+dc9969a  docs: P0-6 阶段二前置件——Agent 同步 → 异步影响说明（docs/AGENT_ASYNC_IMPACT.md） (2026-10-01)
 ```
 
 自检：
 
 ```powershell
 git log -1 --format="%H %s"     # 以这条输出为准
-git status -sb                  # ## main...origin/main [ahead 4] = 有 4 个提交待推送（纯快进）
+git status -sb                  # ## main...origin/main [ahead 5] = 有 5 个提交待推送（纯快进）
 ```
 
 与 `origin/main` 的关系：本轮之前已按用户选定的「先做 push 前安全审计，再 push」
 （见 `docs/DECISIONS.md` §3.3）完成过一次审计并推送，24 个提交快进到 `40c5771`。
-**此后新增 4 个提交尚未推送**（`e19c5d5` M6 环境自检、`32a2774` M6 文档同步、
-`4712ad9` 测试隔离修复、`00e2216` M7 测试报告 + 基线同步），
-`git rev-list --left-right --count origin/main...HEAD` 为 `0 4` —— **纯快进，无需 force**。
+**此后新增 5 个提交尚未推送**：
+`e19c5d5`（M6 环境自检）、`32a2774`（M6 文档同步）、`4712ad9`（测试隔离修复）、
+`00e2216`（M7 测试报告 + 基线同步）、`dc9969a`（P0-6 阶段二影响说明），
+`git rev-list --left-right --count origin/main...HEAD` 为 `0 5` —— **纯快进，无需 force**。
 按用户偏好「提交可做但不做 push，需等确认」，**推送前请再确认一次**。
-下表是**除本文件提交之外**的全部 23 个提交：
+下表是**除本文件独立提交之外**的全部 25 个提交（不含只改本文件的 `docs: 状态板…` 提交）：
 
 | 提交 | 说明 |
 |---|---|
+| `dc9969a` | docs: P0-6 阶段二前置件——Agent 同步 → 异步影响说明 |
 | `00e2216` | docs: M7 测试报告 docs/TEST_REPORT.md + 全量基线同步 900 → 901 |
 | `4712ad9` | fix(tests): 测试运行期目录隔离——autouse 夹具 + GEF_OUTPUT_DIR 出口 + 回归锁 |
 | `32a2774` | docs: 同步 M6 环境自检脚本 + 推送前安全审计结论 |
