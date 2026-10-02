@@ -34,6 +34,18 @@ _ALLOW_ALL_TOKENS = {"*", "*.*", "0.0.0.0/0", "::/0"}
 TARGET_KIND_DOMAIN = "domain"
 TARGET_KIND_IP = "ip"
 
+#: 「这个目标为什么被放行 / 被拒绝」的三档判定结果。
+#:
+#: ``MATCH_ALLOWED``     —— 落在授权范围内；
+#: ``MATCH_EXCLUDED``    —— 命中排除列表（**排除优先**，即使同时落在允许范围内也算拒绝）；
+#: ``MATCH_OUT_OF_SCOPE``—— 不在允许范围里。
+#:
+#: 把判定结果做成公开常量，是为了让「试算 / 解释」这类只读能力可以复用
+#: :meth:`Scope.match_target`，而不是各自再写一遍匹配逻辑。
+MATCH_ALLOWED = "allowed"
+MATCH_EXCLUDED = "excluded"
+MATCH_OUT_OF_SCOPE = "out_of_scope"
+
 
 @dataclass(frozen=True)
 class NormalizedTarget:
@@ -196,6 +208,34 @@ class Scope:
 
     # ── 校验 ─────────────────────────────────────────────
 
+    def match_target(self, raw: str) -> tuple[NormalizedTarget, str]:
+        """判定目标落在哪一档，**不抛异常**（供只读试算使用）。
+
+        :meth:`validate_target` 的判定逻辑全部在这里，两者不会漂移：
+        ``validate_target`` 只是把非 ``MATCH_ALLOWED`` 的结果转成异常。
+
+        Returns:
+            tuple[NormalizedTarget, str]: ``(规范化目标, MATCH_* 之一)``。
+
+        Raises:
+            InvalidTargetError: 目标格式非法（这一条仍然抛 —— 格式错不是「判定结果」）。
+        """
+        target = normalize_target(raw)
+
+        if target.kind == TARGET_KIND_DOMAIN:
+            if any(_matches_domain(target.value, p) for p in self.excluded_domains):
+                return target, MATCH_EXCLUDED
+            if any(_matches_domain(target.value, p) for p in self.allowed_domains):
+                return target, MATCH_ALLOWED
+            return target, MATCH_OUT_OF_SCOPE
+
+        # IP 目标：先看是否命中被排除域名对应的反查结果（此处不做 DNS 反查，
+        # 只用网段判断），再要求落在 allowed_cidrs 内。
+        address = ipaddress.ip_address(target.value)
+        if any(address in network for network in self._networks):
+            return target, MATCH_ALLOWED
+        return target, MATCH_OUT_OF_SCOPE
+
     def validate_target(self, raw: str) -> NormalizedTarget:
         """校验单个目标是否落在授权范围内。
 
@@ -206,26 +246,20 @@ class Scope:
             InvalidTargetError: 目标格式非法。
             ScopeViolationError: 目标不在允许范围内，或命中排除列表。
         """
-        target = normalize_target(raw)
+        target, verdict = self.match_target(raw)
 
+        if verdict == MATCH_ALLOWED:
+            return target
+        if verdict == MATCH_EXCLUDED:
+            raise ScopeViolationError(
+                f"目标 {target.value} 命中排除列表",
+                details={"target": target.value, "scope_id": self.id},
+            )
         if target.kind == TARGET_KIND_DOMAIN:
-            if any(_matches_domain(target.value, p) for p in self.excluded_domains):
-                raise ScopeViolationError(
-                    f"目标 {target.value} 命中排除列表",
-                    details={"target": target.value, "scope_id": self.id},
-                )
-            if any(_matches_domain(target.value, p) for p in self.allowed_domains):
-                return target
             raise ScopeViolationError(
                 f"目标 {target.value} 不在 Scope 允许的域名内",
                 details={"target": target.value, "scope_id": self.id},
             )
-
-        # IP 目标：先看是否命中被排除域名对应的反查结果（此处不做 DNS 反查，
-        # 只用网段判断），再要求落在 allowed_cidrs 内。
-        address = ipaddress.ip_address(target.value)
-        if any(address in network for network in self._networks):
-            return target
         raise ScopeViolationError(
             f"目标 {target.value} 不在 Scope 允许的网段内",
             details={"target": target.value, "scope_id": self.id},

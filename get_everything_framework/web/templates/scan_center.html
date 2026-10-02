@@ -49,72 +49,96 @@
         被列入公网白名单的工具只有 <code>{{ internet_allowed_tools | join('、') }}</code>。
       </div>
 
-      <!-- 步骤 1：授权项目 -->
+      <!-- 步骤 1：输入目标 → 立即试算授权 -->
       <div class="sc-step">
-        <h3>步骤 1 · 授权项目</h3>
-        <p class="sc-step-note">
-          授权项目是<strong>授权证据的组织单位</strong>：一次授权测试对应一个项目，
-          授权说明与负责人记在这里。
-        </p>
-        <form class="form" id="project-form" autocomplete="off">
-          <label for="project-name">项目名称</label>
-          <input type="text" id="project-name" name="name" placeholder="学校官网授权测试" required>
+        <h3>步骤 1 · 输入目标</h3>
+        <form class="form" id="check-form" autocomplete="off">
+          <label for="job-target">目标（域名 / IP / 网段，逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
+          <!-- placeholder 只是示例，浏览器不会把它当成值提交 —— 页面**没有默认目标**。 -->
+          <input type="text" id="job-target" name="targets" placeholder="www.example.cn" required>
 
-          <label for="project-note">授权说明（谁授权、范围、凭据形式）</label>
-          <input type="text" id="project-note" name="authorization_note"
-                 placeholder="2026-10-02 校方信息中心书面授权，仅被动信息收集" required>
-
-          <label for="project-owner">负责人（可选）</label>
-          <input type="text" id="project-owner" name="owner" placeholder="张三">
-
-          <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-            创建授权项目
-          </button>
+          <div class="sc-actions">
+            <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
+              检查授权
+            </button>
+          </div>
         </form>
-        <p class="sc-step-note" id="project-feedback">
-          授权说明不能留空 —— 它是公网扫描的授权证据。
+        <p class="sc-step-note" id="check-summary">
+          先填目标并点「检查授权」，页面会告诉你它落在哪个授权范围内、还缺哪一道闸门。
         </p>
+        <div id="check-result"></div>
       </div>
 
-      <!-- 步骤 2：授权范围 -->
+      <!-- 步骤 2：确认授权范围 -->
       <div class="sc-step">
-        <h3>步骤 2 · 授权范围</h3>
+        <h3>步骤 2 · 确认授权范围</h3>
 
-        <!-- 当前项目：只显示名称与负责人，不显示内部主键。 -->
-        <p class="sc-step-note" id="scope-project-current">当前项目：正在读取…</p>
+        <div id="scope-create" hidden>
+          <p class="sc-step-note">
+            上面的目标还没有被任何授权范围覆盖。补一个范围即可 ——
+            范围必须挂在授权项目下，项目的「授权说明」是公网扫描的授权证据。
+          </p>
+          <form class="form" id="project-form" autocomplete="off">
+            <label for="project-name">项目名称</label>
+            <input type="text" id="project-name" name="name" placeholder="学校官网授权测试" required>
+
+            <label for="project-note">授权说明（谁授权、范围、凭据形式）</label>
+            <input type="text" id="project-note" name="authorization_note"
+                   placeholder="2026-10-02 校方信息中心书面授权，仅被动信息收集" required>
+
+            <label for="project-owner">负责人（可选）</label>
+            <input type="text" id="project-owner" name="owner" placeholder="张三">
+
+            <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
+              创建授权项目
+            </button>
+          </form>
+        </div>
 
         <form class="form" id="scope-form" autocomplete="off">
-          <!-- 归属项目的真实 ID 放在隐藏字段里（仅供提交，不可见），
-               由 scan_center.js 随「当前项目」同步。 -->
-          <input type="hidden" id="scope-project" name="project_id" value="">
+          <label for="job-project">授权项目</label>
+          <select id="job-project" name="project_id" required>
+            <option value="">还没有授权项目</option>
+          </select>
 
-          <label for="scope-domains">授权域名（逗号分隔；子域用 *.example.com 或直接写根域）</label>
-          <!-- 占位符只是示例，浏览器不会把它当成值提交 —— 页面**没有默认目标**。 -->
-          <input type="text" id="scope-domains" name="allowed_domains" placeholder="www.example.cn">
+          <label for="job-scope">授权范围</label>
+          <select id="job-scope" name="scope_id" required>
+            <option value="">这个项目还没有授权范围</option>
+          </select>
+          <p class="sc-step-note" id="scope-feedback">
+            只列出所选项目下的范围 —— 选错项目就选不到范围，从界面上避免张冠李戴。
+          </p>
 
-          <label for="scope-cidrs">授权网段（逗号分隔，可选）</label>
-          <input type="text" id="scope-cidrs" name="allowed_cidrs" placeholder="203.0.113.0/24">
+          <details class="sc-details" id="scope-add">
+            <summary>给这个项目新增一个授权范围</summary>
+            <div class="sc-details-body">
+              <label for="scope-domains">授权域名（逗号分隔；子域用 *.example.com 或直接写根域）</label>
+              <input type="text" id="scope-domains" name="allowed_domains" placeholder="www.example.cn">
 
-          <label class="check-inline" for="scope-active">
-            <input type="checkbox" id="scope-active" name="active_scan" checked>
-            允许对该范围进行真实外部扫描
-          </label>
+              <label for="scope-cidrs">授权网段（逗号分隔，可选）</label>
+              <input type="text" id="scope-cidrs" name="allowed_cidrs" placeholder="203.0.113.0/24">
 
-          <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-            添加授权范围
-          </button>
+              <label class="check-inline" for="scope-active">
+                <input type="checkbox" id="scope-active" name="active_scan" checked>
+                允许对该范围进行真实外部扫描
+              </label>
+
+              <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
+                添加授权范围
+              </button>
+              <p class="sc-step-note">
+                框架禁止 <code>*</code> 这类全放行通配符，必须逐个显式列出。
+              </p>
+            </div>
+          </details>
         </form>
-        <p class="sc-step-note" id="scope-feedback">
-          框架禁止 <code>*</code> 这类全放行通配符，必须逐个显式列出。
-        </p>
 
         <div id="scope-list"></div>
       </div>
 
-      <!-- 步骤 3：目标与工具 -->
+      <!-- 步骤 3：选择工具 -->
       <div class="sc-step">
-        <h3>步骤 3 · 目标与工具</h3>
-
+        <h3>步骤 3 · 选择工具</h3>
         <div class="sc-strategies" id="strategy-list"></div>
         <p class="sc-step-note" id="strategy-note">资产发现：被动子域枚举 + 存活探测，流量最轻。</p>
         <div id="restricted-note" hidden></div>
@@ -123,22 +147,12 @@
           <p class="sc-step-note">自定义模式：勾选要用的工具（被禁工具无法勾选）。</p>
           <div class="sc-tools" id="tool-list"></div>
         </div>
+      </div>
 
-        <form class="form" id="job-form" autocomplete="off" style="margin-top: 12px;">
-          <label for="job-project">授权项目</label>
-          <select id="job-project" name="project_id" required>
-            <option value="">还没有授权项目</option>
-          </select>
-
-          <label for="job-scope">授权范围（只列出该项目下的范围）</label>
-          <select id="job-scope" name="scope_id" required>
-            <option value="">这个项目还没有授权范围</option>
-          </select>
-
-          <label for="job-target">目标（逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
-          <!-- 同上：placeholder 只是示例，没有默认值。 -->
-          <input type="text" id="job-target" name="targets" placeholder="www.example.cn" required>
-
+      <!-- 步骤 4：执行模式与提交 -->
+      <div class="sc-step">
+        <h3>步骤 4 · 执行模式与提交</h3>
+        <form class="form" id="job-form" autocomplete="off">
           <label class="check-inline" for="job-mock">
             <input type="checkbox" id="job-mock" name="mode_mock">
             本地验证模式（mock，不联网，仅演练流程）
@@ -150,7 +164,7 @@
             </button>
           </div>
         </form>
-        <p class="sc-step-note">
+        <p class="sc-step-note" id="job-feedback">
           提交后立即返回任务 ID（<code>queued</code>），由 worker 异步执行。
           执行前请确认 worker 已启动：<code>python -m jobs.worker</code>。
           任务创建必须依次通过「项目 → 项目内范围 → 公网工具白名单 → Policy / Scope / 模式」，
@@ -160,7 +174,7 @@
     </section>
 
     <section class="panel">
-      <h2>授权项目</h2>
+      <h2>授权项目与范围</h2>
       <div id="project-list"></div>
       <p class="hint">
         关联项目<strong>不会</strong>放开任何权限 —— 能不能真实扫描仍然由
@@ -202,7 +216,7 @@
         <p class="hint">状态每 3 秒自动刷新；「详情」展开每个步骤的状态、错误码与耗时。</p>
       {% else %}
         <p class="hint">
-          还没有任务。按左侧三步走：先建授权项目 → 加授权范围 → 创建任务。
+          还没有任务。按左侧四步走：填目标 → 确认授权范围 → 选工具 → 创建任务。
           创建后若状态一直停在 <code>queued</code>，说明 worker 没在跑。
         </p>
       {% endif %}

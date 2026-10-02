@@ -1,32 +1,37 @@
 /* Get Everything Framework — 扫描中心前端
  *
- * 职责（对应页面上的三个区块）：
- *   1. 「授权项目」  —— 创建授权测试项目（授权证据的组织单位）；
- *   2. 「授权范围」  —— 给当前项目添加域名 / IP 网段范围；
- *   3. 「创建任务」  —— 选目标 / 选工具 / 选模式，调 POST /api/public-jobs。
+ * 页面上的四步（下一阶段方案第 2、6 节 Phase 2 的「简化创建流程」）：
  *
- * ── 展示口径（下一阶段方案第 2 节「Scope 展示」） ──────────────
- * 用户看到的是：
+ *   步骤 1 · 输入目标      → 填目标，点「检查授权」调 POST /api/public-jobs/check
+ *   步骤 2 · 确认授权范围  → 选项目 + 选范围（不够就现场补一个）
+ *   步骤 3 · 选择工具      → 选 Scan Profile（资产发现 / Web 检查 / 自定义）
+ *   步骤 4 · 执行模式与提交 → mock 或 real，创建任务
+ *
+ * ── 为什么第 1 步是「检查授权」而不是直接创建任务 ──────────────
+ * 以前用户填完目标点创建，越界 / 没开 active_scan / 没开环境开关这三种情况
+ * 都表现为同一个 `403 scope_violation`，只能靠读错误消息反推缺了哪一道。
+ * 现在第 1 步先把结论摊开：目标落在哪个范围内、还缺什么。
+ * 这一步**只读**，不创建任务、不写审计；匹配用的是 Policy 内部同一个
+ * `Scope.match_target`，所以「试算说能过」与「真提交能过」不会不一致。
+ *
+ * ── 展示口径（Phase 1：隐藏内部 ID、去后台术语） ──────────────
+ * 用户看到的是
  *
  *     学校官网
  *     www.example.cn
  *     已授权
  *
- * 而不是 `scope_9f3c…`、`proj_1a2b…` 这类内部主键，也不是
- * `Scope 1 个`、`（无）`、空占位符这类后台术语与空壳。
- * 具体做法：
- *   * 所有**可见文案**都用名称/目标/状态拼，绝不把实体 ID 写进 textContent；
- *     实体 ID 只作为表单 `<option value>` 与请求体字段（不可见）；
- *   * 目标清单来自既有的、**需登录**的 `GET /api/scopes`（管理员本来就能看到），
- *     而不是塞进 `/api/scan-center` 的批量元数据里 —— 那条接口保持「不下发目标清单」
- *     的既有约定（有测试锁定）。
+ * 而不是 `scope_9f3c…`。所有可见文案都走 scopeLabel() / projectLabel() /
+ * describeScopeTargets() / scopeStateLabel() 四个翻译函数；实体 ID 只作为
+ * `<option value>` 与请求体字段（不可见）。
+ * 目标清单来自既有的、需登录的 `GET /api/scopes`，不塞进 `/api/scan-center`
+ * —— 那条接口「不下发目标清单」的既有约定与测试保持有效。
  *
  * ── 安全约定 ──────────────────────────────────────────────────
- *   * 页面上的每一个提交动作都只是**转发**到 API，闸门全部在服务端
+ *   * 每一个提交动作都只是**转发**到 API，闸门全部在服务端
  *     （项目 → 项目内范围 → 公网工具白名单 → Policy / Scope / 模式）；
  *     前端不做、也不能做「能不能扫」的判断；
- *   * 被禁用的工具在界面上置灰，这是**可用性**提示而不是安全边界 ——
- *     即便有人绕过 DOM 直接发请求，后端一样会 400；
+ *   * 被禁用的工具在界面上置灰，这是**可用性**提示而不是安全边界；
  *   * 不使用任何前端框架、不引入 CDN 资源。
  */
 
@@ -37,8 +42,24 @@
   var metadata = null;
   /** scope_id → Scope 对象（来自 `GET /api/scopes`），用于把 ID 翻译成人话。 */
   var scopeIndex = {};
-  /** 步骤 2 操作的项目；步骤 1 创建成功后自动切到新项目。 */
-  var currentProjectId = "";
+  /** 上一次试算的原始目标，用于「补范围」时自动带过去。 */
+  var lastTargets = [];
+
+  // 缺哪一道闸门 → 人话。后端给 `blocker`，这里只做翻译，不做判定。
+  var BLOCKER_LABELS = {
+    invalid_target: "目标格式不合法",
+    no_scope: "还没有任何授权范围",
+    not_authorized: "这个目标不在任何已授权范围内",
+    scope_inactive: "目标已被授权，但该范围没有开启真实扫描",
+    env_disabled: "范围已授权，但环境总开关 GEF_ALLOW_REAL_SCAN 没开",
+  };
+
+  var STATUS_LABELS = {
+    ready: "已授权，可真实扫描",
+    scope_inactive: "已授权，但未开启真实扫描",
+    excluded: "命中排除列表（排除优先，等于拒绝）",
+    out_of_scope: "不在该范围内",
+  };
 
   function $(id) {
     return document.getElementById(id);
@@ -79,9 +100,18 @@
     return p;
   }
 
+  function splitList(value) {
+    return (value || "")
+      .split(",")
+      .map(function (item) {
+        return item.trim();
+      })
+      .filter(Boolean);
+  }
+
   // ── 把内部 ID 翻译成用户能读的文案 ────────────────────────
 
-  /** 某个 Scope 的授权目标（域名 + 网段），只用于展示。 */
+  /** 某个范围的授权目标（域名 + 网段），只用于展示。 */
   function describeScopeTargets(scope) {
     if (!scope) return "";
     var parts = [];
@@ -94,7 +124,7 @@
     return parts.join("、") || "（未填写目标）";
   }
 
-  /** Scope 的授权状态文案。 */
+  /** 范围的授权状态文案。 */
   function scopeStateLabel(scope) {
     if (!scope) return "未知";
     return scope.active_scan ? "已授权" : "仅被动（未开真实扫描）";
@@ -111,7 +141,7 @@
     return scope.name + " · " + describeScopeTargets(scope) + " · " + scopeStateLabel(scope);
   }
 
-  /** 项目下拉框文案：只用名称，不带 `proj_…`。 */
+  /** 项目下拉框文案：只用名称与负责人，不带 `proj_…`。 */
   function projectLabel(project) {
     if (!project) return "授权项目";
     return project.name + (project.owner ? " · 负责人 " + project.owner : "");
@@ -119,9 +149,11 @@
 
   function projectById(projectId) {
     if (!metadata || !metadata.projects) return null;
-    return metadata.projects.filter(function (item) {
-      return item.id === projectId;
-    })[0] || null;
+    return (
+      metadata.projects.filter(function (item) {
+        return item.id === projectId;
+      })[0] || null
+    );
   }
 
   function scopeById(scopeId) {
@@ -129,7 +161,6 @@
   }
 
   // 服务端统一的错误体形状：error_code + error_message（+ details）。
-  // 把 details 里的字段级原因也读出来，否则用户只知道「被拒了」不知道为什么。
   function describeError(result) {
     var data = result.data || {};
     var message = data.error_message || ("HTTP " + result.status);
@@ -190,11 +221,11 @@
         metadata = center;
         renderStrategies(center.strategies, center.restricted_tools);
         renderToolList(center.tools, center.restricted_tools);
-        renderProjects(center.projects);
         fillProjectSelects(center.projects);
+        renderProjects(center.projects);
       })
       .catch(function () {
-        setText("project-feedback", "扫描中心元数据读取失败，请刷新页面重试。", true);
+        setText("check-summary", "扫描中心元数据读取失败，请刷新页面重试。", true);
       });
   }
 
@@ -250,7 +281,7 @@
 
     // 受限工具单独说明一次，避免用户以为界面漏了 nuclei。
     // 写进**独立**的提示元素，不再往 strategy-note 上累加 ——
-    // 累加会让「切换策略」后的说明里混着上一次的尾巴（方案第 2 节「清理异常展示」）。
+    // 累加会让「切换策略」后的说明里混着上一次的尾巴。
     var restrictedBox = $("restricted-note");
     if (restrictedBox) {
       restrictedBox.textContent = "";
@@ -312,14 +343,13 @@
     box.textContent = "";
 
     if (!projects.length) {
-      box.appendChild(hint("还没有授权项目。先在上面「步骤 1」创建一个。"));
+      box.appendChild(hint("还没有授权项目。在步骤 2 里创建一个。"));
       return;
     }
 
     projects.forEach(function (project) {
       var row = document.createElement("div");
       row.className = "sc-project-row";
-      if (project.id === currentProjectId) row.classList.add("is-current");
 
       var head = document.createElement("div");
       head.className = "sc-project-head";
@@ -338,20 +368,9 @@
         owner.textContent = "负责人 " + project.owner;
         head.appendChild(owner);
       }
-
-      var use = document.createElement("button");
-      use.type = "button";
-      use.className = "btn btn-ghost sc-project-use";
-      use.textContent = project.id === currentProjectId ? "当前项目" : "设为当前项目";
-      use.disabled = project.id === currentProjectId;
-      use.addEventListener("click", function () {
-        selectProject(project.id);
-      });
-      head.appendChild(use);
       row.appendChild(head);
 
-      // 授权说明是这一页最该被看见的东西，给它一整行，而不是塞进 title 属性
-      // （title 要悬停才出现，等于没展示）。
+      // 授权说明是这一页最该被看见的东西，给它一整行，而不是塞进 title 属性。
       if (project.authorization_note) {
         var note = document.createElement("p");
         note.className = "sc-project-note";
@@ -359,107 +378,55 @@
         row.appendChild(note);
       }
 
-      box.appendChild(row);
-    });
-  }
+      // 每个项目下挂的范围，直接列出来（名称 + 目标 + 状态），不显示 scope_…。
+      (project.scope_ids || []).forEach(function (scopeId) {
+        var scope = scopeById(scopeId);
+        var line = document.createElement("div");
+        line.className = "sc-scope-row" + (scope && scope.active_scan ? " is-active" : "");
 
-  function renderScopeList() {
-    var box = $("scope-list");
-    if (!box) return;
-    box.textContent = "";
+        var sName = document.createElement("strong");
+        sName.textContent = scope ? scope.name : "授权范围";
+        line.appendChild(sName);
 
-    var project = projectById(currentProjectId);
-    if (!project) {
-      box.appendChild(hint("先在步骤 1 创建或选一个授权项目，这里会列出它的授权范围。"));
-      return;
-    }
+        var targets = document.createElement("span");
+        targets.className = "sc-scope-targets";
+        targets.textContent = describeScopeTargets(scope);
+        line.appendChild(targets);
 
-    var ids = project.scope_ids || [];
-    if (!ids.length) {
-      box.appendChild(hint("这个项目还没有授权范围。填一个域名或网段，点「添加授权范围」。"));
-      return;
-    }
+        var state = document.createElement("span");
+        state.className = "badge " + (scope && scope.active_scan ? "badge-ok" : "badge-warn");
+        state.textContent = scopeStateLabel(scope);
+        line.appendChild(state);
 
-    var title = document.createElement("h4");
-    title.className = "sc-scope-title";
-    title.textContent = "已授权的范围";
-    box.appendChild(title);
-
-    ids.forEach(function (scopeId) {
-      var scope = scopeById(scopeId);
-      var row = document.createElement("div");
-      row.className = "sc-scope-row" + (scope && scope.active_scan ? " is-active" : "");
-
-      var name = document.createElement("strong");
-      name.textContent = scope ? scope.name : "授权范围";
-      row.appendChild(name);
-
-      var targets = document.createElement("span");
-      targets.className = "sc-scope-targets";
-      targets.textContent = describeScopeTargets(scope);
-      row.appendChild(targets);
-
-      var state = document.createElement("span");
-      state.className = "badge " + (scope && scope.active_scan ? "badge-ok" : "badge-warn");
-      state.textContent = scopeStateLabel(scope);
-      row.appendChild(state);
+        row.appendChild(line);
+      });
 
       box.appendChild(row);
     });
-  }
-
-  function syncProjectHeader() {
-    var line = $("scope-project-current");
-    if (!line) return;
-    var project = projectById(currentProjectId);
-    line.textContent = project
-      ? "当前项目：" + projectLabel(project)
-      : "当前项目：还没有 —— 请先在步骤 1 创建一个。";
-  }
-
-  function selectProject(projectId) {
-    currentProjectId = projectId || "";
-    var hidden = $("scope-project");
-    if (hidden) hidden.value = currentProjectId;
-    var jobSelect = $("job-project");
-    if (jobSelect && currentProjectId) jobSelect.value = currentProjectId;
-
-    syncProjectHeader();
-    syncJobScopes();
-    renderProjects((metadata && metadata.projects) || []);
-    renderScopeList();
   }
 
   function fillProjectSelects(projects) {
-    ["scope-project", "job-project"].forEach(function (id) {
-      var select = $(id);
-      if (!select) return;
-      var current = select.value;
-      select.textContent = "";
-      if (!projects.length) {
-        var empty = document.createElement("option");
-        empty.value = "";
-        empty.textContent = "还没有授权项目";
-        select.appendChild(empty);
-        return;
-      }
-      projects.forEach(function (project) {
-        var option = document.createElement("option");
-        option.value = project.id;
-        // 可见文案里只有名称与负责人，不带 `proj_…`。
-        option.textContent = projectLabel(project);
-        select.appendChild(option);
-      });
-      if (current) select.value = current;
-    });
-
-    // 默认选中最近创建的那个项目（列表按创建时间倒序），用户少点一次。
-    var jobSelect = $("job-project");
-    var fallback = projects.length ? projects[0].id : "";
-    if (!currentProjectId) {
-      currentProjectId = (jobSelect && jobSelect.value) || fallback;
+    var select = $("job-project");
+    if (!select) return;
+    var current = select.value;
+    select.textContent = "";
+    if (!projects.length) {
+      var empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = "还没有授权项目";
+      select.appendChild(empty);
+      return;
     }
-    selectProject(currentProjectId);
+    projects.forEach(function (project) {
+      var option = document.createElement("option");
+      option.value = project.id;
+      // 可见文案里只有名称与负责人，不带 `proj_…`。
+      option.textContent = projectLabel(project);
+      select.appendChild(option);
+    });
+    // 列表按创建时间倒序，默认选最近创建的那个。
+    select.value = current || projects[0].id;
+    syncJobScopes();
   }
 
   // 项目 → 已关联范围的联动：只列出该项目下的范围，
@@ -488,42 +455,195 @@
     });
   }
 
-  // ── 步骤 1：创建项目 ────────────────────────────────────
+  // ── 步骤 1：检查授权（只读试算） ─────────────────────────
+
+  function renderCheckResults(payload) {
+    var box = $("check-result");
+    if (!box) return;
+    box.textContent = "";
+
+    var needsScope = false;
+
+    (payload.checks || []).forEach(function (check) {
+      var card = document.createElement("div");
+      card.className = "sc-check" + (check.ready ? " is-ready" : " is-blocked");
+
+      var head = document.createElement("div");
+      head.className = "sc-check-head";
+      var target = document.createElement("strong");
+      target.textContent = check.valid ? check.normalized : check.raw;
+      head.appendChild(target);
+
+      var badge = document.createElement("span");
+      badge.className = "badge " + (check.ready ? "badge-ok" : "badge-warn");
+      badge.textContent = check.ready ? "可以扫" : "还不能扫";
+      head.appendChild(badge);
+      card.appendChild(head);
+
+      if (!check.valid) {
+        card.appendChild(hint("目标格式不合法：" + check.error_message, "sc-check-note"));
+      } else {
+        // 命中哪些范围 —— 只显示放行的；被排除的单独说明（它有诊断价值）。
+        var eligible = (check.matches || []).filter(function (item) {
+          return item.verdict === "allowed";
+        });
+        if (eligible.length) {
+          eligible.forEach(function (match) {
+            var line = document.createElement("div");
+            line.className = "sc-check-match";
+            var scopeName = document.createElement("strong");
+            scopeName.textContent = match.scope_name;
+            line.appendChild(scopeName);
+
+            var where = document.createElement("span");
+            where.className = "sc-scope-targets";
+            where.textContent = match.project_name
+              ? "项目 " + match.project_name
+              : "未挂到任何项目";
+            line.appendChild(where);
+
+            var state = document.createElement("span");
+            state.className = "badge " + (match.status === "ready" ? "badge-ok" : "badge-warn");
+            state.textContent = STATUS_LABELS[match.status] || match.status;
+            line.appendChild(state);
+            card.appendChild(line);
+          });
+        } else {
+          card.appendChild(
+            hint(
+              check.blocker === "no_scope"
+                ? "还没有任何授权范围 —— 先在下面建一个项目，再把目标加进去。"
+                : "这个目标不在任何已授权范围内。",
+              "sc-check-note"
+            )
+          );
+        }
+
+        (check.matches || [])
+          .filter(function (item) {
+            return item.status === "excluded";
+          })
+          .forEach(function (match) {
+            card.appendChild(
+              hint("注意：" + match.scope_name + " 把它列在排除列表里 —— 排除优先。", "sc-check-note")
+            );
+          });
+
+        if (!check.ready) {
+          card.appendChild(
+            hint(
+              "还差一步：" + (BLOCKER_LABELS[check.blocker] || check.blocker),
+              "sc-check-note sc-check-blocker"
+            )
+          );
+        }
+        if (check.resolved_check_deferred) {
+          card.appendChild(
+            hint(
+              "说明：这里只按授权范围的字面匹配判断，执行前还会做一次真实 DNS 解析校验。",
+              "sc-check-note"
+            )
+          );
+        }
+      }
+
+      if (!check.ready) needsScope = true;
+      box.appendChild(card);
+    });
+
+    // 建议模式：能扫就默认真实，不能扫就别让用户对着红灯发愣。
+    var mock = $("job-mock");
+    if (mock && payload.suggested_mode) {
+      mock.checked = payload.suggested_mode !== "real";
+    }
+
+    var createBox = $("scope-create");
+    if (createBox) createBox.hidden = !needsScope;
+
+    setText(
+      "check-summary",
+      payload.summary.ready + " / " + payload.summary.total + " 个目标现在可以真实扫描。" +
+        (payload.summary.blocked ? "其余 " + payload.summary.blocked + " 个还缺条件，见下方说明。" : ""),
+      false
+    );
+  }
+
+  function bindCheckForm() {
+    var form = $("check-form");
+    if (!form) return;
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var targets = splitList(form.targets.value);
+      if (!targets.length) {
+        setText("check-summary", "请先填写至少一个目标。", true);
+        return;
+      }
+      lastTargets = targets;
+      setText("check-summary", "正在检查…", false);
+
+      postJSON("/api/public-jobs/check", {
+        targets: targets,
+        project_id: ($("job-project") && $("job-project").value) || null,
+      }).then(function (result) {
+        if (!result.ok) {
+          setText("check-summary", "检查失败: " + describeError(result), true);
+          return;
+        }
+        renderCheckResults(result.data);
+      });
+    });
+  }
+
+  // ── 步骤 2：创建项目 / 添加范围 ──────────────────────────
 
   function bindProjectForm() {
     var form = $("project-form");
     if (!form) return;
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      var payload = {
+      postJSON("/api/projects", {
         name: form.name.value.trim(),
         authorization_note: form.authorization_note.value.trim(),
         owner: form.owner.value.trim(),
-      };
-      postJSON("/api/projects", payload).then(function (result) {
+      }).then(function (result) {
         if (!result.ok) {
-          setText("project-feedback", "创建失败: " + describeError(result), true);
+          setText("check-summary", "创建项目失败: " + describeError(result), true);
           return;
         }
         var project = result.data.project;
-        setText("project-feedback", "已创建授权项目「" + project.name + "」。", false);
         form.reset();
         loadMetadata().then(function () {
-          selectProject(project.id);
+          var select = $("job-project");
+          if (select) select.value = project.id;
+          syncJobScopes();
+          // 建完项目接着就要加范围：把试算过的目标预填进去，并展开这一段。
+          prefillScopeTargets();
+          var add = $("scope-add");
+          if (add) add.open = true;
+          setText(
+            "check-summary",
+            "已创建授权项目「" + project.name + "」。接着在下面填授权域名或网段。",
+            false
+          );
         });
       });
     });
   }
 
-  // ── 步骤 2：添加授权范围 ────────────────────────────────
-
-  function splitList(value) {
-    return (value || "")
-      .split(",")
-      .map(function (item) {
-        return item.trim();
-      })
-      .filter(Boolean);
+  /** 把试算过的目标预填进「新增范围」表单 —— 用户不必再抄一遍。 */
+  function prefillScopeTargets() {
+    var domains = [];
+    var cidrs = [];
+    lastTargets.forEach(function (raw) {
+      var text = String(raw).trim();
+      if (!text) return;
+      if (text.indexOf("/") !== -1) cidrs.push(text);
+      else domains.push(text);
+    });
+    var domainBox = $("scope-domains");
+    var cidrBox = $("scope-cidrs");
+    if (domainBox && domains.length && !domainBox.value) domainBox.value = domains.join(", ");
+    if (cidrBox && cidrs.length && !cidrBox.value) cidrBox.value = cidrs.join(", ");
   }
 
   /** 范围名称不再让用户填 —— 它只是内部标签，用「项目名 · 首个目标」派生即可。 */
@@ -540,12 +660,12 @@
     if (!form) return;
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      var projectId = (form.project_id && form.project_id.value) || currentProjectId;
+      var projectId = (form.project_id && form.project_id.value) || "";
       var domains = splitList(form.allowed_domains.value);
       var cidrs = splitList(form.allowed_cidrs.value);
 
       if (!projectId) {
-        setText("scope-feedback", "还没有授权项目，请先在步骤 1 创建一个。", true);
+        setText("scope-feedback", "还没有授权项目，请先在上面的表单里创建一个。", true);
         return;
       }
       if (!domains.length && !cidrs.length) {
@@ -588,13 +708,29 @@
           );
           form.reset();
           form.active_scan.checked = true;
-          loadMetadata();
+          // 范围变了，之前那次试算的结论就过期了 —— 自动重算一遍，
+          // 让用户立刻看到「现在能不能扫」。
+          loadMetadata().then(function () {
+            var checkForm = $("check-form");
+            if (checkForm && lastTargets.length) {
+              checkForm.dispatchEvent(new Event("submit", { cancelable: true }));
+            }
+          });
         });
       });
     });
   }
 
-  // ── 步骤 3：创建公网任务 ────────────────────────────────
+  function bindProjectSelectSync() {
+    var select = $("job-project");
+    if (select) {
+      select.addEventListener("change", function () {
+        syncJobScopes();
+      });
+    }
+  }
+
+  // ── 步骤 4：创建任务 ────────────────────────────────────
 
   function selectedCustomTools() {
     var box = $("tool-list");
@@ -613,15 +749,17 @@
     if (!form) return;
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      var targets = splitList(form.targets.value);
+      var targets = lastTargets.length ? lastTargets : splitList($("job-target").value);
       if (!targets.length) {
-        setText("strategy-note", "请填写至少一个目标。", true);
+        setText("job-feedback", "请先在步骤 1 填写目标。", true);
         return;
       }
 
+      var projectSelect = $("job-project");
+      var scopeSelect = $("job-scope");
       var payload = {
-        project_id: form.project_id.value,
-        scope_id: form.scope_id.value,
+        project_id: (projectSelect && projectSelect.value) || "",
+        scope_id: (scopeSelect && scopeSelect.value) || "",
         targets: targets,
         strategy: ACTIVE_STRATEGY,
       };
@@ -630,34 +768,25 @@
 
       postJSON("/api/public-jobs", payload).then(function (result) {
         if (!result.ok) {
-          setText("strategy-note", "创建失败: " + describeError(result), true);
+          setText("job-feedback", "创建失败: " + describeError(result), true);
           return;
         }
         var data = result.data;
         setText(
-          "strategy-note",
+          "job-feedback",
           "任务已创建：" + data.job_id + "（" + data.status + "，模式 " + data.mode +
             "，共 " + data.total_steps + " 步）。worker 会异步执行。",
           false
         );
-        form.targets.value = "";
         // 新任务要出现在列表里：整页刷新最省事，也保证表格数据来自服务端。
         window.location.href = "/scan-center?job_id=" + encodeURIComponent(data.job_id);
       });
     });
   }
 
-  function bindProjectSelectSync() {
-    var select = $("job-project");
-    if (select) {
-      select.addEventListener("change", function () {
-        selectProject(select.value);
-      });
-    }
-  }
-
   document.addEventListener("DOMContentLoaded", function () {
     if (!$("strategy-list")) return; // 不是扫描中心页
+    bindCheckForm();
     bindProjectForm();
     bindScopeForm();
     bindJobForm();

@@ -31,6 +31,7 @@ ADMIN_ONLY_ENDPOINTS = [
     ("get", "/api/projects/proj_x"),
     ("post", "/api/projects/proj_x/scopes"),
     ("post", "/api/public-jobs"),
+    ("post", "/api/public-jobs/check"),
     ("get", "/api/scan-center"),
 ]
 
@@ -231,6 +232,151 @@ def test_scan_center_does_not_leak_targets(admin_client):
 
     raw = admin_client.get("/api/scan-center").get_data(as_text=True)
     assert "secret.example.test" not in raw
+
+
+# ── Phase 2：只读试算接口（下一阶段方案第 4、6 节） ──────────
+
+
+def test_check_endpoint_is_read_only(admin_client):
+    """试算不落任务、不写审计 —— 它是查询，不是业务动作。"""
+    scope_id = _make_scope(admin_client)
+    _make_project(admin_client, scope_ids=[scope_id])
+    before_jobs = len(jobs_store.list_jobs())
+    before_events = len(audit.list_events(limit=500))
+
+    resp = admin_client.post("/api/public-jobs/check", json={"targets": ["www.example.test"]})
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()["ok"] is True
+
+    assert len(jobs_store.list_jobs()) == before_jobs
+    assert len(audit.list_events(limit=500)) == before_events
+
+
+def test_check_endpoint_reports_ready_for_active_scope(admin_client, monkeypatch):
+    """范围已授权 + 环境开关开 → ready，并给出建议模式 real。
+
+    ``conftest.py`` 把 ``GEF_ALLOW_REAL_SCAN`` 钉成 false（测试不能跟随开发机
+    ``.env``），所以这里要显式打开才可能 ready —— 这本身就是第 3 道闸门的实证。
+    """
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    scope_id = _make_scope(admin_client, active_scan=True)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = admin_client.post(
+        "/api/public-jobs/check",
+        json={"targets": ["www.example.test"], "project_id": project["id"]},
+    )
+    body = resp.get_json()
+    check = body["checks"][0]
+
+    assert check["ready"] is True
+    assert check["blocker"] == ""
+    assert check["normalized"] == "www.example.test"
+    assert check["matches"][0]["scope_id"] == scope_id
+    assert check["matches"][0]["project_id"] == project["id"]
+    assert body["summary"] == {"total": 1, "ready": 1, "blocked": 0}
+    assert body["suggested_mode"] == "real"
+    assert body["project_id"] == project["id"]
+
+
+def test_check_endpoint_separates_the_three_classic_blockers(admin_client, monkeypatch):
+    """三种「以前都叫 403」的情况，现在必须能分辨出来。
+
+    这是 Phase 2 的核心价值：用户不再需要读错误消息反推缺了哪一道闸门。
+    """
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+
+    # ① 有范围，但不覆盖目标 → not_authorized
+    other = _make_scope(admin_client, domains=["other.example.test"], active_scan=True)
+    _make_project(admin_client, scope_ids=[other])
+    body = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
+    ).get_json()
+    assert body["checks"][0]["blocker"] == "not_authorized"
+    assert len(body["checks"][0]["matches"]) == 0  # 无关范围不下发
+
+    # ② 覆盖但没开 active_scan → scope_inactive
+    inactive = _make_scope(admin_client, domains=["www.example.test"], active_scan=False)
+    _make_project(admin_client, scope_ids=[inactive])
+    body = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
+    ).get_json()
+    assert body["checks"][0]["blocker"] == "scope_inactive"
+    assert body["checks"][0]["real_scan_enabled"] is True
+
+    # ③ 覆盖且已授权，但环境开关没开 → env_disabled
+    #    刻意换一个域名：前两步留下的范围仍然覆盖 www.example.test，
+    #    而其中一个没开 active_scan，会先命中 scope_inactive（那是正确结论）。
+    #    要单独验证 env_disabled，就必须让目标只被「已开 active_scan」的范围覆盖。
+    active = _make_scope(admin_client, domains=["env.example.test"], active_scan=True)
+    _make_project(admin_client, scope_ids=[active])
+    monkeypatch.delenv("GEF_ALLOW_REAL_SCAN", raising=False)
+    body = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["env.example.test"]}
+    ).get_json()
+    assert body["checks"][0]["blocker"] == "env_disabled"
+    assert body["checks"][0]["real_scan_enabled"] is False
+    # 范围本身是「已授权」的 —— 缺的只是环境开关，这一点必须能区分出来。
+    assert body["checks"][0]["matches"][0]["status"] == "ready"
+
+
+def test_check_endpoint_reports_no_scope_when_nothing_built(admin_client):
+    body = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
+    ).get_json()
+    assert body["checks"][0]["blocker"] == "no_scope"
+    assert body["checks"][0]["candidates"] == 0
+    assert body["suggested_mode"] == "mock"
+
+
+def test_check_endpoint_tolerates_bad_target_among_good_ones(admin_client, monkeypatch):
+    """坏目标只影响它自己 —— 批量试算不该被第一个格式错误中断。"""
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    scope_id = _make_scope(admin_client, active_scan=True)
+    _make_project(admin_client, scope_ids=[scope_id])
+
+    body = admin_client.post(
+        "/api/public-jobs/check",
+        json={"targets": ["www.example.test", "not a host"]},
+    ).get_json()
+
+    assert [item["valid"] for item in body["checks"]] == [True, False]
+    assert body["checks"][1]["blocker"] == "invalid_target"
+    assert body["summary"] == {"total": 2, "ready": 1, "blocked": 1}
+
+
+def test_check_endpoint_accepts_comma_separated_string(admin_client):
+    """接受逗号分隔字符串，与 ``create_scan_job`` 同一口径。"""
+    scope_id = _make_scope(admin_client)
+    _make_project(admin_client, scope_ids=[scope_id])
+
+    body = admin_client.post(
+        "/api/public-jobs/check", json={"targets": "a.example.test, b.example.test"}
+    ).get_json()
+    assert [item["raw"] for item in body["checks"]] == ["a.example.test", "b.example.test"]
+
+
+def test_check_endpoint_requires_targets(admin_client):
+    resp = admin_client.post("/api/public-jobs/check", json={"targets": []})
+    assert resp.status_code == 400
+    assert resp.get_json()["details"]["field"] == "targets"
+
+
+def test_check_endpoint_requires_json_object(admin_client):
+    resp = admin_client.post("/api/public-jobs/check", data="not json")
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "bad_request"
+
+
+def test_check_endpoint_does_not_promise_more_than_it_verifies(admin_client):
+    """试算必须**如实声明**它没做 DNS 解析，不能假装已经全查过。"""
+    scope_id = _make_scope(admin_client)
+    _make_project(admin_client, scope_ids=[scope_id])
+
+    check = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
+    ).get_json()["checks"][0]
+    assert check["resolved_check_deferred"] is True
 
 
 # ── Policy / Tool：闸门（方案第 9 节「未授权域名拒绝」「禁止工具无法提交」） ──
@@ -512,14 +658,19 @@ def test_scan_center_page_renders_for_anonymous(client):
     assert "401 unauthenticated" in body
 
 
-def test_scan_center_page_renders_three_steps_for_admin(admin_client):
+def test_scan_center_page_renders_four_steps_for_admin(admin_client):
+    """Phase 2 的五步简化流程在页面上落成四段（第 5 步「创建任务」是提交按钮本身）。"""
     resp = admin_client.get("/scan-center")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
 
-    for heading in ("步骤 1 · 授权项目", "步骤 2 · 授权范围", "步骤 3 · 目标与工具"):
+    for heading in (
+        "步骤 1 · 输入目标",
+        "步骤 2 · 确认授权范围",
+        "步骤 3 · 选择工具",
+        "步骤 4 · 执行模式与提交",
+    ):
         assert heading in body, heading
-    # 方案第 7 节要求的三块：项目 / 创建任务 / 任务列表
     assert "创建任务" in body
     assert "任务" in body
     # 白名单要如实写进页面，用户才知道能选什么。
