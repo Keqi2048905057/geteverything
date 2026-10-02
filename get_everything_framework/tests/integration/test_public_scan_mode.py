@@ -136,6 +136,32 @@ def test_public_domain_scope_can_be_created(admin_client):
     assert body["active_scan"] is True
 
 
+def test_public_ip_target_is_checked_against_allowed_cidrs(admin_client):
+    """方案第 4 节把目标类型写成「域名 / IP / CIDR」—— 三条路径都要能走通。
+
+    域名那条由上面的用例覆盖（以及 `test_scope.py` 的匹配规则单测），
+    这条补的是**公网入口链路上的 IP**：Scope 只给 ``allowed_cidrs``（不给域名），
+    IP 目标必须落在网段内才放行、网段外一律 403。
+
+    网段用 **RFC 5737 文档保留段**（``192.0.2.0/24`` 是 TEST-NET-1，
+    ``198.51.100.0/24`` 是 TEST-NET-2）—— 按 RFC 它们**不会**被分配给任何真实主机，
+    因此这两条断言不涉及任何人的资产（与用 ``example.test`` 是同一个思路）。
+    """
+    scope_id = _make_scope(admin_client, domains=[], allowed_cidrs=["192.0.2.0/24"])
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    inside = _public_job(admin_client, project["id"], scope_id, targets=["192.0.2.10"], mode="mock")
+    assert inside.status_code == 202, inside.get_json()
+
+    outside = _public_job(admin_client, project["id"], scope_id, targets=["198.51.100.7"], mode="mock")
+    assert outside.status_code == 403
+    assert outside.get_json()["error_code"] == "scope_violation"
+    assert "网段" in outside.get_json()["error_message"]
+
+    # 越界的那些一个都不许落库：只应有「网段内」那一条任务。
+    assert len(jobs_store.list_jobs()) == 1
+
+
 # ── 项目：授权证据的组织单位 ───────────────────────────────
 
 
