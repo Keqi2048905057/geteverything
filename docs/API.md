@@ -317,11 +317,33 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 | GET | `/api/projects` | — | `{"ok":true,"projects":[{...,"scope_ids","scope_count"}]}` | — |
 | GET | `/api/projects/<project_id>` | — | `{"ok":true,"project":{...}}` | 404 `not_found` |
 | POST | `/api/projects/<project_id>/scopes` | JSON `{scope_id}` | **201** `{"ok":true,"project":{...}}`（幂等） | 400 缺 `scope_id` 或 Scope 不存在；404 项目不存在 |
-| POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, mode?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限；403 越界或真实扫描开关未开；404 项目不存在 |
-| GET | `/api/scan-center` | — | `{"ok":true,"projects","strategies","tools","restricted_tools","internet_allowed_tools"}` | 401 |
+| POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, pace?, mode?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","pace","pace_label","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限 / `pace` 非法；403 越界或真实扫描开关未开；404 项目不存在 |
+| GET | `/api/scan-center` | — | `{"ok":true,"projects","strategies","paces","tools","restricted_tools","internet_allowed_tools"}` | 401 |
 
 `strategy` 合法值 = `core/tool_registry.py:STRATEGIES`：`asset_discovery`（默认，= `subfinder` + `httpx`）、
 `web_fingerprint`（= `httpx`，`nuclei` 只作「受限未开放」展示）、`custom`（**必须**显式给 `tools`）。
+
+**Scan Profile = 工具组合 + 节奏**（`core/pace.py`）。`pace` 合法值恰好两个：
+
+| 值 | 标签 | 行为 |
+|---|---|---|
+| `light` | 低频 | 覆盖工具的并发与每秒请求数（`subfinder -t 5 -rl 3`、`httpx -threads 5 -rl 10`），并在**真实**步骤之间留出间隔（默认 1.5 秒，见 `GEF_PACE_LIGHT_STEP_DELAY_SEC`） |
+| `normal` | 常规 | 完全沿用工具自身配置，不额外等待 —— **与引入 Scan Profile 之前逐字节一致** |
+
+> **`pace` 只能收紧，不能放松**：最终档位 = `resolve_pace(模板档位, 请求档位)`，
+> 任一为 `light` 即 `light`。三个策略模板当前都是 `light`，因此请求体里写
+> `pace=normal` **改不回来**（`test_public_job_request_cannot_relax_the_template_pace` 锁住）。
+> 非法值（如 `"low"`）返回 400 而不是静默回退 —— 拼错的档位拿到常规档是最危险的错法。
+> 三个模板的档位与说明随 `GET /api/scan-center` 的 `strategies[].pace` / `pace_label`
+> 与 `paces[]` 一起下发，前端不写死任何文案。
+>
+> **节奏不是安全闸门**：它不参与、也不放松 Scope / `active_scan` / `GEF_ALLOW_REAL_SCAN` /
+> 公网白名单中的任何一条。它只回答「这一步等多长、用多低的并发」。
+>
+> **`pace` 不落成 `jobs` 表的新列**（那属于数据库结构改动，DECISIONS §1 E 限纯增量）。
+> 它写进 `job.created` 事件的 `detail` 与审计 detail，执行期由
+> `core/jobs.py:pace_of_job(job_id)` 读回 —— worker 是**独立进程**，且任务可能被 retry
+> 或换一个 worker 重启，节奏必须是任务自身的属性而不是某次调用的参数。
 
 > **公网白名单恰好是 `{httpx, subfinder}`**（方案第 8 节），是代码常量而非运行期配置。
 > 核心不变量是「**没登记 = 禁止公网**」：`assert_tools_internet_allowed()` 对未登记工具

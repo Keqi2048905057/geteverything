@@ -897,7 +897,8 @@ python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 
 
 - `core/tool_registry.py`：17 个 runner 的**工具权限元数据**
   （`tool_name` / `risk_level` / `internet_allowed` / `default_enabled` / `reason`）
-  + 三档扫描策略模板（资产发现 / Web 信息收集 / 自定义）。
+  + 三档扫描策略模板（资产发现 / Web 基础检查 / 自定义；三个模板的缺省节奏均为 `light`，
+  见「下一阶段体验优化 Phase 3」）。
   **核心不变量：没登记 = 禁止公网** —— `assert_tools_internet_allowed()` 对未知工具直接拒绝，
   绝不默认放行；公网白名单恰好是 `{httpx, subfinder}`（方案第 8 节）。
 - `core/projects.py`：授权测试项目（创建 / 读取 / 关联既有 Scope / 按 Scope 反查项目）。
@@ -945,12 +946,86 @@ python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 
 Agent、`pyproject.toml`。**未引入**任何新依赖、React、Redis。
 **未对任何真实外部目标发起扫描** —— 本轮全部实机验收都打 `127.0.0.1` 与保留域 `example.test`。
 
+### 下一阶段体验优化（本轮，方案 Phase 1～3）
+
+依据：《GetEverything_下一阶段体验优化与公网扫描能力演进方案》（本机过程材料，不入库）。
+产品原则一句话：**保留安全边界，但降低用户操作复杂度** —— 该方案第 8 节写着
+「不绕过 Policy / 不绕过 Scope / 不删除审计」，本轮的每一段改动都在这条线上。
+三个阶段各自独立提交，可独立回滚。
+
+#### Phase 1 — UI 清理（`e94b180`）
+
+只改展示层，**不动任何闸门**。
+
+- 全部实体 ID 从**可见文案**里消失：用户看到的是「学校官网 / www.example.cn / 已授权」，
+  而不是 `scope_9f3c…`。实体 ID 仍然存在，但只作为表单 `<option value>` 与请求体字段
+  （不可见）—— 提交链路一字未改。新增 `scopeLabel()` / `projectLabel()` /
+  `describeScopeTargets()` / `scopeStateLabel()` 四个翻译函数，文案统一从这里出。
+- 清掉 `proj_…` 裸 ID 列、`Scope N 个`、把授权说明塞进 `title` 等后台术语。
+- 目标清单继续来自需登录的 `GET /api/scopes`，**不塞进** `/api/scan-center` ——
+  「这条接口不下发目标清单」的既有约定与测试保持有效。
+
+#### Phase 2 — 公网授权测试入口（`510fa41`）
+
+- **要解决的问题**：旧实现下「越界 / 范围没开 `active_scan` / 环境总开关没开」
+  这三种完全不同的情况都表现为同一个 `403 scope_violation`，用户只能靠读错误消息反推。
+- 新增 `core/authorization.py`：**只读试算**。`check_target()` / `check_targets()`
+  返回「目标落在哪些已授权范围内、每个范围什么状态、还缺哪一道闸门」，
+  `blocker` 五档（`invalid_target` / `no_scope` / `not_authorized` / `scope_inactive` /
+  `env_disabled`）。三条设计：① 匹配**复用** `Scope.match_target`（与 Policy 同源，
+  不可能出现「试算说能过、真提交过不了」）；② **只读**，不写库、不写审计、不发网络；
+  ③ `TargetCheck.eligible` 单独建模 —— 命中排除列表的范围不算「可执行」。
+- 前端 `GET /scan-center` 改成四步：输入目标 → 确认授权范围 → 选择工具 → 执行模式与提交。
+
+#### Phase 3 — Scan Profile = 工具组合 + 节奏（本轮）
+
+方案第 5 节说「不要固定扫描流程」，并要求引入 **Scan Profile**。本阶段的判断是：
+Scan Profile **不能只等于「换个工具组合」** —— 同一组工具在别人的资产上可以打得多快，
+才是使用者真正关心的第二个问题。因此把「节奏」提升为与工具并列的一维。
+
+- 新增 `core/pace.py`：档位 `light`（低频）/ `normal`（常规）；`PACE_LABELS` /
+  `PACE_DESCRIPTIONS` 作为中文文案的**单一事实源**（页面、错误消息、接口文档同源）。
+- **只能收紧**：`resolve_pace(模板档位, 请求档位)` 中任一为 `light` 即 `light`。
+  三个策略模板一律 `light`，因此请求体里写 `pace=normal` **改不回来**。
+- **非法值报错而非静默回退**：`normalize_pace()` 对 `"low"` 这类拼错直接
+  `ValueError` → HTTP 400。写了拼错的档位却拿到常规档，是本功能最危险的错法。
+  读**库里**的历史脏数据才用宽松的 `coerce_pace()`。
+- **真的降速，不是文案**：
+  - `LIGHT_TOOL_BUDGET` 把 `subfinder` 压到 `-t 5 -rl 3`、`httpx` 压到
+    `-threads 5 -rl 10`（`modules/subfinder.py` / `modules/httpx.py` 的
+    `build_command()` 只在 `config` 里真有 `rate_limit` 时才拼 `-rl`）；
+  - `apply_to_runner()` 写进 Runner 的 `config` **副本** —— 绝不原地改模块级配置对象；
+  - 低频档在**真实**步骤之间留出间隔（默认 1.5 秒，`GEF_PACE_LIGHT_STEP_DELAY_SEC`
+    可调；`tests/conftest.py` 钉为 0，让测试不为礼貌间隔付墙钟）。等待分片进行，
+    期间取消仍最多晚 1 秒生效，并在长等待前续租。
+- **`normal` 与引入前逐字节一致**：不覆盖任何参数、不产生任何等待。不带模板的历史入口
+  （`POST /api/jobs`、首页表单）缺省即 `normal`，老调用方不会突然变慢（有用例锁死）。
+- **节奏不落成 `jobs` 表的新列**（那属 DB 结构变更，DECISIONS §1 E 限纯增量）：
+  写进 `job.created` 事件 detail + 审计 detail，执行期由
+  `core/jobs.py:pace_of_job()` 读回。这是**必然**而非偏好 —— worker 是独立进程，
+  且任务可能被 retry 或换一个 worker 重启，节奏必须属于任务本身。
+- 前端：每张策略卡片上写明**节奏**（不只是工具组合）；说明文字由
+  `GET /api/scan-center` 的 `paces[]` 下发，**前端不写死任何文案**；
+  提交时原样转发 `pace`（前端给错也放松不了任何东西 —— 合并规则只在服务端有一次）。
+- **一处刻意的废弃**：曾尝试新增 `modules/registry.py:build_scoped_runner()`
+  （第二条能带节奏的构造路径），**已移除**。`build_runner(tool_name)` 是测试替换真实
+  Runner 的**唯一**接缝（`monkeypatch.setattr`），多一条构造入口就多一个
+  「假 Runner 没被替换、真去执行外部命令」的机会。最终改为「构造归 registry、
+  降速归 `core.pace.apply_to_runner`」两步，并由用例锁住这个分工。
+- **节奏不是安全闸门**：它不参与、也不放松 Scope / `active_scan` /
+  `GEF_ALLOW_REAL_SCAN` / 公网白名单中的任何一条。
+
+**未动**：数据库核心结构（`scopes` / `jobs` 等既有表零改动）、既有 API 的语义、
+同步 Runner 链路、Agent、Policy / Scope 判定逻辑。**未引入**任何新依赖、React、Redis。
+**未对任何真实外部目标发起扫描** —— 本轮 `real` 模式用例全部把
+`modules.registry.build_runner` 换成假 runner，目标是 RFC 6761 保留域 `example.test`。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1004 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 68 source files
+$ python -m pytest           # 1091 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 70 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
 ```
@@ -958,9 +1033,11 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 > 探针的凭据与地址**都从环境变量读**（`LOCAL_ADMIN_TOKEN` / `GEF_VERIFY_BASE`），
 > 脚本里不写死任何值；缺失时以退出码 2 退出并打印设置方法。
 
-基线演进：上一轮 `901` → **本轮 `1004`**（新增 105：`test_tool_registry.py` 34 +
-`test_projects.py` 26 + `test_public_scan_mode.py` 45）。
-排除这三个文件后收集数仍为 **901**，与上一轮逐条相等 —— 即没有任何既有用例被删改。
+基线演进：公网体验版 `1004` → Phase 1 UI 清理 `1009` → Phase 2 `1036` → **本轮 `1091`**。
+三个数字都用 `git worktree` 逐提交实测（`python -m pytest --collect-only -q` 的逐文件汇总，
+不是推算）。本轮 +55 的构成：`tests/unit/test_pace.py`（新）37 +
+`tests/integration/test_public_scan_mode.py` 58 → 76。校验 `1091 − 37 − 18 = 1036`，
+与 Phase 2 的实测基线**逐条相等** —— 即本轮没有任何既有用例被删改。
 
 测试报告的完整版见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（测了什么 / 没测什么 / 为什么没测）。
 

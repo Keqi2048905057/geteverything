@@ -580,3 +580,103 @@ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端�
 ② 实测暴露出「测试会读开发机 `.env`」这个**与被测代码无关的失败源**并修掉
 （`tests/conftest.py` 由 `setdefault` 改为赋值，详见 `CODEBASE_MAP.md` §7 第 37 条）。
 第二件事正是本报告 §4.1 精神的延续：**测试的可信度取决于它不受环境影响，而不取决于条数。**
+
+---
+
+## 7. Phase 3：Scan Profile = 工具组合 + 节奏（本轮增量，1091）
+
+> 本轮依据《下一阶段体验优化与公网扫描能力演进方案》第 5、6 节 Phase 3
+> 「工具编排：引入 Scan Profile」。§6 的实测记录不改写。
+
+### 7.1 实测结果
+
+```powershell
+cd get_everything_framework
+python -m pytest                    # 1091 passed, 2 skipped, 0 failures / 0 errors（约 130 秒）
+python -m ruff check .              # All checks passed!
+python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 70 source files
+node --check web/static/scan_center.js                          # 语法通过
+```
+
+| 项 | Phase 2 | 本轮 |
+|---|---|---|
+| 用例总数（`--collect-only` 汇总） | 1036 | **1091**（+55） |
+| `test_*.py` 文件 | 35 | **36**（新增 `tests/unit/test_pace.py`） |
+| `tests/unit/` | 745（23 文件） | **782**（24 文件） |
+| `tests/integration/` | 291（12 文件） | **309**（12 文件） |
+| mypy 源文件 | 69 | **70**（新增 `core/pace.py`） |
+| `app.url_map` 规则总数 / 方法绑定 | 47 / 49 | **47 / 49**（+0，纯内部改动） |
+
+**+55 的构成（逐文件，可复算）**：
+
+| 文件 | Phase 2 收集 | 本轮收集 | 增量 |
+|---|---|---|---|
+| `tests/unit/test_pace.py`（新） | — | 37 | **+37** |
+| `tests/integration/test_public_scan_mode.py` | 58 | 76 | **+18** |
+| **合计** | | | **+55** |
+
+> 计数口径一律用 `python -m pytest --collect-only -q` 的**逐文件汇总**，
+> 不用「`^def test_` 出现次数」——后者会漏掉 `@pytest.mark.parametrize`
+> 展开出来的用例（本文件里 58 → 76 的差别正是如此）。
+> 校验：`1091 − 37 − 18 = 1036`，与 Phase 2 提交 `510fa41` 的实测基线**逐条相等**，
+> 即本轮没有删改任何既有用例。
+>
+> 三个提交的实测基线（本轮用 `git worktree` 逐条核对，不是推算）：
+> Phase 1 `e94b180` = **1009** → Phase 2 `510fa41` = **1036**（+27 = `test_authorization.py` 17
+> + `test_public_scan_mode.py` 48→58 的 10）→ Phase 3（本轮）= **1091**（+55）。
+
+### 7.2 本轮最重要的一条：低频必须是**可执行**约束
+
+「引入 Scan Profile」最容易做成一个**纯展示**功能 —— 页面上多一行「低频」，
+发出去的请求一个字节都没变。因此本轮的核心用例不是「接口返回了 `pace`」，
+而是**Runner 真正拿到的 `config` 变了**：
+
+| 要证明的事 | 用例 | 断言的可观察对象 |
+|---|---|---|
+| 低频真的降并发与速率 | `test_light_pace_reaches_the_runner_config` | Runner `run()` 里读到的 `config["threads"]` / `config["rate_limit"]` |
+| 常规档一个参数都不改 | `test_normal_pace_leaves_the_runner_config_untouched` | 同上，`config` 与构造时**逐键相等** |
+| 低频真的在步骤之间等 | `test_light_pace_waits_between_real_steps` | 用 `perf_counter` 量整段执行墙钟 ≥ 间隔 |
+| 常规档一次等待都没有 | `test_normal_pace_does_not_wait_between_real_steps` | 即使把低频间隔设成 5 秒，耗时仍 < 2 秒 |
+| 命令行确实多出参数 | `test_pace.py::test_subfinder_command_only_gains_rl_when_budget_is_applied` 等 2 条 | `build_command()` 的 `-t` / `-rl` / `-threads` |
+| 不污染模块级配置 | `test_pace.py::test_apply_to_runner_copies_config_and_does_not_mutate_the_original` | `runner.config is not SUBFINDER_CONFIG` 且原对象相等 |
+
+### 7.3 「只能收紧」的双向锁定
+
+| 方向 | 用例 |
+|---|---|
+| 请求**不能**放松模板档位 | `test_public_job_request_cannot_relax_the_template_pace`（请求写 `pace=normal`，落库仍是 `light`） |
+| 请求**可以**显式收紧 | `test_public_job_accepts_an_explicit_light_pace`、`test_legacy_job_entry_accepts_an_explicit_light_pace` |
+| 非法档位**报错**而非静默回退 | `test_public_job_rejects_an_unknown_pace`、`test_legacy_job_entry_rejects_an_unknown_pace`（两条都断言 **400 + `details.field == "pace"` + 未落库**） |
+| 纯函数层的合并规则 | `test_pace.py::test_resolve_lets_the_profile_pace_win` / `..._allows_tightening_a_normal_profile` / `..._rejects_invalid_requested_value` |
+
+### 7.4 节奏的持久化口径：不加列，写事件
+
+`pace` **没有**成为 `jobs` 表的新列（那属于 DB 结构变更，`docs/DECISIONS.md` §1 E 限纯增量），
+而是写进 `job.created` 事件的 `detail` + 审计 detail，执行期由 `core/jobs.py:pace_of_job()` 读回。
+这样做的**必然性**值得一条测试：worker 是独立进程，且任务可能被 retry 或换一个 worker 重启 ——
+节奏必须属于任务本身。对应用例：
+
+* `test_public_job_defaults_to_the_template_pace` —— 创建事件与**审计 detail** 都记着 `pace=light`；
+* `test_retry_keeps_the_original_pace` —— retry 之后读回仍是 `light`；
+* `test_pace_of_job_falls_back_for_legacy_rows` —— 没有创建事件的老任务读回缺省档，而不是抛异常；
+* `test_job_detail_reports_the_pace` —— `GET /api/jobs/<id>` 答得出「这个任务什么节奏」。
+
+### 7.5 本轮新增的缺口与一处刻意的**不作为**
+
+| 未测项 | 现状 | 风险 |
+|---|---|---|
+| 低频档的**实际外发速率** | 只测到「命令行参数正确」与「步骤之间有等待」，**没有**对真实工具计量请求数 | 低：工具自身对小并发/限速参数负责；本项目不在测试期打真实外部目标 |
+| 前端卡片上的节奏标签 | **本轮补了两条源码守卫**（`test_scan_center_frontend_shows_and_forwards_the_pace` / `test_scan_center_js_does_not_hardcode_pace_wording`），另用一次性 DOM 桩人工核对过渲染结果；但**仍没有浏览器测试**（与 §6.5 同一缺口） | 低：显示与转发都有守卫，且节奏的正确性最终由服务端与 Runner 层用例保证 |
+| 按工具细分的节奏预算 | `LIGHT_TOOL_BUDGET` 只覆盖公网白名单内的 `subfinder` / `httpx` | 设计如此：白名单外的工具根本进不了公网入口，为其定预算等于为不可达路径写代码 |
+
+**一处刻意的被动**：实现过程中曾尝试新增 `modules/registry.py:build_scoped_runner()`（多一条
+能带节奏的构造路径），**已废弃并移除**。原因是 `build_runner(tool_name)` 是测试替换真实 Runner 的
+唯一接缝（`monkeypatch.setattr("modules.registry.build_runner", ...)`）：多一条构造入口，
+就等于多一个「假 Runner 没被替换、真去执行外部命令」的机会 —— 那正是本项目硬约束
+（测试期不许打真实目标）最容易被绕过的地方。最终改成**构造归 registry、降速归 `core.pace.apply_to_runner`**
+两步，并由 `test_pace.py::test_apply_to_runner_works_on_the_registry_seam` 把这个分工锁住。
+
+### 7.6 一句话结论
+
+本轮的价值同样不在 +55，而在**把「低频」从文案变成了可观察的执行事实**：
+能证明它的不是接口 JSON，而是 Runner 收到的 `config`、多出来的 `-rl`，以及真实测到的等待时间。

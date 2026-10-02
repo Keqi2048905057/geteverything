@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + **公网授权测试模式体验版（项目 / 工具权限元数据 / 策略模板 / 扫描中心页，见 §9.22）**（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ **下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）**（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -2279,4 +2279,115 @@ agent/target_ranker.py
   正则必然命中「只是提到变量名」的语句，登记时必须自己确认打出来的是名字还是值
   （探针的 `_admin_token` 属于此类：它打印 `LOCAL_ADMIN_TOKEN` 这个名字，
   而且正是因为「没有值」才走到那一句）。
+
+---
+
+### 9.23 下一阶段体验优化：UI 清理 / 公网授权入口 / Scan Profile（方案 Phase 1～3）
+
+> 依据：《GetEverything_下一阶段体验优化与公网扫描能力演进方案》（本机过程材料，不入库）。
+> 产品原则：**保留安全边界，但降低用户操作复杂度**。方案第 8 节写死
+> 「不绕过 Policy / 不绕过 Scope / 不删除审计」——本节所有改动都在这条线上，
+> 三个阶段各自独立提交。
+
+#### 9.23.1 一句话：这一节新增的是「表达方式」与「节奏」，不是新的权限
+
+| 阶段 | 提交 | 净变化 | **没有**改变的东西 |
+|---|---|---|---|
+| Phase 1 UI 清理 | `e94b180` | 只改 `web/`：ID 从可见文案消失、去后台术语 | 任何请求体、任何闸门、任何路由 |
+| Phase 2 公网授权入口 | `510fa41` | 新增 `core/authorization.py`（只读试算）+ 四步前端 | Policy / Scope 判定本身 |
+| Phase 3 Scan Profile | 本轮 | 新增 `core/pace.py` + 执行期降速 + 前端展示节奏 | 公网白名单、`active_scan`、环境开关、DB 结构 |
+
+#### 9.23.2 Phase 2：`core/authorization.py` 是**只读试算**，不是第二条 Policy
+
+新增的痛点是具体的：旧实现下「目标越界 / 范围没开 `active_scan` / 环境总开关没开」
+这三种**完全不同的情况**都返回同一个 `403 scope_violation`，用户只能靠读错误消息反推。
+
+`check_target()` / `check_targets()` 把结论摊开：目标落在哪些已授权范围内、
+每个范围什么状态、还缺哪一道闸门（`blocker` 五档：`invalid_target` / `no_scope` /
+`not_authorized` / `scope_inactive` / `env_disabled`）。三条设计约束：
+
+1. **匹配复用 `Scope.match_target`**，不另写一份匹配逻辑 —— 因此不可能出现
+   「试算说能过、真提交过不了」这种最伤信任的不一致；
+2. **只读**：不写库、不写审计、不发任何网络请求；
+3. `TargetCheck.eligible` 单独建模 —— 命中**排除列表**的范围不算「可执行」。
+   这是实现过程中真实踩到的一个坑：`blocker` 一开始用 `matches` 判断，
+   于是「被排除」被误判成「有范围可扫」，`eligible` 拆出来后才对。
+
+#### 9.23.3 Phase 3：`core/pace.py` —— 为什么「节奏」必须单独成层
+
+`core/tool_registry.py` 回答的是「哪些工具允许打公网」，但**没有回答「允许打的工具
+应该打多快」**。而后者才是用户最关心的一句话：**拿到授权的公网目标不等于可以对它
+施加任意流量。**
+
+于是把「节奏」提升为与工具组合并列的一维（Scan Profile = 工具组合 + 节奏）：
+
+```text
+light  低频 —— 覆盖并发与每秒请求数，并在真实步骤之间留间隔
+normal 常规 —— 完全沿用工具自身配置，不额外等待（= 引入前的行为）
+```
+
+| 机制 | 实现位置 | 关键不变量 |
+|---|---|---|
+| 档位与文案 | `core/pace.py:PACE_LABELS` / `PACE_DESCRIPTIONS` | 中文文案**只维护一份**，页面 / 错误消息 / 接口同源 |
+| 只能收紧 | `core/pace.py:resolve_pace()` | 任一为 `light` 即 `light`；请求体放松不了模板档位 |
+| 严格 vs 宽松 | `normalize_pace()` / `coerce_pace()` | 请求体非法值**报错**；读库脏数据才回退缺省 |
+| 工具预算 | `core/pace.py:LIGHT_TOOL_BUDGET` | 只覆盖公网白名单内的工具；白名单外的工具进不了入口 |
+| 注入 | `core/pace.py:apply_to_runner()` | 写 `config` **副本**，绝不原地改模块级配置对象 |
+| 步骤间隔 | `jobs/executor.py` 的 `for step in steps:` 内、`start_step` 之前 | 分片 sleep + 期间取消生效 + 长等待前续租 |
+| 持久化 | `core/jobs.py:pace_of_job()` 读 `job.created` 事件 | **不加列**（DECISIONS §1 E 限纯增量） |
+
+**为什么 `pace` 不落成 `jobs` 表的新列**：那是 DB 结构变更。写进 `job.created` 事件的
+`detail` + 审计 detail、执行期按 `job_id` 读回，是**必然**而非偏好 —— worker 是**独立进程**，
+且任务可能被 retry 或换一个 worker 重启，节奏必须是任务自身的属性，而不是某次调用的参数。
+
+#### 9.23.4 执行期插入点的选择（踩过才知道为什么不能放别处）
+
+「在步骤之间等一下」看似可以在多处实现，实际**只有一个合法位置**：
+
+| 候选位置 | 为什么不行 |
+|---|---|
+| `modules/base.py` 的 `_execute` | 绕不到 `_execute_stdout`、`shuffledns.py:82`、`enscan.py:115` 这些自定义流程，mock 也根本不过去 |
+| 新增 `waiting` 步骤状态 | `pending_steps()` / `reset_running_steps_on_start()` 只认 `pending` / `running`，新状态会在 retry 时把步骤**搁浅**，且 `aggregate_status()` 会报 `succeeded` |
+| 与既有 `--step-delay` 合并成 `max()` | 两者语义不同（一个是运维在命令行显式降速，一个是「这个 Profile 是低频档」），叠加才是诚实的结果；且缺省路径下两者都是 0，不会多出任何 sleep |
+
+最终落在 `jobs/executor.py` 的 `for step in steps:` 里、`jobs_store.start_step()` **之前**，
+并且**刻意只在真实模式**生效（mock 不产生任何外部流量，对它等待只会让演练变慢）。
+`test_execute_calls_renew_between_steps` 断言 renew 恰好被调 2 次 —— 新增的等待
+只在 `pace_step_delay` 非 0 且已执行过至少一步时才 `renew()`，因此缺省路径的回调次数不变。
+
+#### 9.23.5 一处**废弃的实现**及其原因（值得记住）
+
+实现过程中曾新增 `modules/registry.py:build_scoped_runner(tool_name, pace)` —— 第二条
+能带节奏的构造路径。**已移除**，改为「构造归 `build_runner`、降速归 `apply_to_runner`」两步。
+
+原因：`build_runner(tool_name)` 是测试替换真实 Runner 的**唯一**接缝
+（`monkeypatch.setattr("modules.registry.build_runner", ...)`，全仓 20+ 处）。多一条构造
+入口，就等于多一个「假 Runner 没被替换、真去执行外部命令」的机会 ——
+而「测试期不许打真实外部目标」是本项目的硬约束，最不该在这种地方留缝。
+`tests/unit/test_pace.py::test_apply_to_runner_works_on_the_registry_seam` 把这个分工锁住。
+
+> 附带一条：`apply_to_runner()` 在 `jobs/executor.py` 里被 `try/except` 包着 ——
+> 降速是**策略**，不是执行前提；任何情况下都不该因为它把任务弄挂。
+
+#### 9.23.6 前端：为什么节奏要写在**卡片上**
+
+`web/static/scan_center.js:renderStrategies()` 给每张策略卡片加一行 `.sc-strategy-pace`。
+只把「低频」放进 `#strategy-note` 是不够的：那一行会随用户切换策略而被覆盖，
+切走之后就再也看不见「资产发现是低频档」这件事了。
+
+说明文字**不写死在前端**，而是从 `GET /api/scan-center` 的 `paces[]`
+（`{pace, pace_label, pace_description, step_delay_seconds}`）取 ——
+`web/templates/scan_center.html` 里那句初始文案也会在元数据到位后被 JS 覆盖，
+所以它只需与 `asset_discovery` 的描述保持同义，不会成为第二份事实源。
+
+#### 9.23.7 本节的已知边界
+
+- `LIGHT_TOOL_BUDGET` 只覆盖 `subfinder` / `httpx`。这不是遗漏：公网白名单之外的工具
+  根本进不了公网入口，为不可达路径写预算等于写死代码。
+- 低频档的**实际外发速率**没有被计量（只测到「命令行参数正确」与「步骤之间确有等待」）。
+  真实工具对小并发 / 限速参数的解释由工具自身负责。
+- `GEF_PACE_LIGHT_STEP_DELAY_SEC` 是**运维级**旋钮，不是策略模板的一部分：
+  它允许把间隔调大，但**调不小**（`light` 恒 ≥ 0，`normal` 恒 = 0）。
+- Phase 4（结果体验）尚未开工：`job_events` 仍未在 `app.js` 里渲染，
+  风险 / 漏洞信息在数据模型里**完全不存在**（`nuclei` 仍是 `KNOWN_UNAVAILABLE_TOOLS`）。
 

@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· **公网授权测试模式体验版已完成（项目 / 工具权限元数据 / 策略模板 / 扫描中心页）** · 本地领先 origin/main 8 个提交（纯快进，待确认后推送）· **方案第 11 节明写「到这里就可以暂停先了」，本阶段到此停** · M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · **下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验 ⬜** · 本地领先 origin/main 18 个提交（纯快进，待确认后推送）· M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅（`docs/milestones/GetEverything_公网授权测试模式体验版方案.md`，方案第 11 节写到「到这里就可以暂停先了」；交付报告见 `docs/milestones/本机验收报告_公网授权测试模式_2026-10-02.md`）→ P0-6 阶段二 + M5 剩余 ⬜**
-- 更新日期：2026-10-02（公网授权测试模式体验版 + 交付报告 + 测试隔离修复；此前 M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → **下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（本轮）→ Phase 4 结果体验 ⬜** → P0-6 阶段二 + M5 剩余 ⬜**
+- 更新日期：2026-10-02（下一阶段体验优化 Phase 1～3；此前公网授权测试模式体验版 / M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
 
 ---
 
@@ -368,6 +368,55 @@
   测试有断言」的开关都必须在 conftest 里钉死；只 `setdefault` 等于把开发机配置
   变成隐式测试参数
 
+**Phase 1 UI 清理（`e94b180`）**
+- 方案第 2 节点名的问题逐个处置：全部实体 ID 从**可见文案**里消失（用户看到
+  「学校官网 / www.example.cn / 已授权」而不是 `scope_9f3c…`），新增
+  `scopeLabel()` / `projectLabel()` / `describeScopeTargets()` / `scopeStateLabel()`
+  四个翻译函数；实体 ID 仍存在，但只作为 `<option value>` 与请求体字段（不可见）
+- 清掉裸 `proj_…` 列 / `Scope N 个` / 把授权说明塞进 `title` 这些后台术语
+- 目标清单继续来自需登录的 `GET /api/scopes`，**不塞进** `/api/scan-center` ——
+  那条接口「不下发目标清单」的既有约定与测试保持有效
+
+**Phase 2 公网授权测试入口（`510fa41`）**
+- 痛点：旧实现下「越界 / 范围没开 `active_scan` / 环境总开关没开」这三种完全不同的
+  情况，都表现为同一个 `403 scope_violation`，只能靠读错误消息反推缺了哪一步
+- 新增 `core/authorization.py`：**只读试算**。`check_target()` / `check_targets()`
+  返回「目标落在哪些已授权范围内、每个范围什么状态、还缺哪一道闸门」，
+  `blocker` 五档（`invalid_target` / `no_scope` / `not_authorized` /
+  `scope_inactive` / `env_disabled`）。三条设计：① 匹配复用 `Scope.match_target`
+  （与 Policy 同源，不可能不一致）；② **只读**，不写库、不写审计、不发网络；
+  ③ `TargetCheck.eligible` 单独建模，排除命中的范围不算「可执行」
+- 前端改成四步流程：输入目标 → 确认授权范围 → 选择工具 → 执行模式与提交
+
+**Phase 3 Scan Profile = 工具组合 + 节奏（本轮）**
+- 依据：下一阶段方案第 5、6 节 Phase 3「工具编排：引入 Scan Profile」。
+  一句话目标：**「低频」必须是可执行约束，而不是页面上的一行文案**
+- 新增 `core/pace.py`：档位 `light`（低频）/ `normal`（常规），`PACE_LABELS` /
+  `PACE_DESCRIPTIONS` 单一事实源；`resolve_pace()` **只能收紧**（任一为 `light` 即
+  `light`）；`normalize_pace()` 严格（非法值报错，写错 `"low"` 不许静默变常规档），
+  `coerce_pace()` 宽松（只给读库的脏数据用）
+- **真的降速**：`LIGHT_TOOL_BUDGET` 把 `subfinder` 压到 `-t 5 -rl 3`、
+  `httpx` 压到 `-threads 5 -rl 10`；`apply_to_runner()` 写进 Runner 的 `config`
+  **副本**，绝不原地改模块级配置对象；低频档在**真实**步骤之间留出间隔
+  （默认 1.5 秒，`GEF_PACE_LIGHT_STEP_DELAY_SEC` 可调，测试里钉 0）
+- **`normal` 与引入前逐字节一致**：不覆盖任何参数、不产生任何等待。不带模板的
+  历史入口（`POST /api/jobs`、首页表单）缺省即 `normal`，老调用方不会突然变慢
+- **三档模板一律 `light`**：公网授权测试打的是**别人的**资产，「拿到书面授权」
+  不等于「可以施加任意流量」。请求体写 `pace=normal` **改不回来**（有用例锁死）
+- **节奏不落成 `jobs` 表的新列**（那属 DB 结构变更，DECISIONS §1 E 限纯增量）：
+  写进 `job.created` 事件 detail + 审计 detail，执行期由 `core/jobs.py:pace_of_job()`
+  读回。这是**必然**的 —— worker 是独立进程，且任务可能被 retry 或换一个 worker 重启，
+  节奏必须属于任务本身而不是某次调用的参数
+- **一处刻意的废弃**：曾尝试新增 `modules/registry.py:build_scoped_runner()`（第二条能
+  带节奏的构造路径），**已移除**。`build_runner(tool_name)` 是测试替换真实 Runner 的
+  唯一接缝（`monkeypatch.setattr`），多一条构造入口就多一个「假 Runner 没被替换、
+  真去执行外部命令」的机会。最终改为「构造归 registry、降速归
+  `core.pace.apply_to_runner`」两步，并由用例锁住这个分工
+- 前端：每张策略卡片上写明**节奏**（不只是工具组合），说明文字由
+  `/api/scan-center` 的 `paces[]` 下发，前端不写死任何文案；提交时原样转发 `pace`
+- **节奏不是安全闸门**：它不参与、也不放松 Scope / `active_scan` /
+  `GEF_ALLOW_REAL_SCAN` / 公网白名单中的任何一条
+
 ---
 
 ## 部分完成
@@ -546,30 +595,27 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（公网授权测试模式体验版：项目 / 工具权限元数据 / 策略模板 / 扫描中心页 + 测试隔离修复）
+验证时间：2026-10-02（Phase 3：Scan Profile = 工具组合 + 节奏）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1004 passed, 2 skipped, 0 failures / 0 errors      ← --collect-only 汇总口径
-mypy:   Success: no issues found in 68 source files        ← 本轮新增 5 个源文件（63 → 68）
-node --check web/static/{app.js,assets.js,scan_center.js}: 语法检查通过（无前端构建链，只能做到这一步）
+pytest: 1091 passed, 2 skipped, 0 failures / 0 errors      ← --collect-only 逐文件汇总口径
+mypy:   Success: no issues found in 70 source files        ← 本轮新增 core/pace.py（69 → 70）
+node --check web/static/scan_center.js: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
-实机验收（scripts/verify_public_scan.py，可复跑）：
-        python app.py(WEB_PORT=5001) + python -m jobs.worker
-        建项目 201 → 建 Scope 201 → 关联 201 → 未授权目标 403 → 禁工具 nmap 400
-        → 未关联 Scope 400 → mock 任务 202 → worker 执行到 succeeded 100%
-        全程只用 127.0.0.1 与 RFC 6761 保留域 example.test，未打任何真实外部目标
-        另用一次性探针确认方案第 4 节的「IP / CIDR」目标类型在公网入口上同样成立：
-        CIDR 内 IP → 202、CIDR 外 IP → 403、CIDR 形式目标 → 202
-        （网段用 RFC 5737 文档保留段 192.0.2.0/24 与 198.51.100.0/24）
-覆盖口径（一次性探针，方法与上一轮相同）：
-        声明的方法绑定 48 / 被用例真实命中 47；未被走到的仍是同一条
-        （GET /api/tool/<tool_name>/results，理由见 docs/TEST_REPORT.md §3.1）
-        业务 .py 96 个被测试提及 86 个，未提及的仍是同样 10 个（全在 agent/）
+本轮未做新的实机验收（纯后端节奏 + 前端展示改动，无新增路由）：
+        真实扫描一律不在实现/测试期发起；节奏的正确性由
+        「Runner 收到的 config」「命令行多出的 -rl」「真实测到的步骤间隔」三类用例证明
+        （见 docs/TEST_REPORT.md §7）
+        沿用上一轮实机结论：Web + worker 双进程链路、三条拒绝路径、mock 任务 202 → succeeded
+覆盖口径（口径与上一轮相同，用一次性探针重跑）：
+        声明的方法绑定 49 / 路由规则 47 —— 本轮**零新增路由**，与 Phase 2 相同
+业务 .py 97 个被测试提及 87 个（新增 core/pace.py 被 37 条用例直接覆盖），
+        未提及的仍是同样 10 个（全在 agent/）
 交付报告：docs/milestones/本机验收报告_公网授权测试模式_2026-10-02.md（目录被忽略，本机材料）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → **公网授权测试模式体验版 `1004`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → **Phase 3 Scan Profile `1091`**
 
 > 本轮新增 105 项（`test_tool_registry.py` 34 + `test_projects.py` 26 +
 > `test_public_scan_mode.py` 45）。**排除这三个文件后收集数仍为 901**，
@@ -586,12 +632,12 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-9a72058   ← 最近一次不含本文件改动的提交（交付报告 + 测试报告增量）
-9a72058  docs: 交付报告 + 测试报告本轮增量 + 示例域名的安全性说明 (2026-10-02)
-5614491  docs(decisions): 新增 §3.4 推送前安全审计专节（含密钥处置口径）
-1a34310  docs: 补记密钥清理与探针用法（提交哈希同步 + 探针凭据来源）
-207af8c  docs: 同步公网授权测试模式体验版（决策单 / 代码地图 / API / 部署 / 变更日志 / 基线）
-26ddf3a  test: 公网授权测试模式端到端 —— 方案第 9 节五类 + 第 11 节验收
+510fa41   ← 最近一次不含本文件改动的提交（Phase 2 公网授权测试入口）
+510fa41  feat(public-scan): Phase 2 公网授权测试入口 —— 只读试算 + 四步流程
+e94b180  feat(scan-center): Phase 1 UI 清理 —— 隐藏内部 ID、去后台术语、简化流程
+35320cf  docs(state): 记录复跑审计的遗留项与两个新提交
+714ae22  docs(security): 复跑审计发现重写后明文仍可从回滚标签检出
+0efa43a  docs: 基线由 1003 对齐到 1004，并补交付报告与覆盖口径
 ```
 
 自检：
@@ -617,6 +663,7 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 | 产品代码 | `4428302`（测试隔离修复）、`0a3bd42`（后端）、`7018fb4`（前端） |
 | 测试与验收 | `26ddf3a`（测试与探针）、`7bfb8e7`（补 IP/CIDR 用例） |
 | 文档 | `207af8c`（文档同步）、`1a34310`（哈希同步 + 密钥清理补记）、`5614491`（审计专节）、`9a72058`（交付报告 + 测试报告增量）、`0efa43a`（基线 1003→1004 对齐） |
+| 下一阶段体验优化 | `e94b180`（Phase 1 UI 清理）、`510fa41`（Phase 2 公网授权测试入口）、Phase 3 见下 |
 | 状态板（只改本文件） | `db159ff` 及此后每一条 `docs(state):…` |
 
 **纯快进，无需 force** —— 已实测 `git merge-base --is-ancestor origin/main HEAD` 退出码 0。

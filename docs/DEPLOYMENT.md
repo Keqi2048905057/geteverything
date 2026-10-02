@@ -115,6 +115,7 @@ Copy-Item .env.example .env
 | `GEF_ALLOW_REAL_SCAN` | `false` | 真实扫描总开关 | **保持 false**，除非明确要打真实目标 |
 | `GEF_LOG_LEVEL` | `INFO` | 日志级别 | 排障时临时 `DEBUG` |
 | `GEF_LOG_FORMAT` | `json` | `json` / `text` | `json` 便于 grep，`text` 便于人读 |
+| `GEF_PACE_LIGHT_STEP_DELAY_SEC` | `1.5` | **低频档**（`pace=light`）在真实步骤之间的间隔秒数 | 测试里钉 `0`；真实公网测试建议保持或调大，不要调小 |
 | `GEF_PROCESS_TIMEOUT` | `120` | 子进程超时（秒） | 大目标可调大 |
 | `GEF_SCAN_DB_PATH` | `results/scan_results.db` | **旧库**路径 | 一般不动 |
 | `LOCAL_DB_PATH` | `results/local.db` | **新库**路径 | 一般不动 |
@@ -200,6 +201,16 @@ python -m jobs.worker --step-delay 3
 # 只作为一次性消费者、日志安静
 python -m jobs.worker --once --quiet
 ```
+
+> **`--step-delay` 与 Scan Profile 的「低频档」是两个不同的东西**，不要混：
+> `--step-delay` 是**运维在命令行上**显式要求的全局降速（对每个任务都生效）；
+> 低频档（`pace=light`）是**任务自身**的属性，写在 `job.created` 事件里，
+> worker 按 `job_id` 读回（见 `docs/API.md` §6.10）。
+> 两者同时出现时**叠加**而不是取最大值 —— 那是更诚实的结果（使用者自己看得见两处设置）。
+> 缺省路径下两者都是 0，因此不带 Profile 的任务一次多余等待都不会有。
+>
+> 低频档的步骤间隔默认 1.5 秒，用 **`GEF_PACE_LIGHT_STEP_DELAY_SEC`** 调整
+> （`0` 表示不等；非法值退回默认值）。它只影响 `light`，**改不到** `normal`。
 
 行为要点：
 

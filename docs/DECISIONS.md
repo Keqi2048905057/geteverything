@@ -180,6 +180,44 @@ git grep -n -I "<本轮 Token>" $(git rev-list --all)
 > 本 Agent 未执行删除标签（属「删除历史备份」范畴，按第 4 节需你确认），
 > 也未轮换 Token（改了会让本机 `.env` 与既有会话失配，属于动你的环境）。
 
+### 3.5 下一阶段体验优化 Phase 1～3（2026-10-02，用户直接指派）
+
+> 依据：用户直接给出的《GetEverything_下一阶段体验优化与公网扫描能力演进方案》。
+> 该文件属本机过程材料（受 `.gitignore` 忽略，不入库），因此**任务来源本身即为用户授权**。
+> 三个阶段各自独立提交（Phase 1 `e94b180` / Phase 2 `510fa41` / Phase 3 本轮），可独立回滚。
+
+| 检查项（方案第 8、10 节的硬约束） | 结论 |
+|---|---|
+| 每个阶段独立提交 | ✅ 三段各自一个提交，每段提交前跑过相关测试，最后跑全量 |
+| 不绕过 Policy | ✅ 未新增任何 Policy 判定；Phase 2 的只读试算**复用** `Scope.match_target`（与 Policy 同源），且**不写库、不写审计、不发网络**；三条源码守卫用例仍全部有效 |
+| 不绕过 Scope | ✅ 公网入口仍转交 `core/application.create_scan_job`；`create_authorized_public_job` 内不得出现 `validate_job_targets` / `create_job_with_status` 的守卫未动 |
+| 不删除审计 | ✅ 未删任何事件类型；反而把 `pace` **新增**进 `job.created` detail 与审计 detail，让「这次任务按什么节奏跑」变成可查事实 |
+| 不改数据库核心结构 | ✅ **零 DDL**：`core/pace.py` 不建表、不加列。`pace` 走 `job_events.detail_json`（既有列），刻意**不**给 `jobs` 表加 `pace` 列 —— 与第 65 行「`jobs.project_id` 刻意没加」同一口径 |
+| 不放宽第一节公网白名单 | ✅ 白名单仍是 `{httpx, subfinder}`；`nuclei` 仍 `internet_allowed=False`、仍在 `KNOWN_UNAVAILABLE_TOOLS`，只作「受限未开放」展示。方案第 5 节提到 `nuclei`，但**未据此开放它** |
+| 不引入 React / Redis / PostgreSQL | ✅ 前端仍是原生 JS（`node --check` 通过）；未新增任何依赖 |
+| 不删旧 API、不重构 Agent | ✅ 路由数 47 / 绑定 49 **与 Phase 2 完全一致**（本轮零新增路由）；`POST /api/jobs` 等历史入口语义不变（缺省 `pace=normal`） |
+
+**唯一需要你知情的取舍（不是新增权限，而是行为默认值）**：三个策略模板的缺省节奏
+**一律设为 `light`（低频）**，而请求体**只能收紧、不能放松**。也就是说，从本轮起，
+**经扫描中心发起的公网任务默认就是低频档** —— 并发被压到 5、每秒请求数被压到 3～10、
+真实步骤之间默认等 1.5 秒。这是针对你此前明确说过的约束
+（`www.peizheng.edu.cn` 属第三方学校资产，**不能大量扫描**）做出的默认值选择，
+与方案第 8 节的白名单口径一致，而不是一次权限扩张。
+
+> 若你认为某些场景需要更快的节奏，**不要在请求体里绕过** —— 那正是本设计刻意堵死的路径。
+> 正确做法是改 `core/tool_registry.py:STRATEGIES` 里对应模板的 `pace`（需改代码 + 过测试），
+> 或走不带模板的历史入口 `POST /api/jobs`（其缺省就是 `normal`，且目标由你自己提供）。
+
+**未动**：`scopes` / `jobs` 等既有表结构与数据、Scope/Policy 判定逻辑、认证授权、
+既有 API 语义、同步 Runner 链路、Agent、`pyproject.toml`、`.env`。
+**未对任何真实外部目标发起扫描** —— 本轮 `real` 模式用例全部把
+`modules.registry.build_runner` 换成假 runner，目标是 RFC 6761 保留域 `example.test`。
+
+**一处刻意废弃的实现**：曾新增 `modules/registry.py:build_scoped_runner()`（第二条能带节奏的
+构造路径），**已移除**并改为「构造归 `build_runner`、降速归 `core.pace.apply_to_runner`」。
+理由见 `docs/CODEBASE_MAP.md` §9.23.5 —— 多一条构造入口就多一个「假 Runner 没被替换、
+真去执行外部命令」的机会，那正是本项目硬约束最不该留缝的地方。
+
 ### 3.1 用户本轮（2026-10-02，弹窗确认）已授权的项
 
 > 以下是 Agent 主动弹出询问后、**用户明确勾选授权**的项，效力等同第 1 节预授权，
