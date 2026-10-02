@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>扫描中心 · Get Everything Framework</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">GEF</span>
+      <span class="brand-text">扫描中心</span>
+    </div>
+    <div class="topbar-right">
+      <a class="btn btn-ghost" href="{{ url_for('index') }}">← 任务</a>
+      <a class="btn btn-ghost" href="{{ url_for('assets_page') }}">资产</a>
+      <span id="health-badge" class="badge badge-unknown" title="正在检测 /health">健康检查中…</span>
+      {% if is_authenticated %}
+        <span class="badge badge-ok">已登录</span>
+      {% else %}
+        <span class="badge badge-warn">未登录</span>
+        <a class="btn btn-primary" href="{{ url_for('login_page') }}">登录</a>
+      {% endif %}
+    </div>
+  </header>
+
+  {% if not is_authenticated %}
+    <div class="alert alert-error" role="alert">
+      扫描中心涉及授权证据与目标清单，需先登录；未登录时相关接口返回
+      <code>401 unauthenticated</code>。
+    </div>
+  {% elif not real_scan_enabled %}
+    <div class="alert alert-error" role="alert">
+      真实扫描总开关未开启（<code>GEF_ALLOW_REAL_SCAN=false</code>）：
+      此处提交的公网任务会被 <code>403 scope_violation</code> 拒绝。
+      在项目根 <code>.env</code> 中设为 <code>true</code> 后<strong>重启 Web 服务</strong>，再回来提交。
+      演练可改用下方「本地验证模式（mock）」。
+    </div>
+  {% endif %}
+
+  <main class="layout layout-wide">
+    <section class="panel">
+      <h2>创建任务</h2>
+
+      <div class="sc-warning">
+        <strong>授权公网测试模式</strong>：这里创建的任务会调用真实外部工具，对目标发出真实网络请求。
+        请只提交你自己拥有、或<strong>已获得书面授权</strong>的目标；授权说明会随项目一并写入审计日志。
+        被列入公网白名单的工具只有 <code>{{ internet_allowed_tools | join('、') }}</code>。
+      </div>
+
+      <!-- 步骤 1：授权项目 -->
+      <div class="sc-step">
+        <h3>步骤 1 · 授权项目</h3>
+        <form class="form" id="project-form" autocomplete="off">
+          <label for="project-name">项目名称</label>
+          <input type="text" id="project-name" name="name" placeholder="培正学院授权测试" required>
+
+          <label for="project-note">授权说明（谁授权、范围、凭据形式）</label>
+          <input type="text" id="project-note" name="authorization_note"
+                 placeholder="2026-10-02 校方信息中心书面授权，仅被动信息收集" required>
+
+          <label for="project-owner">负责人</label>
+          <input type="text" id="project-owner" name="owner" placeholder="张三">
+
+          <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
+            创建项目
+          </button>
+        </form>
+        <p class="sc-step-note" id="project-feedback">
+          授权说明不能留空 —— 它是公网扫描的授权证据。
+        </p>
+      </div>
+
+      <!-- 步骤 2：授权范围 -->
+      <div class="sc-step">
+        <h3>步骤 2 · 添加授权 Scope</h3>
+        <form class="form" id="scope-form" autocomplete="off">
+          <label for="scope-project">归属项目</label>
+          <select id="scope-project" name="project_id" required>
+            <option value="">— 请先创建项目 —</option>
+          </select>
+
+          <label for="scope-name">范围名称</label>
+          <input type="text" id="scope-name" name="name" placeholder="培正学院主站">
+
+          <label for="scope-domains">授权域名（逗号分隔；子域用 *.example.com 或直接写根域）</label>
+          <input type="text" id="scope-domains" name="allowed_domains"
+                 placeholder="www.peizheng.edu.cn">
+
+          <label for="scope-cidrs">授权 CIDR（逗号分隔，可选）</label>
+          <input type="text" id="scope-cidrs" name="allowed_cidrs" placeholder="203.0.113.0/24">
+
+          <label class="check-inline" for="scope-active">
+            <input type="checkbox" id="scope-active" name="active_scan" checked>
+            允许真实外部扫描（active_scan）
+          </label>
+
+          <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
+            创建并关联到项目
+          </button>
+        </form>
+        <p class="sc-step-note" id="scope-feedback">
+          框架禁止 <code>*</code> 这类全放行通配符，必须逐个显式列出。
+          目标本身不是域名也不是 IP/CIDR 时会被拒。
+        </p>
+
+        <div id="scope-list"></div>
+      </div>
+
+      <!-- 步骤 3：策略模板 + 目标 -->
+      <div class="sc-step">
+        <h3>步骤 3 · 扫描策略与目标</h3>
+
+        <div class="sc-strategies" id="strategy-list"></div>
+        <p class="sc-step-note" id="strategy-note">资产发现：被动子域枚举 + 存活探测，流量最轻。</p>
+
+        <div id="custom-tools" hidden>
+          <p class="sc-step-note">自定义模式：勾选要用的工具（被禁工具无法勾选）。</p>
+          <div class="sc-tools" id="tool-list"></div>
+        </div>
+
+        <form class="form" id="job-form" autocomplete="off" style="margin-top: 12px;">
+          <label for="job-project">项目</label>
+          <select id="job-project" name="project_id" required>
+            <option value="">— 请先创建项目 —</option>
+          </select>
+
+          <label for="job-scope">授权范围（只列出该项目下的 Scope）</label>
+          <select id="job-scope" name="scope_id" required>
+            <option value="">— 请先给项目添加 Scope —</option>
+          </select>
+
+          <label for="job-target">目标（逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
+          <input type="text" id="job-target" name="targets" placeholder="www.peizheng.edu.cn" required>
+
+          <label class="check-inline" for="job-mock">
+            <input type="checkbox" id="job-mock" name="mode_mock">
+            本地验证模式（mock，不联网，仅演练流程）
+          </label>
+
+          <div class="sc-actions">
+            <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
+              创建公网测试任务
+            </button>
+          </div>
+        </form>
+        <p class="sc-step-note">
+          提交后立即返回任务 ID（<code>queued</code>），由 worker 异步执行。
+          执行前请确认 worker 已启动：<code>python -m jobs.worker</code>。
+          任务创建必须依次通过「项目 → 项目内 Scope → 公网工具白名单 → Policy / Scope / 模式」，
+          任何一条不过都会在<strong>创建任务之前</strong>被拒绝。
+        </p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>项目</h2>
+      <div id="project-list"></div>
+      <p class="hint">
+        项目是<strong>授权证据的组织单位</strong>：一次授权测试对应一个项目，
+        项目下挂着由它派生、并被显式列入白名单的 Scope。
+        关联项目<strong>不会</strong>放开任何权限 —— 能不能真实扫描仍然由
+        Scope 的 <code>active_scan</code> 与环境开关共同决定。
+      </p>
+    </section>
+
+    <section class="panel">
+      <h2>任务</h2>
+      {% if recent_jobs %}
+        <table class="jobs" id="jobs-table">
+          <thead>
+            <tr>
+              <th>ID</th><th>状态</th><th>进度</th><th>模式</th><th>创建时间</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in recent_jobs %}
+              <tr data-job-id="{{ job.id }}" class="{% if job.id == focus_job_id %}job-focus{% endif %}">
+                <td class="mono">{{ job.id }}</td>
+                <td><span class="status status-{{ job.status }}">{{ job.status }}</span>
+                    {% if job.error_code %}<span class="mono err">{{ job.error_code }}</span>{% endif %}
+                </td>
+                <td>
+                  <div class="progress" title="{{ job.done_steps }}/{{ job.total_steps }}">
+                    <span style="width: {{ job.progress }}%"></span>
+                  </div>
+                  <span class="mono">{{ job.progress }}%</span>
+                </td>
+                <td class="mono">{{ job.mode }}</td>
+                <td class="mono">{{ job.created_at }}</td>
+                <td>
+                  <button type="button" class="btn btn-ghost job-detail" data-job-id="{{ job.id }}">详情</button>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p class="hint">状态每 3 秒自动刷新；「详情」展开每个步骤的状态、错误码与耗时。</p>
+      {% else %}
+        <p class="hint">
+          还没有任务。按左侧三步走：先建项目 → 加 Scope → 创建任务。
+          创建后若状态一直停在 <code>queued</code>，说明 worker 没在跑。
+        </p>
+      {% endif %}
+    </section>
+
+    <section class="panel" id="job-detail-panel" hidden>
+      <h2>任务详情 <span class="mono" id="job-detail-id"></span></h2>
+      <div id="job-detail-body"></div>
+      <p class="hint">
+        <strong>零结果与失败是两件事</strong>：<code>no_results</code> 表示工具跑通但什么都没发现，
+        <code>failed</code> / <code>timeout</code> 才是出问题。两者都可能显示 0 条。
+      </p>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='scan_center.js') }}"></script>
+</body>
+</html>

@@ -21,7 +21,7 @@ import time
 from flask import Flask, g, redirect, render_template, request, session, url_for
 
 from agent import handle_agent_message
-from config import Config, MAX_UPLOAD_SIZE
+from config import Config, MAX_UPLOAD_SIZE, SCAN_LIMITS
 from core import assets as assets_store
 from core import auth as local_auth
 from core import observability
@@ -343,6 +343,36 @@ def assets_page():
         scopes=_load_scope_options() if is_authenticated else [],
         asset_types=ASSET_TYPES,
         asset_statuses=assets_store.STATUSES,
+    )
+
+
+@app.route("/scan-center", methods=["GET"])
+def scan_center():
+    """扫描中心页（公网授权测试模式体验版方案第 7 节）。
+
+    页面只渲染骨架，数据全部由 ``web/static/scan_center.js`` 通过
+    ``GET /api/scan-center`` 同源拉取 —— 与资产页走同一条路子，
+    不引入任何前端框架。
+
+    认证策略与资产页一致：页面本身不强制登录（否则匿名连导航都点不进来），
+    但项目列表、策略与工具权限只在已登录时下发，接口未登录返回 401。
+
+    **这里不创建任何任务**：页面上的一切提交都只是转发到 ``/api/…``，
+    闸门全部在服务端（项目 → 项目内 Scope → 公网工具白名单 → Policy / Scope / 模式）。
+    视图层刻意不做「能不能扫」的判断，避免出现第二条判定实现。
+    """
+    from core.safety import real_scan_enabled
+    from core.tool_registry import internet_allowed_tools
+
+    is_authenticated = local_auth.is_authenticated()
+    return render_template(
+        "scan_center.html",
+        is_authenticated=is_authenticated,
+        real_scan_enabled=real_scan_enabled(),
+        internet_allowed_tools=internet_allowed_tools(),
+        max_targets_per_job=SCAN_LIMITS["max_targets_per_job"],
+        recent_jobs=_load_recent_jobs(limit=10 if is_authenticated else 0),
+        focus_job_id=(normalize(request.values.get("job_id")) or ""),
     )
 
 

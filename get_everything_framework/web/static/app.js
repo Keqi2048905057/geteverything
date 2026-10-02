@@ -452,4 +452,14 @@
     window.setInterval(pollJobs, JOBS_INTERVAL_MS);
     window.setInterval(refreshDetail, JOBS_INTERVAL_MS);
   });
+
+  // 扫描中心（授权公网测试模式，体验版方案第 7 节）在自己的脚本里实现，
+  // 但它复用的是本文件里的状态标签与错误码文案 —— 这两张表必须只有一份，
+  // 否则同一个 error_code 在两个页面会显示成不同的话。
+  window.GEF_UI = {
+    JOB_STATUS_LABELS: JOB_STATUS_LABELS,
+    STEP_STATUS_LABELS: STEP_STATUS_LABELS,
+    ERROR_CODE_LABELS: ERROR_CODE_LABELS,
+    jobSignature: jobSignature,
+  };
 })();

@@ -14,6 +14,7 @@
     </div>
     <div class="topbar-right">
       <a class="btn btn-ghost" href="{{ url_for('index') }}">← 任务</a>
+      <a class="btn btn-ghost" href="{{ url_for('scan_center') }}">扫描中心</a>
       <span id="health-badge" class="badge badge-unknown" title="正在检测 /health">健康检查中…</span>
       {% if is_authenticated %}
         <span class="badge badge-ok">已登录</span>
