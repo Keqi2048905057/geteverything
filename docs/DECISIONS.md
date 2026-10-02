@@ -63,6 +63,7 @@
 - `[DEFERRED] P1 §13 — SQLAlchemy + Alembic 替换手写 SQL + 迁移 —— 引入新依赖并重写整个数据访问层，风险等级与第 4 节的「SQLite → PostgreSQL」同类 — **本机联调版明确不做**（见 3.1 本轮口径），从「待授权」改为「已延期」，不再逐轮追问。`
 - `[DEFERRED] P1 §20（生产迁移门槛相关项）—— 属方案第 25 节「P1 后续生产迁移门槛」，已在执行方案里标注 `[DEFERRED]`，当前阶段不列入验收。`
 - `[本轮] 是否给 jobs 表补 project_id 列（让任务列表能显示「这次任务属于哪个授权项目」）—— 当前 jobs 表**没有** project_id 列，公网任务的项目信息只存在于创建时的审计事件与 API 响应里，任务列表与任务详情都**看不到**归属项目；补列属表结构改动（ADD COLUMN），按第 2 节边界退回第 1 节流程 — 建议：单开一项预授权，规格与 P0-7a 相同（纯增量 ADD COLUMN，可空，既有行语义不变）。**本轮刻意没有顺手加**，因为它不是方案第 5～11 节的要求。`
+- `[本轮] 回滚点标签 backup-before-secret-purge 的处置 + 本机管理员 Token 是否轮换 —— 复跑推送前审计时发现：**被重写掉的 4 个旧提交对象仍在对象库里，明文 Token 仍可从中检出**，而它们只能从 `refs/tags/backup-before-secret-purge` 到达；`git push origin main` 本身不会带上标签（已实测 `push.followTags` / `remote.origin.push` 均未设置），但只要有人用 `--tags` / `--follow-tags` / GUI 勾「推标签」就会泄露 — 建议：确认 main 成果无误后执行 `git tag -d backup-before-secret-purge`（放弃原路回滚点，换明文彻底不可达，等待 `git gc` 回收），并顺手把 `.env` 里的 `LOCAL_ADMIN_TOKEN` 换一个新的 — **该标签属「历史备份」，删除需你确认；Token 属你的运行环境，本 Agent 不擅自改**。完整分析见 §3.4 末尾「🔴 推送前必须先清理」。`
 
 > 本节只放**没有执行**的事项。本轮另有一项**已执行但判断依据需用户复核**的改动
 > （在 `core/db.py` 新增两张表），同类目但不属「未授权项」，完整说明见本节末尾。
@@ -108,15 +109,17 @@
 
 审计对象：`origin/main..HEAD` 的 6 个提交（`4428302` / `0a3bd42` / `7018fb4` /
 `26ddf3a` / `207af8c` / `db159ff`）。**未执行 push** —— 按用户偏好等确认。
+（提交数后来增长到 14，已按同一口径复跑，结论不变，见下表末行。）
 
 | 检查项 | 方法 | 结论 |
 |---|---|---|
-| 运行期产物是否入库 | `git diff --name-only origin/main..HEAD` 按 `results/ uploads/ exports/ backups/ SecLists/ *.db *.exe .env heartbeat *.pem *.key` 匹配（31 个变更文件） | ✅ 命中 0 条 |
+| 运行期产物是否入库 | `git diff --name-only origin/main..HEAD` 按 `results/ uploads/ exports/ backups/ SecLists/ *.db *.exe .env heartbeat *.pem *.key` 匹配（初查 31 个变更文件 / 复跑 32 个） | ✅ 命中 0 条 |
 | 全仓库已跟踪文件是否含数据库/密钥/样本 | `git ls-files` 同上模式（共 172 个已跟踪文件） | ✅ 命中 0 条 |
 | 新增行是否含硬编码密钥 | 全 6 提交 `git log -p` 的 3691 行新增，匹配 `(secret_key\|api_key\|password\|passwd) = "<8+ 字符>"` | ✅ 命中 0 条 |
-| 新增行是否含高强度密钥形状 | 同上匹配 `sk-…` / `ghp_…` / `AKIA…` / `eyJ….` | ✅ 命中 0 条 |
+| 新增行是否含高强度密钥形状 | 同上匹配 `sk-…` / `ghp_…` / `AKIA…` / `eyJ….`（复跑：全 14 提交同样 0 命中） | ✅ 命中 0 条 |
 | 历史里是否有明文残留 | 逐提交逐文件 `git show <commit>:<file>` 匹配本轮实际 Token / 上一轮 Token | ✅ 待推送范围内 0 命中；`origin/main` 已有历史亦 0 命中 |
-| 是否与远端分叉 | `git rev-list --left-right --count origin/main...HEAD` | ✅ `0 6` —— 纯快进，**无需** force |
+| **可达性复核**（复跑新增） | `git grep <token> $(git rev-list --all)` | ⚠️ **4 个重写前的旧提交对象仍可检出**，但**只能**从回滚标签/分支到达（详见下方「🔴 推送前必须先清理」） |
+| 是否与远端分叉 | `git rev-list --left-right --count origin/main...HEAD`（初查 `0 6`，复跑 `0 14`） | ✅ 纯快进，**无需** force |
 | 最大文件 | `git diff --stat` | ✅ 最大 `docs/CODEBASE_MAP.md` 205 KB，纯文本文档 |
 
 **审计拦下过一处真实问题（本轮最重要的一条）**：新增脚本
@@ -143,6 +146,39 @@
 > 这条也是「token 明文入库」这类问题的**通用处置口径**：
 > 只要提交还没推送，就该重写而不是补删除提交。
 > 若已经推送出去，则明文已被远端持有，重写无法收回 —— 那种情况只能立即轮换凭据。
+
+#### 🔴 推送前必须先清理：回滚点本身仍持有那串明文
+
+复跑审计时（提交数 6 → 14 之后）用**更强**的口径查了一遍全对象库：
+
+```powershell
+git grep -n -I "<本轮 Token>" $(git rev-list --all)
+```
+
+结论 —— **重写并不等于明文消失**。重写只是让 `main` 不再指向它们；被替换掉的
+4 个旧提交对象仍然存在，且**总共只能从两处到达**：
+
+| 可达来源 | 是否含明文 | 会不会被 `git push origin main` 带上去 |
+|---|---|---|
+| `refs/heads/main`（`0efa43a`） | ✅ 不含（`git grep … HEAD` 退出码 1） | 不会 —— 这是唯一会被推的 ref |
+| `refs/heads/backup/pre-purge`（`1649ea3`） | ✅ 不含 | 不会（不在推送范围） |
+| `refs/tags/backup-before-secret-purge`（`e934c30`） | ❌ **含**（`scripts/verify_public_scan.py:15`） | **默认不会**，但只要出现 `--tags` / `--follow-tags` / 在 GUI 里勾了「推送标签」就会**直接泄露** |
+
+已实测：`push.followTags` 与 `remote.origin.push` 均**未设置**，所以
+`git push origin main` 本身是安全的；风险只在「顺手推标签」这一种操作上。
+
+**因此：在推送 `main` 之前，请先决定这个回滚标签怎么处置**（这是需要你拍板的一项）：
+
+- **选项 A（建议）**：确认 `main` 上的成果无误后，删除该标签
+  （`git tag -d backup-before-secret-purge`）—— 那 4 个旧对象随即不可达、
+  最终会被 `git gc` 回收（默认 `gc.pruneExpire=2 weeks`）。**代价**：失去原路回滚点。
+- **选项 B**：保留标签，但**永不推标签**，并记住它的存在本身就是一处待清理的明文残留。
+- 无论选哪个，**该机上的这个 Token 都建议轮换一次**（`.env` 里的 `LOCAL_ADMIN_TOKEN`）：
+  它在重写前的多个提交对象里明文存在过，本机 `.env` 也一直在用同一个值。
+  轮换成本极低（改 `.env` 后重启 Web），收益是彻底断掉这条线。
+
+> 本 Agent 未执行删除标签（属「删除历史备份」范畴，按第 4 节需你确认），
+> 也未轮换 Token（改了会让本机 `.env` 与既有会话失配，属于动你的环境）。
 
 ### 3.1 用户本轮（2026-10-02，弹窗确认）已授权的项
 
