@@ -47,6 +47,7 @@ def _create_job(admin_client, scope_id, **overrides):
         ("get", "/api/jobs"),
         ("post", "/api/jobs"),
         ("get", "/api/jobs/job_x"),
+        ("get", "/api/jobs/job_x/results"),
         ("post", "/api/jobs/job_x/cancel"),
         ("post", "/api/jobs/job_x/retry"),
         ("get", "/api/jobs/job_x/steps"),

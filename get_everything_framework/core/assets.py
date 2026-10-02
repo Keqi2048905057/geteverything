@@ -560,6 +560,45 @@ def count_assets(
     return int(rows[0]["n"]) if rows else 0
 
 
+def list_job_assets(job_id: str, *, scope_id: str | None = None) -> list[dict]:
+    """列出某次任务**观测到过**的资产行（按类型 + 值排序）。
+
+    与 :func:`list_assets` 的区别是**按任务过滤**：``assets`` 表里没有
+    ``job_id`` 列（同一台主机被十次任务看到也只有一行），所以这里从
+    ``observations`` 反查 —— 这恰好就是两层模型存在的理由
+    （方案第 8 节：``Asset ↓ Observation ↓ Job / Run / Tool``）。
+
+    口径与 :func:`diff_jobs` 一致：**只看本次任务自己的观测**，
+    不看「该资产历史上被谁见过」。否则「这次扫到了什么」会被历史观测污染，
+    这正是 Phase 4「从 Job 导向结果」要避免的事。
+
+    Args:
+        job_id: 任务 ID。空值直接返回空列表（不做无条件全表扫描）。
+        scope_id: 只取该范围下的资产（可选；``None`` = 不按范围过滤）。
+
+    Returns:
+        list[dict]: 资产行（``_row_to_asset`` 形状，含 ``id`` / ``type`` /
+        ``value`` / ``status`` / ``first_seen`` / ``last_seen`` / ``metadata``）。
+    """
+    if not job_id:
+        return []
+
+    sql = (
+        "SELECT DISTINCT a.* FROM assets a "
+        "JOIN observations o ON o.asset_id = a.id "
+        "WHERE o.job_id = ?"
+    )
+    params: list = [job_id]
+    if scope_id is not None:
+        sql += " AND IFNULL(a.scope_id, '') = IFNULL(?, '')"
+        params.append(scope_id)
+    sql += " ORDER BY a.type ASC, a.value ASC"
+
+    db.ensure_schema()
+    rows = db.query(sql, tuple(params))
+    return [_row_to_asset(row) for row in rows]
+
+
 def list_observations(
     *,
     asset_id: str | None = None,

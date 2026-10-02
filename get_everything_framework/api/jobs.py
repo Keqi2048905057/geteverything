@@ -5,6 +5,7 @@
 * ``POST /api/jobs``                —— 创建任务，**立即**返回 ``job_id`` 与 ``queued``
 * ``GET  /api/jobs``                —— 列出任务
 * ``GET  /api/jobs/{job_id}``       —— 任务详情（含 steps 与 events）
+* ``GET  /api/jobs/{job_id}/results``—— 任务结果（发现资产 / 服务 / 技术栈 / 风险提示）
 * ``POST /api/jobs/{job_id}/cancel``—— 请求取消
 * ``POST /api/jobs/{job_id}/retry`` —— 重新排队
 * ``GET  /api/jobs/{a}/diff/{b}``   —— 两次任务的资产 Diff（方案第 10 节）
@@ -25,10 +26,24 @@ from api import api_bp
 from core import artifacts as artifacts_store
 from core import assets as assets_store
 from core import audit
+from core import findings
 from core import jobs as jobs_store
 from core.application import create_scan_job
 from core.auth import require_admin
 from core.errors import BadRequestError, NotFoundError
+
+
+def _query_limit(name: str, *, default: int, maximum: int) -> int:
+    """解析一个 ``limit`` 风格的 query 参数（非法值回落到默认值）。
+
+    与 ``api/assets.py:_limit`` 同一口径：**不**因为写错就 400 ——
+    分页/上限参数写错时给出默认值比让整页报错更有用，而真正的上限
+    始终由这里的 ``maximum`` 与数据层再夹一次。
+    """
+    try:
+        return max(1, min(int(request.args.get(name) or default), maximum))
+    except (TypeError, ValueError):
+        return default
 
 
 @api_bp.route("/jobs", methods=["POST"])
@@ -114,6 +129,74 @@ def get_job(job_id: str):
     if job is None:
         raise NotFoundError(f"任务不存在: {job_id}")
     return jsonify({"ok": True, "job": job})
+
+
+@api_bp.route("/jobs/<job_id>/results", methods=["GET"])
+def list_job_results(job_id: str):
+    """任务结果：**从 Job 导向结果**（下一阶段方案 Phase 4「结果体验」）。
+
+    一次请求给出四段结果，正是方案第 6 节 Phase 4 点名要展示的内容：
+
+    * ``assets``       —— 发现资产（按类型分组，含「谁发现的」）；
+    * ``services``     —— 服务（哪台主机上出现了什么协议 / 端口）；
+    * ``technologies`` —— 技术栈（Web 服务器 / 组件 / CDN）；
+    * ``risk_hints``   —— 风险提示。
+
+    口径（读代码前先读这段，否则很容易把它当漏洞接口）：
+
+    * 数据**只来自本次任务自己的观测**（``observations.job_id``），
+      不看资产历史上被谁见过 —— 与 ``/diff`` 同一口径，理由见
+      :func:`core.assets.list_job_assets`；
+    * 本框架**不做漏洞扫描**：没有 nuclei，也没有 CVE / 严重级别数据。
+      因此 ``risk_hints`` 里每一条都是「从已有观测里读出来的事实」
+      （明文 HTTP、5xx、默认欢迎页标题……），``level`` 是
+      「值不值得人工看一眼」而不是危险度。**没有提示 ≠ 没有漏洞** ——
+      这句结论随 ``notes`` 一起下发，前端必须显示；
+    * ``mode=mock`` 的任务不会产生任何观测，返回里会带
+      ``notes`` 明确说明「这是预期行为，不是采集失败」。
+
+    其它：
+
+    * ``scope_id``（query，可选）只取该范围下的资产；
+    * ``observations_limit``（query，默认 500，最大 2000）限制参与派生的
+      观测条数上限 —— 结果页是给人看的，不是导出通道；要完整数据请用
+      ``/api/observations?job_id=...``；
+    * 全部列表都有上限，且 ``counts`` 里给的是**截断前**的真实数量，
+      ``truncated`` 明确告诉你有没有被截断；
+    * 只读：不写库、不写审计、不触发任何扫描。
+
+    Returns:
+        200 + ``{"ok": true, "job_id", "mode", "scope_id", "counts",
+        "assets", "services", "technologies", "risk_hints", "notes"}``。
+    """
+    require_admin()
+
+    job = jobs_store.get_job(job_id)
+    if job is None:
+        raise NotFoundError(f"任务不存在: {job_id}")
+
+    scope_id = (request.args.get("scope_id") or "").strip() or None
+    observations_limit = _query_limit("observations_limit", default=500, maximum=2000)
+
+    assets = assets_store.list_job_assets(job_id, scope_id=scope_id)
+    observations = assets_store.list_observations(job_id=job_id, limit=observations_limit)
+    # 步骤只用来判断「覆盖是否完整」（有终态失败步骤 → 提示覆盖不完整），
+    # 因此只取需要的那几个字段，不需要整份详情。
+    steps = [
+        {"tool_name": step.get("tool_name"), "target": step.get("target"), "status": step.get("status")}
+        for step in jobs_store.list_steps(job_id)
+    ]
+
+    result = findings.summarize(assets, observations, mode=job.get("mode"), steps=steps)
+    return jsonify(
+        {
+            "ok": True,
+            "job_id": job_id,
+            "mode": job.get("mode"),
+            "scope_id": job.get("scope_id"),
+            **result,
+        }
+    )
 
 
 @api_bp.route("/jobs/<job_id>/cancel", methods=["POST"])

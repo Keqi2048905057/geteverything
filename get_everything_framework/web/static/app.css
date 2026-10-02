@@ -318,6 +318,73 @@ ul.artifacts li {
   color: var(--muted);
 }
 
+/* ── 任务结果（Phase 4「结果体验」） ─────────────────────
+   四段：发现资产 / 服务 / 技术栈 / 风险提示。
+   形状与 .steps 刻意不同：表格适合逐行比对，这里要的是「快速扫一眼有没有
+   值得点进去的东西」，所以用列表 + 徽标。 */
+
+.job-results {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+/* notes 是「这批数字该被怎么读」的说明，不能弱化到看不见 ——
+   它承载「没有风险提示 ≠ 没有漏洞」这条结论。 */
+.result-note {
+  border-left: 3px solid var(--warn);
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 0 6px 6px 0;
+  padding: 8px 10px;
+  margin: 8px 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+ul.result-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 10px;
+}
+
+.result-item {
+  padding: 6px 0 6px 10px;
+  border-left: 2px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.result-title {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.result-item .risk {
+  margin-right: 8px;
+  vertical-align: 1px;
+}
+
+.result-detail {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin: 2px 0 0;
+  line-height: 1.65;
+}
+
+ul.result-evidence {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+/* 空段落不占视觉重量：四段里通常有两三段是空的。 */
+.result-empty {
+  margin: 2px 0 8px;
+  font-size: 12px;
+}
+
 /* ── 汇总表 ─────────────────────────────────────────── */
 
 .summary {

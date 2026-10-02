@@ -334,7 +334,156 @@
     table.appendChild(tbody);
     body.appendChild(table);
 
+    // ── 结果区（下一阶段方案 Phase 4「结果体验」） ──────────
+    //
+    // **容器同步插入、内容异步填充**：`renderDetail` 后面紧跟着 `loadArtifacts`
+    // 也是异步的，如果这里也往 `body` 上 append，两个请求谁先回来谁排前面，
+    // 页面顺序会随机跳动。先插一个空容器就把顺序钉死了。
+    var resultsBox = el("div", "job-results");
+    body.appendChild(resultsBox);
+    loadResults(job.id, resultsBox);
+
     loadArtifacts(job.id);
+  }
+
+  // ── 任务结果：发现资产 / 服务 / 技术栈 / 风险提示 ─────────
+  //
+  // 四段的名字、每段的条目字段、级别文案**全部来自服务端**
+  // （`core/findings.py`），这里只负责摆 DOM。理由与 Phase 3 的节奏说明
+  // 同一条：前端写死第二份文案，后端改了口径页面还停在上一个版本。
+  //
+  // 另外：`notes` 是**必须显示**的。它承载「没有风险提示 ≠ 没有漏洞」
+  // 这条结论 —— 不显示的话，「风险提示：无」会被读成「这个站是安全的」。
+
+  var RESULT_SECTIONS = [
+    ["assets", "发现资产", "本次任务采集到的资产"],
+    ["services", "服务", "哪台主机上出现了什么协议 / 端口"],
+    ["technologies", "技术栈", "Web 服务器 / 页面识别出的组件 / CDN"],
+    ["risk_hints", "风险提示", "从观测里读出来的、值得人工看一眼的事实"],
+  ];
+
+  var RISK_LEVEL_CLASSES = {
+    info: "risk-low",
+    notice: "risk-medium",
+    attention: "risk-high",
+  };
+
+  function resultRowLine(item) {
+    // 每段条目的形状不同，但都至少有「主体 + 若干补充」两层。
+    var parts = [];
+    if (item.value !== undefined && item.value !== null) parts.push(String(item.value));
+    if (item.name) parts.push(String(item.name));
+    if (item.label) parts.push(String(item.label));
+    if (item.port !== undefined && item.port !== null && !item.label) parts.push(":" + item.port);
+    if (item.type_label) parts.push("（" + item.type_label + "）");
+    if (item.kind_label) parts.push("[" + item.kind_label + "]");
+    if (item.count !== undefined && item.count !== null && item.code) parts.push("×" + item.count);
+    return parts.join(" ");
+  }
+
+  function renderResultSection(box, key, title, hint, section) {
+    var items = (section && section.items) || [];
+
+    var head = el("h3", null, title + "（" + ((section && section.total) || 0) + "）");
+    box.appendChild(head);
+    box.appendChild(el("p", "hint", hint));
+
+    if (!items.length) {
+      box.appendChild(el("p", "hint result-empty", "本次任务没有这一类结果。"));
+      return;
+    }
+
+    var list = el("ul", "result-list");
+    items.forEach(function (item) {
+      var li = el("li", "result-item");
+
+      if (key === "risk_hints") {
+        // 级别徽标复用的是既有的 .risk 系列（app.css 里给工具风险等级用的），
+        // 但**语义不同**：这里是「值不值得人工看一眼」，不是危险度。
+        // 类名沿用是为了不新造一套配色，标签文案完全由服务端给。
+        var badge = el(
+          "span",
+          "risk " + (RISK_LEVEL_CLASSES[item.level] || "risk-low"),
+          item.level_label || item.level
+        );
+        badge.title = "严重程度分级不属于本框架的能力范围，这里只表示是否需要人工确认";
+        li.appendChild(badge);
+        li.appendChild(el("span", "result-title", item.title));
+        li.appendChild(el("p", "result-detail", item.detail));
+        if (item.evidence && item.evidence.length) {
+          var ev = el("ul", "result-evidence");
+          item.evidence.forEach(function (entry) {
+            var text = entry.value || "";
+            if (entry.source_tool) text += "  ·  " + entry.source_tool;
+            if (entry.observed_at) text += "  ·  " + entry.observed_at;
+            ev.appendChild(el("li", "mono", text));
+          });
+          if (item.count > item.evidence.length) {
+            ev.appendChild(el("li", "hint", "（仅列出前 " + item.evidence.length + " 条，共 " + item.count + " 条）"));
+          }
+          li.appendChild(ev);
+        }
+      } else {
+        li.appendChild(el("span", "result-title", resultRowLine(item)));
+        var extra = [];
+        if (item.source_tools && item.source_tools.length) extra.push("发现工具: " + item.source_tools.join(", "));
+        if (item.sources && item.sources.length) extra.push("来源工具: " + item.sources.join(", "));
+        if (item.hosts && item.hosts.length) extra.push("主机: " + item.hosts.join(", "));
+        if (item.count !== undefined && item.count !== null && !item.code) extra.push("出现 " + item.count + " 次");
+        if (item.status) extra.push("状态: " + item.status);
+        if (item.last_seen) extra.push("最近发现: " + item.last_seen);
+        if (extra.length) li.appendChild(el("p", "result-detail", extra.join(" · ")));
+      }
+      list.appendChild(li);
+    });
+    box.appendChild(list);
+
+    if (section && section.truncated) {
+      box.appendChild(
+        el("p", "hint", "（列表已截断：共 " + section.total + " 条，仅显示前 " + items.length + " 条）")
+      );
+    }
+  }
+
+  function renderResults(box, data) {
+    box.textContent = "";
+
+    // notes 先渲染：它是对「下面这些数字该被怎么读」的说明，
+    // 放到最后等于让人先得出结论再看免责声明。
+    (data.notes || []).forEach(function (note) {
+      box.appendChild(el("p", "result-note", note));
+    });
+
+    var counts = data.counts || {};
+    var summary = el(
+      "p",
+      "hint",
+      "本次任务采集到 " + (counts.assets || 0) + " 个资产 · " +
+      (counts.observations || 0) + " 条观测 · " +
+      (counts.services || 0) + " 个服务 · " +
+      (counts.technologies || 0) + " 项技术栈 · " +
+      (counts.risk_hints || 0) + " 条风险提示"
+    );
+    box.appendChild(summary);
+
+    RESULT_SECTIONS.forEach(function (entry) {
+      renderResultSection(box, entry[0], entry[1], entry[2], data[entry[0]]);
+    });
+  }
+
+  function loadResults(jobId, box) {
+    fetch("/api/jobs/" + encodeURIComponent(jobId) + "/results", { headers: { Accept: "application/json" } })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return resp.json();
+      })
+      .then(function (data) {
+        renderResults(box, data);
+      })
+      .catch(function (err) {
+        box.textContent = "";
+        box.appendChild(el("p", "hint", "结果读取失败: " + err.message));
+      });
   }
 
   function loadArtifacts(jobId) {

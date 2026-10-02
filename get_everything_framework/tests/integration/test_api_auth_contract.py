@@ -34,11 +34,13 @@ ADMIN_ONLY = [
     ("POST", "/api/tool/subfinder/run"),
     ("POST", "/api/jobs"),
     ("GET", "/api/jobs"),
+    ("GET", "/api/jobs/job_x"),
     ("POST", "/api/jobs/job_x/cancel"),
     ("POST", "/api/jobs/job_x/retry"),
     ("GET", "/api/jobs/job_x/steps"),
     ("GET", "/api/jobs/job_x/events"),
     ("GET", "/api/jobs/job_x/artifacts"),
+    ("GET", "/api/jobs/job_x/results"),
     ("GET", "/api/artifacts/art_x"),
 ]
 
