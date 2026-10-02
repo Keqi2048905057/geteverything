@@ -326,9 +326,19 @@ def test_logger_is_silent_but_capturable_by_default(caplog):
 
 # ── 源码守卫（方案第 19 节的禁止项） ──────────────────────
 
-# 唯一被允许打印凭据的位置：启动横幅（M1 验收项「明确日志提示」）。
-# 它只写本机控制台、给坐在机器前的人看登录凭据，且刻意**不走**结构化日志。
-_ALLOWED_CREDENTIAL_PRINT = {("app.py", "_print_login_hint")}
+# 允许 ``print`` 里出现「凭据相关词」的位置。
+#
+# 注意这个集合管的是**词**不是**值**：下面这条正则
+# （``api_key|token|secret|password|…``）必然会命中「只是提到变量名」的语句，
+# 所以登记时要自己确认清楚「打出来的是名字还是值」。
+_ALLOWED_CREDENTIAL_PRINT = {
+    # 启动横幅：**真的**打印登录凭据值（本机控制台，M1 验收项「明确日志提示」）。
+    # 它只写本机控制台、给坐在机器前的人看，且刻意**不走**结构化日志。
+    ("app.py", "_print_login_hint"),
+    # 验收探针缺凭据时的提示：只打印**环境变量名** ``LOCAL_ADMIN_TOKEN``，
+    # 不含任何值（它正是因为「没有值」才走到这一句）。
+    ("scripts/verify_public_scan.py", "_admin_token"),
+}
 
 # 允许保留 print 的文件（均为「进程级人读输出」）。任何新增 print 都必须
 # 显式改这个集合 —— 从而被迫回答「这条信息应该进结构化日志吗？」
@@ -345,6 +355,9 @@ _PRINT_ALLOWLIST = {
     ("modules/shuffledns.py", "run_scan"),
     ("scripts/migrate_legacy_results.py", "main"),  # stdout 被测试契约观察
     ("scripts/check_env.py", "main"),  # 环境自检：报告本身就是要给人看的 stdout
+    ("scripts/verify_public_scan.py", "main"),  # 公网验收探针：stdout 就是验收结论
+    ("scripts/verify_public_scan.py", "show"),  # 同上，逐步骤回显服务端原始响应
+    ("scripts/verify_public_scan.py", "_admin_token"),  # 缺凭据时的人读提示（不打印凭据）
     ("tool_runner.py", "run_tools"),  # 旧同步执行链的进度输出
 }
 
