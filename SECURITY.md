@@ -55,6 +55,16 @@
 > 已修复（曾登记在本表）：`GET /api/export?format=<非 csv/json>` 原返回 **500 `unknown_error`**，
 > 现为 **400 `bad_request`** + `details.supported`（校验清单与 `exporter.SUPPORTED_FORMATS` 同源）。
 
+> **Phase 4 新增接口的安全口径**：`GET /api/jobs/<job_id>/results` **需管理员身份**
+> （已登记进 `test_api_auth_contract.py:ADMIN_ONLY`），且**只读**——它从既有的
+> `assets` / `observations` / `job_steps` 行派生结果，不写库、不写审计、不发任何网络请求、
+> 不触发任何扫描（`tests/integration/test_job_results_api.py::test_results_endpoint_is_read_only`
+> 断言连调两次后四类行数全部不变），响应里不含服务器路径。
+> **它不是漏洞扫描结论**：本框架未接入任何漏洞扫描器（`nuclei` 不在 `RUNNER_REGISTRY`），
+> 页面上的「风险提示」是**可观察事实**（明文 HTTP、5xx、目录列表标题、未探测主机…），
+> 级别只有 `info` / `notice` / `attention` 三档，且每次都带免责说明。
+> **请勿把这一节展示给第三方时省略那段说明** —— 「没有提示」不等于目标没有问题。
+
 ## 使用约定
 
 - 默认只跑 `mode=mock`，或对 `127.0.0.1` fixture server 做验证；

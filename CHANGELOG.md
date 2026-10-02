@@ -77,7 +77,8 @@
   `cancel` / `retry` / `recover_stale_jobs()`。
 - `jobs/executor.py`：与进程无关的执行逻辑（可直接单测调用）。
 - `jobs/worker.py`：独立 worker 进程 `python -m jobs.worker`，心跳文件 `results/worker_heartbeat`。
-- `api/jobs.py`：`/api/jobs*` 共 7 个接口。
+- `api/jobs.py`：`/api/jobs*` 共 7 个接口（M3 当时的数量；后续里程碑陆续增加，
+  现为 **10 个** —— 见「下一阶段体验优化 Phase 4」与 `docs/API.md` §6.4）。
 
 变更：
 
@@ -805,6 +806,9 @@ python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 
   唯一没被走到的是 `GET /api/tool/<tool_name>/results`（读旧库，本机该库 20 张表全为 0 行，
   测试从设计上不碰它）；另记一条「命中但不是声明路由」的
   `GET /api/export/exp_x/../../etc/download`，那是穿越防护用例**故意打的 404**。
+  > 后来随各里程碑新增路由，口径已是 **50 条绑定 / 49 条命中**（Phase 4 重跑），
+  > 但「唯一没被走到的是那一条」这个结论一直没变 —— 见
+  > [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md) §8.2。
 - **91 个业务 `.py` 里 10 个测试源码从未提及**，全部在 `agent/`
   （`providers/*`、`system_prompt`、`strategy_templates`、`target_ranker`、`plan_state`、
   `model_result`、`skills/osint_recon`）。根源是既知事实：Agent 路径不调大模型，
@@ -946,7 +950,7 @@ python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 
 Agent、`pyproject.toml`。**未引入**任何新依赖、React、Redis。
 **未对任何真实外部目标发起扫描** —— 本轮全部实机验收都打 `127.0.0.1` 与保留域 `example.test`。
 
-### 下一阶段体验优化（本轮，方案 Phase 1～3）
+### 下一阶段体验优化（本轮，方案 Phase 1～4）
 
 依据：《GetEverything_下一阶段体验优化与公网扫描能力演进方案》（本机过程材料，不入库）。
 产品原则一句话：**保留安全边界，但降低用户操作复杂度** —— 该方案第 8 节写着
@@ -1020,12 +1024,73 @@ Scan Profile **不能只等于「换个工具组合」** —— 同一组工具�
 **未对任何真实外部目标发起扫描** —— 本轮 `real` 模式用例全部把
 `modules.registry.build_runner` 换成假 runner，目标是 RFC 6761 保留域 `example.test`。
 
+#### Phase 4 — 结果体验：从 Job 导向结果（本轮）
+
+方案第 6 节把 Phase 4 写成一句话：「结果体验：**从 Job 导向结果**；展示：发现资产；
+服务；技术栈；风险信息。」本阶段要解决的正是这句话：**做完一次任务之后，用户看不出
+到底看到了什么** —— 详情页只有「步骤 × 工具 × 结果数」，而成果（资产 / 观测）散落在
+另一页，且没有任何一处会把它们整理成人能读的形状。
+
+- 新增 `api/jobs.py:GET /api/jobs/<job_id>/results`（**本轮唯一新增路由**）。
+  一次请求给出四段：`assets` / `services` / `technologies` / `risk_hints`，
+  外加 `counts`（五类**截断前**真实数量）与 `notes`（必须原样展示的说明句）。
+  四段形状统一为 `{total, items, truncated}`，`assets` 额外带 `by_type` 与
+  `type_labels` —— 形状统一是刻意的：前端只写一份渲染函数，测试也只锁一种结构。
+- 新增 `core/findings.py`（纯函数）：把 `assets` + `observations` 派生成四段。
+  不碰 sqlite、不碰 Flask、不读配置、不发网络请求；别名表**复用**
+  `core/assets.py:ATTRIBUTE_ALIASES`（不维护第二份），并在出参里下发
+  `type_label` / `kind_label` / `level_label` —— 中文文案只有服务端一份，
+  前端不写死（同 Phase 3 对节奏说明的处理）。
+- **`core/assets.py:list_job_assets()`**：`assets` 表**没有** `job_id` 列
+  （同一台主机被十次任务看到也只有一行），所以从 `observations` 反查。
+  口径与 `/diff` 同源：**只看本次任务自己的观测**，不看该资产历史上被谁见过 ——
+  否则「这次扫到了什么」会被历史观测污染，而那正是本阶段要消灭的歧义。
+  于是**零 schema 变更**：`jobs` / `assets` / `observations` 三张表一字未改。
+
+**关于「风险信息」的口径（本阶段最重要的一个决定）**
+
+方案第 5 节提到 `nuclei`，但本项目的 `nuclei` 在
+`core/tool_registry.py:KNOWN_UNAVAILABLE_TOOLS` 里、`internet_allowed=False`、
+不在 `RUNNER_REGISTRY`，全仓也没有任何 CVE / CVSS / severity 数据。
+**因此本阶段不假装有漏洞扫描**，而是把「风险信息」如实降级为
+「**从已有观测里读出来的、值得人工看一眼的事实**」：
+
+- `level` 只有 `info` / `notice` / `attention`，语义是「值不值得人工看一眼」，
+  **不是**危险度（刻意不用 low / medium / high —— 用了就等于暗示「我们评估过危险程度」）；
+- 九类提示全部是**可观察事实**：明文 HTTP、目标自身返回 5xx、401/403（存在访问控制）、
+  未跟随的跳转、`Index of /` 标题、中间件默认欢迎页标题、版本号横幅、
+  **未做 HTTP 探测的主机**、**终态失败的步骤**。后两类是「覆盖缺口」——
+  它们把「没看」与「没问题」分开，这正是最容易骗到人的地方；
+- `notes` 里**恒有**一句免责说明：「没有提示」不等于目标没有问题，
+  「有提示」也不等于发现了漏洞。前端必须显示它。
+  这条**不是「零提示时才补一句」**：真实链路里零提示几乎从不出现
+  （只跑 subfinder 时「有子域没做 HTTP 探测」就会产生一条），
+  若只在零提示时才算，反而最需要说明的那次拿不到它。
+- mock 模式单独一句说明：mock **不产生观测**，所以「服务 / 技术栈 / 风险提示」
+  三段为空是预期行为，不是采集失败。
+
+**前端**：`web/static/app.js` 的任务详情面板新增「结果」区，四段各自成节。
+容器**同步插入、内容异步填充** —— `renderDetail` 后面紧跟的 `loadArtifacts` 也是异步的，
+若两者都往 `body` 上 append，谁先回来谁排前面，页面顺序会随机跳动。
+风险级别徽标复用既有 `.risk` 系列配色，但**标签文案来自服务端 `level_label`**，
+并有源码守卫禁止前端写死中文（`test_app_js_does_not_hardcode_risk_level_wording`）。
+
+**未动**：`jobs` / `assets` / `observations` 表结构（**零 schema 变更**）、既有 9 条
+`/api/jobs*` 接口的语义、Scope / Policy 判定逻辑、公网工具白名单
+（**仍是 `subfinder` + `httpx`**，未因本阶段放开任何一条）、同步 Runner 链路、Agent。
+**未引入**任何新依赖、React、Redis。**未对任何真实外部目标发起扫描** ——
+本阶段用例全部走 mock，或把 `build_runner` 换成假 runner，目标是保留域 `example.test`。
+
+**一处刻意不做的**：没有把四段结果做成「漏洞报告」。做不出来的东西不渲染 ——
+页面上没有任何「严重程度」「CVE」「修复建议」字段，且有用例断言这些字段不出现在出参里
+（`test_summarize_never_emits_a_severity_or_cve_field`）。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1091 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 70 source files
+$ python -m pytest           # 1149 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 71 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
 ```
@@ -1033,11 +1098,18 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 > 探针的凭据与地址**都从环境变量读**（`LOCAL_ADMIN_TOKEN` / `GEF_VERIFY_BASE`），
 > 脚本里不写死任何值；缺失时以退出码 2 退出并打印设置方法。
 
-基线演进：公网体验版 `1004` → Phase 1 UI 清理 `1009` → Phase 2 `1036` → **本轮 `1091`**。
-三个数字都用 `git worktree` 逐提交实测（`python -m pytest --collect-only -q` 的逐文件汇总，
-不是推算）。本轮 +55 的构成：`tests/unit/test_pace.py`（新）37 +
-`tests/integration/test_public_scan_mode.py` 58 → 76。校验 `1091 − 37 − 18 = 1036`，
-与 Phase 2 的实测基线**逐条相等** —— 即本轮没有任何既有用例被删改。
+基线演进：公网体验版 `1004` → Phase 1 UI 清理 `1009` → Phase 2 `1036` → Phase 3 `1091`
+→ **本轮（Phase 4）`1149`**。
+数字用逐文件 `--collect-only -q` 汇总 + 本轮全量 `--junitxml` 解析复核（两者一致；
+junit `tests="1149"`，其中 **1147 passed / 2 skipped**）。
+本轮 +58 的构成：`tests/unit/test_findings.py`（新）35 +
+`tests/integration/test_job_results_api.py`（新）20 +
+两份既有鉴权清单各补参数（`test_api_auth_contract.py` 24 → 26、
+`test_m3_jobs_api.py` 45 → 46）。
+校验 `1091 + 35 + 20 + 2 + 1 = 1149`。逐文件差额是用
+`git worktree add --detach <tmp> 5960bc0` 把 Phase 3 单独检出后**两个工作树各跑一遍
+`--collect-only -q` 求差**得到的，差额恰好只有这四行 ——
+不是推算，也没有任何既有用例被删改。
 
 测试报告的完整版见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（测了什么 / 没测什么 / 为什么没测）。
 

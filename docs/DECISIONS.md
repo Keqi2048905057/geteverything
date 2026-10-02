@@ -180,22 +180,23 @@ git grep -n -I "<本轮 Token>" $(git rev-list --all)
 > 本 Agent 未执行删除标签（属「删除历史备份」范畴，按第 4 节需你确认），
 > 也未轮换 Token（改了会让本机 `.env` 与既有会话失配，属于动你的环境）。
 
-### 3.5 下一阶段体验优化 Phase 1～3（2026-10-02，用户直接指派）
+### 3.5 下一阶段体验优化 Phase 1～4（2026-10-02，用户直接指派）
 
 > 依据：用户直接给出的《GetEverything_下一阶段体验优化与公网扫描能力演进方案》。
 > 该文件属本机过程材料（受 `.gitignore` 忽略，不入库），因此**任务来源本身即为用户授权**。
-> 三个阶段各自独立提交（Phase 1 `e94b180` / Phase 2 `510fa41` / Phase 3 本轮），可独立回滚。
+> 四个阶段各自独立提交（Phase 1 `e94b180` / Phase 2 `510fa41` / Phase 3 `59047ee` + `5960bc0` /
+> Phase 4 本轮），可独立回滚。
 
 | 检查项（方案第 8、10 节的硬约束） | 结论 |
 |---|---|
-| 每个阶段独立提交 | ✅ 三段各自一个提交，每段提交前跑过相关测试，最后跑全量 |
-| 不绕过 Policy | ✅ 未新增任何 Policy 判定；Phase 2 的只读试算**复用** `Scope.match_target`（与 Policy 同源），且**不写库、不写审计、不发网络**；三条源码守卫用例仍全部有效 |
+| 每个阶段独立提交 | ✅ 四段各自独立提交，每段提交前跑过相关测试，最后跑全量 |
+| 不绕过 Policy | ✅ 未新增任何 Policy 判定；Phase 2 的只读试算**复用** `Scope.match_target`（与 Policy 同源），且**不写库、不写审计、不发网络**；Phase 4 的结果接口只读既有行，不触发任何扫描；三条源码守卫用例仍全部有效 |
 | 不绕过 Scope | ✅ 公网入口仍转交 `core/application.create_scan_job`；`create_authorized_public_job` 内不得出现 `validate_job_targets` / `create_job_with_status` 的守卫未动 |
-| 不删除审计 | ✅ 未删任何事件类型；反而把 `pace` **新增**进 `job.created` detail 与审计 detail，让「这次任务按什么节奏跑」变成可查事实 |
-| 不改数据库核心结构 | ✅ **零 DDL**：`core/pace.py` 不建表、不加列。`pace` 走 `job_events.detail_json`（既有列），刻意**不**给 `jobs` 表加 `pace` 列 —— 与第 65 行「`jobs.project_id` 刻意没加」同一口径 |
-| 不放宽第一节公网白名单 | ✅ 白名单仍是 `{httpx, subfinder}`；`nuclei` 仍 `internet_allowed=False`、仍在 `KNOWN_UNAVAILABLE_TOOLS`，只作「受限未开放」展示。方案第 5 节提到 `nuclei`，但**未据此开放它** |
+| 不删除审计 | ✅ 未删任何事件类型；Phase 3 把 `pace` **新增**进 `job.created` detail 与审计 detail；Phase 4 的新接口**零写路径**（有用例断言连调两次后资产/观测/审计/事件四类行数全部不变） |
+| 不改数据库核心结构 | ✅ **四阶段累计零 DDL**：Phase 3 的 `pace` 走 `job_events.detail_json`（既有列），刻意**不**给 `jobs` 表加 `pace` 列；Phase 4 的四段结果全部由既有 `assets` / `observations` / `job_steps` 行**派生**，未加列、未建表 —— 与第 65 行「`jobs.project_id` 刻意没加」同一口径 |
+| 不放宽第一节公网白名单 | ✅ 白名单仍是 `{httpx, subfinder}`；`nuclei` 仍 `internet_allowed=False`、仍在 `KNOWN_UNAVAILABLE_TOOLS`，只作「受限未开放」展示。方案第 5 节提到 `nuclei`，但**未据此开放它** —— Phase 4 的「风险信息」也因此如实降级为「可观察事实 + 免责说明」，不假装有漏洞扫描 |
 | 不引入 React / Redis / PostgreSQL | ✅ 前端仍是原生 JS（`node --check` 通过）；未新增任何依赖 |
-| 不删旧 API、不重构 Agent | ✅ 路由数 47 / 绑定 49 **与 Phase 2 完全一致**（本轮零新增路由）；`POST /api/jobs` 等历史入口语义不变（缺省 `pace=normal`） |
+| 不删旧 API、不重构 Agent | ✅ 既有 9 条 `/api/jobs*` 接口语义不变；Phase 4 只**新增** 1 条 `GET /api/jobs/<job_id>/results`（路由数 47/49 → **48/50**），未删未改任何既有路由；`POST /api/jobs` 等历史入口缺省仍是 `pace=normal` |
 
 **唯一需要你知情的取舍（不是新增权限，而是行为默认值）**：三个策略模板的缺省节奏
 **一律设为 `light`（低频）**，而请求体**只能收紧、不能放松**。也就是说，从本轮起，
@@ -217,6 +218,24 @@ git grep -n -I "<本轮 Token>" $(git rev-list --all)
 构造路径），**已移除**并改为「构造归 `build_runner`、降速归 `core.pace.apply_to_runner`」。
 理由见 `docs/CODEBASE_MAP.md` §9.23.5 —— 多一条构造入口就多一个「假 Runner 没被替换、
 真去执行外部命令」的机会，那正是本项目硬约束最不该留缝的地方。
+
+**Phase 4 的一处**判断需你知情（不是新增权限，而是「不做什么」）****：
+方案第 6 节把结果体验的第四段写成「风险信息」，但本项目**没有**漏洞扫描能力
+（`nuclei` 不在 `RUNNER_REGISTRY`，全仓无 CVE / CVSS / severity 数据）。
+本 Agent 的判断是**如实降级、不假装**：第四段改为「从已有观测里读出来的、
+值得人工看一眼的事实」，级别只有 `info` / `notice` / `attention` 三档
+（刻意不用 low/medium/high，避免暗示「已评估危险程度」），并在每次响应里
+**恒带**一句免责说明（「没有提示 ≠ 没有漏洞」）。
+出参里不存在 `severity` / `cve` 字段，且有用例禁止它们出现
+（`tests/unit/test_findings.py`）。
+**若你希望第四段是真正的漏洞结论，那需要先接入扫描器并单独授权** ——
+本轮**没有**、也不会在未授权的情况下开放 `nuclei`。
+
+**Phase 4 未动**：`jobs` / `assets` / `observations` 表结构（**零 DDL**）、
+既有 9 条 `/api/jobs*` 接口语义、Scope / Policy 判定、认证授权、审计机制、
+公网工具白名单（仍是 `subfinder` + `httpx`）、同步 Runner 链路、Agent、`pyproject.toml`、`.env`。
+**未对任何真实外部目标发起扫描** —— 本轮用例全部走 mock，
+或把 `modules.registry.build_runner` 换成假 runner，目标是 RFC 6761 保留域 `example.test`。
 
 ### 3.1 用户本轮（2026-10-02，弹窗确认）已授权的项
 

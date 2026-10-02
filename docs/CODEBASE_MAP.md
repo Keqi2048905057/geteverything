@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ **下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）**（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ **Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）**（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -559,7 +559,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 31. **敏感产物已进 Git**（`git ls-files` 实测 83 个跟踪文件中包含）：`results/scan_results.db`、`results/*.txt`、`results/outs/*.json`（真实企业名与域名）、`uploads/*.txt`（真实目标清单）、`scripts/dirsearch.exe`、`scripts/OneForAll.exe`、`scripts/oneforall.exe`、`SecLists/raft-small-directories.txt`。仓库根的 `.gitignore` 虽有 `**/results/`、`**/uploads/`、`*.db`，但对**已跟踪文件无效**。
 32. **首页无模板**：`app.py:160` 渲染 `index.html`，仓库无 `web/` 目录（当时的实施方案也把它列为 P0）。▶ **M1 已解决**：`web/templates/` 与 `web/static/` 已补齐。
 33. **测试覆盖极薄**：`tests/` 下只有 2 个单元测试文件（导入、布局、常量），`tests/integration/` 与 `tests/fixtures/` 均为占位 `__init__.py`；**没有任何针对 Runner、storage、intent/planner 的测试**，也没有 mock runner。
-   ▶ **早已解决**：现在 `tests/unit/` + `tests/integration/` 共 **1004 项通过 / 2 skipped**（含公网体验版新增 105 项），`tests/fixtures/` 有了真实 fixture（`local_http_server.py`，见 §9.17）。
+   ▶ **早已解决**：现在 `tests/unit/` + `tests/integration/` 共 **1149 项通过 / 2 skipped**（Phase 4 时点；含公网体验版新增 105 项与后续各轮增量），`tests/fixtures/` 有了真实 fixture（`local_http_server.py`，见 §9.17）。
 34. **`app.py` 只有单个应用实例**（模块级 `app = Flask(...)`），没有 `create_app()` 工厂；`tests/unit/test_smoke.py:21` 直接 `import app` 并检查 `app.app.url_map`。
 35. **`_is_storage_question` 关键词过宽**：`agent/action.py:25-38` 的 `DATABASE_QUERY_KEYWORDS` 含 `"数据库"`、`"保存位置"`、`"db"` 等；`:138` 的条件只在"非 analyze 意图且无扫描词"时短路，边界用例（如"把结果保存位置告诉我然后扫一下"）容易被误判成纯问答而**静默不执行扫描**。
 36. **`modules/registry.py` 的 import 期全量加载**：任何单个 adapter 的语法/依赖错误都会让 `import modules` 失败，进而 `/api/tools`、`/api/run`、`/api/tools` 全部 500（例如 `modules/enscan.py` 若缺依赖）。没有按需加载或容错注册。
@@ -641,6 +641,7 @@ get_everything_framework/
 │   ├── artifacts.py          M4：原始证据落盘（stdout/stderr/output）+ 登记 + 截断脱敏读取（**脱敏用 scrub_text，不再被 300 字符预览规则截断**）
 │   ├── observability.py      P1 §19：**唯一日志出口**——一行一个 JSON 事件 + 四个关联 ID（request_id/job_id/step_id/worker_id，contextvars 绑定）+ 脱敏与容器上限
 │   ├── application.py        P0-6 阶段一：**Application Service 层**——create_scan_job() 是创建扫描任务的唯一编排入口（解析目标 → 查重 → 限流 → Policy → 模式 → 落库 → 审计 → 结构化日志），HTTP 视图 / 首页表单 / 以后的 Agent 共用
+│   ├── findings.py           Phase 4：任务结果**派生层**（纯函数）——把 assets + observations 整理成「发现资产 / 服务 / 技术栈 / 风险提示」四段；不碰 sqlite / Flask / 网络（见 §9.24）
 │   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复
 ├── scripts/                  ← 运维脚本（不在包里，靠 sys.path 前插项目根自举）
 │   ├── run_local.ps1         一键拉起 Web + worker（退出时收尾）
@@ -651,7 +652,7 @@ get_everything_framework/
 │   ├── executor.py           执行逻辑（与进程无关，可直接单测调用）
 │   └── worker.py             独立 worker 进程：python -m jobs.worker
 ├── api/
-│   ├── jobs.py               /api/jobs*（7 个接口）+ /api/jobs/<id>/artifacts + /api/artifacts/<id> + /api/jobs/<a>/diff/<b>
+│   ├── jobs.py               /api/jobs*（10 个接口，含 Phase 4 的 /results）+ /api/jobs/<id>/artifacts + /api/artifacts/<id> + /api/jobs/<a>/diff/<b>
 │   └── assets.py             P1：/api/assets*（列表/统计/详情）+ /api/observations（全部需管理员）
 └── web/
     ├── templates/index.html  首页（Scope 下拉 + 创建任务 + 任务表）
@@ -682,6 +683,7 @@ get_everything_framework/
 | POST | `/api/jobs/{id}/retry` | `api/jobs.py` | **需管理员** | M3 新增 |
 | GET | `/api/jobs/{id}/steps` | `api/jobs.py` | **需管理员** | M3 新增（页面轮询用） |
 | GET | `/api/jobs/{id}/events` | `api/jobs.py` | **需管理员** | M3 新增 |
+| GET | `/api/jobs/{id}/results` | `api/jobs.py` | **需管理员** | **Phase 4 新增**；一次给出四段结果：`assets` / `services` / `technologies` / `risk_hints` + `counts` + `notes`。派生层是纯函数 `core/findings.py`，**不是**漏洞扫描（见 §9.23.8） |
 | GET | `/api/jobs/{id}/artifacts` | `api/jobs.py` | **需管理员** | M4 新增；只给元数据（id/kind/size/sha256），**不下发路径** |
 | GET | `/api/artifacts/{id}` | `api/jobs.py` | **需管理员** | M4 新增；返回内容（默认 ≤64 KB，截断+脱敏，无 `path`） |
 | POST | `/api/run` | `api/scan.py` | **需管理员** | M2 起：必填 `scope_id`，拒绝 `file_path`，收 `upload_id`；`mode=mock`（默认）/`real` |
@@ -816,14 +818,17 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1004 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 68 source files
+$ python -m pytest           # 1149 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 71 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 $ python scripts/check_env.py      # 退出码 0/1/2；只读，不建库、不执行任何扫描（见 §9.20）
 $ node --check web/static/{app.js,assets.js,scan_center.js}   # 前端无构建链，只做语法检查
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检脚本 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → **公网授权测试模式体验版 `1004`**（见 §9.22）。
+> 这几个数字会随每轮推进变化，**以 `PROJECT_STATE.md` 的「最近一次验证」为准**
+> （本节是 Phase 4 时的快照）。
+>
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检脚本 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004`（见 §9.22）→ 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091`（见 §9.23）→ **Phase 4 结果体验 `1149`（见 §9.24）**。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -2062,6 +2067,10 @@ CI runner 上本来就没有 `.env`、也没有那 17 个 Go 工具，warn（退
 
 #### 9.21.1 路由覆盖：41 条方法绑定，40 条被真实走到
 
+> **口径快照说明**：本节是 M7 当时的实测（绑定 41）。后续里程碑新增了路由，
+> 最新的覆盖口径见 §9.23.8 与 `docs/TEST_REPORT.md` §8 ——
+> 结论（**只有 `GET /api/tool/<tool_name>/results` 一条从未被走到**）在各轮中一直成立。
+
 做法：包装 `flask.Flask.full_dispatch_request` 跑一遍全量测试，收集实际命中的
 `method + rule`，再与 `app.url_map` 求差。
 
@@ -2284,6 +2293,8 @@ agent/target_ranker.py
 
 ### 9.23 下一阶段体验优化：UI 清理 / 公网授权入口 / Scan Profile（方案 Phase 1～3）
 
+> Phase 4（结果体验）见 §9.24。
+
 > 依据：《GetEverything_下一阶段体验优化与公网扫描能力演进方案》（本机过程材料，不入库）。
 > 产品原则：**保留安全边界，但降低用户操作复杂度**。方案第 8 节写死
 > 「不绕过 Policy / 不绕过 Scope / 不删除审计」——本节所有改动都在这条线上，
@@ -2388,6 +2399,98 @@ normal 常规 —— 完全沿用工具自身配置，不额外等待（= 引入
   真实工具对小并发 / 限速参数的解释由工具自身负责。
 - `GEF_PACE_LIGHT_STEP_DELAY_SEC` 是**运维级**旋钮，不是策略模板的一部分：
   它允许把间隔调大，但**调不小**（`light` 恒 ≥ 0，`normal` 恒 = 0）。
-- Phase 4（结果体验）尚未开工：`job_events` 仍未在 `app.js` 里渲染，
-  风险 / 漏洞信息在数据模型里**完全不存在**（`nuclei` 仍是 `KNOWN_UNAVAILABLE_TOOLS`）。
+- 本文件里凡写死「47 / 49」这类路由计数的段落，**都是当时的口径快照**；
+  最新的实测值见 §9.23.8。
+
+### 9.24 Phase 4：结果体验 —— 从 Job 导向结果
+
+#### 9.24.1 一句话：这一节新增的是「结果怎么被读」，不是新的扫描能力
+
+方案第 6 节把 Phase 4 写成：「结果体验：从 Job 导向结果；展示：发现资产；服务；
+技术栈；风险信息。」它要解决的是**做完一次任务之后看不出到底看到了什么** ——
+详情页只有「步骤 × 工具 × 结果数」，成果散落在另一页，没有任何一处把它们整理成人能读的形状。
+
+**本轮新增的能力只有「读」**：一条新路由、一个纯函数派生层、一段前端渲染。
+没有新增工具、没有放宽任何闸门、没有改表结构。
+
+#### 9.24.2 `core/findings.py` 为什么是纯函数
+
+它只 import `core.assets.ATTRIBUTE_ALIASES` 与 `urllib.parse`，不碰 sqlite / Flask / 配置 / 网络。
+三条理由，都与前几节同源：
+
+1. **可单测**：`tests/unit/test_findings.py` 不需要任何夹具，喂 dict 断言四段（35 条用例）；
+2. **不引入写路径**：结果页是只读的，派生层一旦能写库，「看一眼」就变成了副作用；
+3. **别名表只有一份**：`server` / `web_server` 归一、`tech` / `technology` 归一，
+   与 `/diff` 用**同一张表**。`core/assets.py` 的注释记过一次同样的 bug ——
+   两张表一旦漂移，「同一个 nginx 在 diff 里叫 webserver、在结果页不显示」就会复活。
+
+#### 9.24.3 「风险信息」为什么不能做成漏洞报告（本节最该记住的一条）
+
+方案第 5 节提到 `nuclei`，但本项目的事实是：`nuclei` 在
+`core/tool_registry.py:KNOWN_UNAVAILABLE_TOOLS` 里、`internet_allowed=False`、
+不在 `RUNNER_REGISTRY`，**全仓没有任何 CVE / CVSS / severity 数据**。
+
+于是本阶段做了一个明确的选择：**不假装有漏洞扫描**，把「风险信息」如实降级为
+「从已有观测里读出来的、值得人工看一眼的事实」。
+
+| 设计选择 | 为什么 | 反例（如果按另一种做法） |
+|---|---|---|
+| `level` 只有 `info` / `notice` / `attention` | 语义是「值不值得人工看一眼」 | 用 `low/medium/high` 就等于声称「我们评估过危险程度」 |
+| 九类提示全部是**可观察事实** | 每条都能在观测里指出来源 | 「存在 SQL 注入风险」这类结论本项目根本得不出 |
+| `notes` 里**恒有**免责句 | 「没有提示 ≠ 没有漏洞」必须被说出来 | 只在零提示时补一句 → 有提示的那次反而看不到说明 |
+| 两类**覆盖缺口**提示（未探测主机 / 失败步骤） | 把「没看」与「没问题」分开 | 一份干净的子域列表会被读成「这些主机已经查过了」 |
+| 出参里没有 `severity` / `cve` 字段 | 前端才不会再造一个漏洞分级 | 有字段就会有人去填 |
+
+对应用例：`test_findings.py::test_no_vulnerability_severity_concept_exists`、
+`...test_summarize_never_emits_a_severity_or_cve_field`、
+`...test_no_hints_is_not_a_clean_bill_of_health`、`...test_disclaimer_is_present_even_when_there_are_hints`。
+
+#### 9.24.4 「只看本次任务」的口径与 `list_job_assets()`
+
+`assets` 表**没有 `job_id` 列**（同一台主机被十次任务看到也只有一行），
+所以 `core/assets.py:list_job_assets()` 从 `observations` 反查：
+
+```sql
+SELECT DISTINCT a.* FROM assets a
+JOIN observations o ON o.asset_id = a.id
+WHERE o.job_id = ?
+```
+
+这与 `/diff` 的口径**完全同源**（`_latest_data_by_asset(job_id)` 也是先按 `job_id` 过滤）。
+若改成「该资产历史上被谁见过」，结果页会把**历史观测**混进「这次扫到了什么」，
+而那正是 Phase 4 要消灭的歧义（用例：`test_results_only_include_this_jobs_observations`）。
+
+**零 schema 变更**：`jobs` / `assets` / `observations` 三张表一字未改。
+这与 Phase 3 的节奏持久化是同一条思路 —— 能从既有行派生，就不要加列
+（`docs/DECISIONS.md` §1 E 限纯增量）。
+
+#### 9.24.5 前端：容器同步插入、内容异步填充
+
+`web/static/app.js:renderDetail()` 末尾插入一个**空** `.job-results` 容器，
+再异步 `loadResults()` 填充。
+
+为什么不是「取到数据后再 append」：紧跟其后的 `loadArtifacts()` 也是异步的，
+两个请求谁先回来谁排前面 —— 页面顺序会随机跳动。先插空容器就把顺序钉死了。
+
+同一处的两个约束：
+
+- 渲染一律走 `textContent`（不拼 innerHTML，不引入 XSS 面）。**代价**是运行时文案里
+  不得出现 Markdown 的 `**`，否则页面上会原样显示星号 —— 有源码级断言钉住
+  （`test_runtime_copy_contains_no_markdown_markers`）；
+- 风险级别的**中文文案**来自服务端 `level_label`，前端不写死
+  （`test_app_js_does_not_hardcode_risk_level_wording`）—— 与 Phase 3 对节奏说明的处理同源。
+
+`app.js` 由 `index.html` 与 `scan_center.html` **共用**，所以结果区在两个页面都会出现。
+
+#### 9.24.6 本节的已知边界
+
+- **`job_events` 仍未在 `app.js` 里渲染**：结果区展示的是资产 / 观测派生物，
+  事件流仍只能通过 `GET /api/jobs/{id}/events` 看。这是刻意留的（事件是排查用的，
+  不是给人读的结论），但确实还没做。
+- **`mock` 模式的四段大多是空的**：mock 结果行会经兜底类型落成 `subdomain` 资产，
+  但没有结构化观测属性，因此「服务 / 技术栈 / 风险提示」三段为空。
+  返回里带 `MOCK_NOTICE` 明说这是预期行为，不是采集失败。
+- **观测的 `data_json` 仍按字段拆开渲染**：这里只把 `status_code / title / webserver /
+  tech / cdn` 这几项提出来（它们是有语义的），其余原样留在观测时间线里。
+- **`GET /api/tool/<tool_name>/results` 依旧没有任何用例走到**（§9.21.1 的结论不变）。
 

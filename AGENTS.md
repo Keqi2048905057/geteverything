@@ -20,7 +20,7 @@
 - 测试：在项目根执行 `python -m pytest -q`（`pyproject.toml` 已配 `pythonpath = ["."]`，测试内可直接 `import storage`）
 - 静态检查：`ruff check .`；类型检查：`mypy app.py core api jobs storage.py modules scripts`
 - 环境自检：`python scripts/check_env.py`（**只读**，不建库、不执行任何扫描；退出码 0/1/2）
-- 基线：pytest **1004 项通过 / 2 skipped**，ruff 全过，mypy 0 error（68 source files）。
+- 基线：pytest **1149 项通过 / 2 skipped**，ruff 全过，mypy 0 error（71 source files）。
   基线会随每轮推进变化，**以 `PROJECT_STATE.md` 的「最近一次验证」为准**（本行容易过期）。
 
 ## 硬约束

@@ -329,10 +329,13 @@ curl -H "X-Local-Token: <Token>" http://127.0.0.1:5000/api/assets
 ```powershell
 cd <仓库根>\get_everything_framework
 python -m ruff check .                                          # 期望：All checks passed!
-python -m pytest                                                # 期望：1004 passed, 2 skipped
-python -m mypy app.py core api jobs storage.py modules scripts   # 期望：Success: no issues found in 68 source files
+python -m pytest                                                # 期望：1149 passed, 2 skipped
+python -m mypy app.py core api jobs storage.py modules scripts   # 期望：Success: no issues found in 71 source files
 python scripts/check_env.py                                     # 环境自检（只读），退出码 0/1/2
 ```
+
+> 这两个数字会随每轮推进变化，**以 `PROJECT_STATE.md` 的「最近一次验证」为准**
+> （本节是 Phase 4 时的快照）。
 
 * 2 个 skip 都在 `tests/unit/test_runner_interface.py`：
   `test_run_subprocess_detaches_child_process_group` 与

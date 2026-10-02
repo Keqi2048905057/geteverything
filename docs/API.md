@@ -12,13 +12,13 @@
 
 | 计数项 | 数值 |
 |---|---|
-| `app.url_map` 规则总数 | **39** |
-| 含方法展开的路由绑定 | 41（`/` 与 `/login` 各支持 GET + POST） |
-| `/api/*` 接口 | **34** |
-| 其中**需要本地管理员认证** | **24** |
+| `app.url_map` 规则总数 | **48** |
+| 含方法展开的路由绑定 | 50（`/` 与 `/login` 各支持 GET + POST） |
+| `/api/*` 接口 | **42** |
+| 其中**需要本地管理员认证** | **32** |
 | 其中**匿名可读**（有意保持，契约测试锁定） | 7 |
 | 其中**登录相关**（公开） | 3 |
-| 非 `/api` 路由 | 5（`GET /health` + 4 条页面/静态） |
+| 非 `/api` 路由 | 6（`GET /health` + 5 条页面/静态） |
 
 统一约定：
 
@@ -49,14 +49,17 @@
 * 比对用 `hmac.compare_digest`（定长比较，避免时序侧信道）。
 * 未认证的统一返回 **401** + `error_code=unauthenticated`；**不回显 Token 值**。
 
-**需要认证的 30 条**：`/api/settings*`（4）、`/api/scopes*`（3）、`/api/jobs*`（9）、
-`/api/artifacts/<id>`（1）、`/api/assets*` 与 `/api/observations`（4）、`/api/run` 与
-`/api/tool/<n>/run`（2）、`/api/upload`（1）、**`/api/projects*`（4）与 `/api/public-jobs`、
-`/api/scan-center`（2）**。
+**需要认证的 32 条**：`/api/settings*`（4）、`/api/scopes*`（3）、`/api/jobs*`（10，
+含 Phase 4 新增的 `GET /api/jobs/<job_id>/results`）、`/api/artifacts/<id>`（1）、
+`/api/assets*` 与 `/api/observations`（4）、`/api/run` 与 `/api/tool/<n>/run`（2）、
+`/api/upload`（1）、**`/api/projects*`（4）与 `/api/public-jobs`、`/api/scan-center`（2）**。
 
 **匿名可读的 7 条**（有意保持的现状，由 `tests/integration/test_api_auth_contract.py` 与
 `tests/integration/test_export_contract.py` 锁定）：`/api/tools`、`/api/databases`、`/api/results`、
 `/api/tool/<n>/results`、`/api/export`、`/api/export/<id>/download`、`/api/exports`。
+
+另有 3 条**登录相关**的公开接口（不属于上面两类）：`POST /api/auth/login`、
+`POST /api/auth/logout`、`GET /api/auth/session`。
 
 > ⚠️ README 只列了其中 **3** 条。若要给这 7 条收口鉴权，必须先改上面两个测试并同步
 > `SECURITY.md`，否则 CI 会红——这是刻意的「改契约要有人知道」。
@@ -188,13 +191,14 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > ⚠️ 这两条是**历史同步入口**：真实扫描期间请求线程会被占住（进程超时默认 120 秒，
 > `GEF_PROCESS_TIMEOUT` 可调）。新代码请用 `POST /api/jobs`。
 
-### 6.4 任务 Job（9 条，需认证）
+### 6.4 任务 Job（10 条，需认证）
 
 | 方法 | 路径 | 请求 | 成功响应 | 主要错误 |
 |---|---|---|---|---|
-| POST | `/api/jobs` | JSON 见下 | **202** `{"ok":true,"job_id","status":"queued","mode","total_steps","scope_id","reused"}` | 400 参/工具/目标数；403 Scope 或真实扫描开关 |
+| POST | `/api/jobs` | JSON 见下 | **202** `{"ok":true,"job_id","status":"queued","mode","total_steps","scope_id","pace","pace_label","reused"}` | 400 参/工具/目标数/pace；403 Scope 或真实扫描开关 |
 | GET | `/api/jobs` | `?limit`（默认 50）、`?status` | `{"ok":true,"jobs":[...],"counts":{...}}` | 400 未知状态 |
-| GET | `/api/jobs/<job_id>` | — | `{"ok":true,"job":{...,"steps":[],"events":[]}}` | 404 `not_found` |
+| GET | `/api/jobs/<job_id>` | — | `{"ok":true,"job":{...,"pace","steps":[],"events":[]}}` | 404 `not_found` |
+| GET | `/api/jobs/<job_id>/results` | `?scope_id`、`?observations_limit`（默认 500，上限 2000） | `{"ok":true,"job_id","mode","scope_id","counts","assets","services","technologies","risk_hints","notes"}` | 404 |
 | GET | `/api/jobs/<job_id>/steps` | — | `{"ok":true,"job_id","steps":[...]}` | 404 |
 | GET | `/api/jobs/<job_id>/events` | `?limit`（默认 200） | `{"ok":true,"job_id","events":[...]}` | 404 |
 | GET | `/api/jobs/<job_id>/artifacts` | `?limit`（默认 100） | `{"ok":true,"job_id","artifacts":[{id,kind,size,sha256,...}]}`（**无 path**） | 404 |
@@ -239,6 +243,37 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 （`core/assets.py:ATTRIBUTE_ALIASES` 会把 `server` / `web_server` 归一到 `webserver`，
 把 `technology` / `tech` 归一到 `technologies` —— 因为 `modules/httpx.py` 实际产出的就是
 后者），时间戳这类易变字段被刻意排除。
+
+`GET /api/jobs/<job_id>/results`（Phase 4「结果体验」新增）把一次任务的
+`assets` + `observations` 整理成四段可直接展示的内容：
+
+| 字段 | 内容 | 形状 |
+|---|---|---|
+| `assets` | 发现资产（按类型分组，带「谁发现的」） | `{total, by_type, type_labels, items, truncated}` |
+| `services` | 服务（哪台主机上出现了什么协议 / 端口） | `{total, items, truncated}` |
+| `technologies` | 技术栈（Web 服务器 / 组件 / CDN） | `{total, items, truncated}` |
+| `risk_hints` | 风险提示 | `{total, items, truncated}` |
+| `counts` | 五类**截断前**的真实数量 | `{assets, observations, services, technologies, risk_hints}` |
+| `notes` | 必须原样展示给用户的说明句 | `[...]` |
+
+> ⚠️ **`risk_hints` 不是漏洞结论**。本框架不做漏洞扫描：没有 `nuclei`（它在
+> `core/tool_registry.py:KNOWN_UNAVAILABLE_TOOLS` 里，不在 `RUNNER_REGISTRY`），
+> 全仓也没有任何 CVE / CVSS / 严重级别数据。因此：
+>
+> * 每一条 hint 都是从已有观测里读出来的**可观察事实**（明文 HTTP、5xx、
+>   `Index of /` 标题、未做 HTTP 探测的主机……），`code` 是稳定的机器可读标识；
+> * `level` 只有 `info` / `notice` / `attention` 三档，语义是「值不值得人工看一眼」，
+>   **不是**危险度；中文文案在 `level_label` **由服务端下发**（前端不得写死）；
+> * `notes` 里恒有一条免责说明：**「没有提示」不等于目标没有问题，「有提示」也不等于
+>   发现了漏洞**。前端必须显示它（`tests/integration/test_job_results_api.py` 锁住）。
+>
+> 口径与 `/diff` 同源：**只看本次任务自己的观测**（`observations.job_id`），
+> 不看该资产历史上被谁见过 —— 否则「这次扫到了什么」会被历史观测污染。
+>
+> 其它实测行为：`mode=mock` 的任务会带 `MOCK_NOTICE`（mock 不产生观测，
+> 「服务 / 技术栈 / 风险提示」三段为空是预期行为，不是采集失败）；
+> `observations_limit` 非法值回落到默认值而不 400；接口**只读**，
+> 不写库、不写审计、不触发任何扫描。
 
 ### 6.5 原始证据（1 条，需认证）
 
@@ -366,8 +401,8 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 python -c "import app; [print(sorted(r.methods - {'HEAD','OPTIONS'}), r.rule) for r in app.app.url_map.iter_rules()]"
 ```
 
-统计口径（实测）：`len(list(app.app.url_map.iter_rules())) == 46`；含方法展开的绑定 48
-（`/` 与 `/login` 各 2 个方法）；其中 `/api/*` 为 **40** 条。
+统计口径（实测）：`len(list(app.app.url_map.iter_rules())) == 48`；含方法展开的绑定 50
+（`/` 与 `/login` 各 2 个方法）；其中 `/api/*` 为 **42** 条（需认证 32 / 匿名 7 / 登录相关 3）。
 
 匿名/需认证的划分以**实测响应码**为准（用 `app.test_client()` 逐个匿名请求），
 并与 `tests/integration/test_api_auth_contract.py` 的
@@ -375,7 +410,7 @@ python -c "import app; [print(sorted(r.methods - {'HEAD','OPTIONS'}), r.rule) fo
 
 ## 8. 文档与代码不一致（API 相关）
 
-1. **README 说「12 个 RESTful 接口」**：实际 `/api/*` 为 **40** 条。
+1. **README 说「12 个 RESTful 接口」**：实际 `/api/*` 为 **42** 条。
 2. **README 的匿名只读清单只有 3 条**：实际 7 条（多出 `/api/databases`、`/api/exports`、
    `/api/tool/<n>/results`、`/api/export/<id>/download`）。
 3. **README 提议用 `curl /api/tools` 做健康检查**：健康检查是 `GET /health`，README 全文

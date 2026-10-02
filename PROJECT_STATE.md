@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · **下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验 ⬜** · 本地领先 origin/main 18 个提交（纯快进，待确认后推送）· M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · **下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅** · 本地领先 origin/main 20 个提交（提交本阶段前；纯快进，待确认后推送）· M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → **下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（本轮）→ Phase 4 结果体验 ⬜** → P0-6 阶段二 + M5 剩余 ⬜**
-- 更新日期：2026-10-02（下一阶段体验优化 Phase 1～3；此前公网授权测试模式体验版 / M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → **下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（`59047ee` / `5960bc0`）→ Phase 4 结果体验 ✅（本轮）** → P0-6 阶段二 + M5 剩余 ⬜**
+- 更新日期：2026-10-02（下一阶段体验优化 Phase 1～4；此前公网授权测试模式体验版 / M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
 
 ---
 
@@ -49,7 +49,9 @@
 - 新库 WAL + `busy_timeout=5000` + `BEGIN IMMEDIATE`
 - `core/jobs.py`：状态机、步骤快照、认领、租约、cancel / retry / recover_stale_jobs
 - `jobs/executor.py` + `jobs/worker.py`（独立进程，心跳文件 `results/worker_heartbeat`）
-- `api/jobs.py`：`/api/jobs*` 共 7 个接口；`POST /api/jobs` 立即返回 202 + `job_id`
+- `api/jobs.py`：`/api/jobs*` 共 7 个接口（M3 当时；现为 **10 个**，
+  含 Phase 4 新增的 `GET /api/jobs/<job_id>/results`，见 `docs/API.md` §6.4）；
+  `POST /api/jobs` 立即返回 202 + `job_id`
 - `/health` 增加 `queue`（只给计数）与 `worker` 状态
 
 **统一结果与错误模型（M4）**
@@ -202,7 +204,8 @@
 **P1 §14 文档同步 + 导出格式 400 收口（本轮）**
 - 新增 `docs/ARCHITECTURE.md`（分层架构与冻结的技术选型）、`docs/API.md`
   （**逐条核对真实路由**：39 条规则 / 41 个方法绑定，`/api/*` 34 条、需认证 24 条、
-  匿名可读 7 条）、`docs/DEPLOYMENT.md`（环境要求 / 安装 / `.env` / 启动 Web 与 worker /
+  匿名可读 7 条 —— 这是**当时的快照**，最新值见本文件「最近一次验证」与
+  [`docs/API.md`](docs/API.md) §1）、`docs/DEPLOYMENT.md`（环境要求 / 安装 / `.env` / 启动 Web 与 worker /
   测试 / 故障排查）；三份都是简体中文、互相交叉引用
 - **修一个真实缺陷**：`GET /api/export?format=xlsx` 原返回 **500 `unknown_error`**
   （`exporter.export_results` 抛 `ValueError` 无人捕获，一路冒到全局兜底）——
@@ -388,7 +391,7 @@
   ③ `TargetCheck.eligible` 单独建模，排除命中的范围不算「可执行」
 - 前端改成四步流程：输入目标 → 确认授权范围 → 选择工具 → 执行模式与提交
 
-**Phase 3 Scan Profile = 工具组合 + 节奏（本轮）**
+**Phase 3 Scan Profile = 工具组合 + 节奏（`59047ee` / `5960bc0`）**
 - 依据：下一阶段方案第 5、6 节 Phase 3「工具编排：引入 Scan Profile」。
   一句话目标：**「低频」必须是可执行约束，而不是页面上的一行文案**
 - 新增 `core/pace.py`：档位 `light`（低频）/ `normal`（常规），`PACE_LABELS` /
@@ -417,6 +420,38 @@
 - **节奏不是安全闸门**：它不参与、也不放松 Scope / `active_scan` /
   `GEF_ALLOW_REAL_SCAN` / 公网白名单中的任何一条
 
+**Phase 4 结果体验 —— 从 Job 导向结果（本轮）**
+- 依据：下一阶段方案第 6 节 Phase 4。一句话目标：**做完一次任务之后，
+  用户要能看出到底看到了什么**（旧详情页只有「步骤 × 工具 × 结果数」）
+- 新增 `GET /api/jobs/<job_id>/results`（**本轮唯一新增路由**，47/49 → 48/50）。
+  一次给出四段 `assets` / `services` / `technologies` / `risk_hints`，
+  外加 `counts`（五类**截断前**真实数量）与 `notes`（必须原样展示的说明句）；
+  四段形状统一为 `{total, items, truncated}`
+- 新增 `core/findings.py`（**纯函数**，不碰 sqlite / Flask / 配置 / 网络）：
+  把 `assets` + `observations` 派生成四段；别名表**复用**
+  `core/assets.py:ATTRIBUTE_ALIASES`；中文文案（`type_label` / `kind_label` /
+  `level_label`）只有服务端一份，前端不写死
+- 新增 `core/assets.py:list_job_assets()`：`assets` 表**没有 `job_id` 列**，
+  所以从 `observations` 反查。口径与 `/diff` **完全同源**（只看本次任务自己的观测），
+  否则「这次扫到了什么」会被历史观测污染 —— 而那正是本阶段要消灭的歧义
+- **零 schema 变更**：`jobs` / `assets` / `observations` 三张表一字未改
+- **「风险信息」如实降级为「可观察事实」**（本阶段最重要的一个决定）：
+  本项目**没有**漏洞扫描能力（`nuclei` 不在 `RUNNER_REGISTRY`，全仓无 CVE / CVSS /
+  severity 数据），所以第四段给的是明文 HTTP、5xx、401/403、目录列表标题、
+  默认欢迎页、版本横幅、**未做 HTTP 探测的主机**、**终态失败的步骤** 这九类事实。
+  级别只有 `info` / `notice` / `attention`（**刻意不用 low/medium/high**，避免暗示
+  「已评估危险程度」），出参里**不存在** `severity` / `cve` 字段（有用例禁止）
+- **免责说明恒带**（不是「零提示时才补一句」）：真实链路里零提示几乎从不出现
+  （只跑 subfinder 时「有子域没做 HTTP 探测」就会产生一条），若只在零提示时才算，
+  最需要说明的那次反而拿不到它
+- mock 模式单独一句说明：mock **不产生观测**，三段为空是预期行为，不是采集失败
+- 前端：`web/static/app.js` 的任务详情面板新增四段结果区。容器**同步插入、
+  内容异步填充**（`loadArtifacts` 也是异步的，谁先回来谁排前面会让页面顺序随机跳动）；
+  渲染一律 `textContent`，因此运行时文案里不得出现 Markdown 的 `**`（有断言钉住）
+- **两处刻意的「不做」**：① 不把四段做成漏洞报告（页面上没有任何「严重程度 /
+  CVE / 修复建议」字段）；② 不改 `jobSignature` —— 事件流仍未在页面上渲染，
+  仍是排查用的接口而不是给人读的结论
+
 ---
 
 ## 部分完成
@@ -424,10 +459,10 @@
 | 项 | 现状 | 差什么 |
 |---|---|---|
 | **`mode=real` 真实链路** | ✅ **已有本地实证（本轮）**：`tests/integration/test_m7_local_e2e.py` 用**真实 httpx 子进程**打只绑 `127.0.0.1` 的 fixture 服务，一条用例走完 target → job → worker → runner → raw artifact → parser → observation → asset → diff → export（方案第 18 节）。此外 `tool_not_found` / `timeout` / `nonzero_exit` 等失败分类都有真实子进程用例 | 仍然**从未用真实工具打真实外部目标**（按硬约束刻意不做）—— 这是设计选择，不是缺口；CI 上若无 httpx 可执行文件，该用例会 `pytest.skip` |
-| **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库，**并已进资产页的观测时间线** | 资产页展示的是 `data_json` 原样 JSON，**没有按字段拆列**；任务详情页那一侧仍是原样 JSON |
+| **M4 观测元数据展示** | `httpx` 的 `status_code` / `title` / `webserver` / `tech` / `cdn` 已结构化落库，**并已进资产页的观测时间线**；**Phase 4 起在任务详情页按语义拆成四段**（发现资产 / 服务 / 技术栈 / 风险提示），不再只有原样 JSON | 资产页那一侧仍是 `data_json` 原样 JSON，**没有按字段拆列**；任务详情页底部的步骤表也仍按原样 JSON 渲染（那是证据，不是结论） |
 | **M6 导出** | `exporter.py` 能生成 CSV / JSON；`/api/export` 已改为登记制（`export_id` + `download_url`），支持 `GET /api/export/<id>/download` 与 `GET /api/exports` | 没有按时间/条件筛选导出记录的页面；没有导出清理策略 |
 | **M6 本机启动文档** | ✅ **已补齐**：`docs/DEPLOYMENT.md`（环境要求 / 安装 / `.env` 逐键说明 / 启动 Web 与 worker / 测试三条基线 / 故障排查），`README.md` 也补了「环境要求」与「启动 Worker」两节 | 已附 `scripts/check_env.py`（一键体检），见「已完成」专段 |
-| **M7 mypy** | ✅ **已完成**：`mypy app.py core api jobs storage.py modules scripts` → `Success: no issues found in 68 source files`（本轮新增 5 个源文件，63 → 68） | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
+| **M7 mypy** | ✅ **已完成**：`mypy app.py core api jobs storage.py modules scripts` → `Success: no issues found in 68 source files`（M7 时点，63 → 68；**现为 71**，后续里程碑新增了源文件） | 仅 `agent/providers/*` 不在该命令范围内（无调用方，见 Known Failure #8；显式加 `agent` 会多 7 条 openai 存根报错，未为它改语义） |
 | **P1 Diff 的前端** | ✅ **已完成**：`/assets` 页底部有「两次任务对比」表单（基线与对比任务下拉、可选限定范围、「含未变」开关），四类分段渲染 + 属性差异（`status_code: 200 → 403`）；**清单条目可点进资产详情**（带 `asset_id` 的条目可点，详情面板会滚入视口） | — |
 | **P1 资产过期** | `mark_stale_assets(scope_id, last_seen_before=...)` 已实现且有用例 | **没有任何计划任务/接口调用它**，所以 `stale` / `gone` 目前永远是空的 |
 | **P1 §19 Observability** | ✅ **基础版已完成**：结构化单行 JSON 事件 + 四个关联 ID（`request_id` / `job_id` / `step_id` / `worker_id`，contextvars 绑定）+ 脱敏与容器上限 + 三条源码守卫；`GEF_LOG_LEVEL` / `GEF_LOG_FORMAT` 可配 | 仍属**基础版**：日志只写 stderr，**无文件输出与轮转**；**无 metrics / trace**；`configure_logging()` 只在两个进程入口调用，所以 `waitress-serve app:app` 这类外部启动方式不出结构化日志（在 `create_app()` 里配置会关掉 `propagate`、弄坏 pytest 的 `caplog`）；`request_id` 不跨进程（worker 是独立进程，跨进程串联要靠 `job_id`）；`/api/settings` 页未暴露日志级别开关 |
@@ -595,33 +630,44 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（Phase 3：Scan Profile = 工具组合 + 节奏）
+验证时间：2026-10-02（Phase 4：结果体验 —— 从 Job 导向结果）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1091 passed, 2 skipped, 0 failures / 0 errors      ← --collect-only 逐文件汇总口径
-mypy:   Success: no issues found in 70 source files        ← 本轮新增 core/pace.py（69 → 70）
-node --check web/static/scan_center.js: 语法检查通过（无前端构建链，只能做到这一步）
+pytest: 1149 passed, 2 skipped, 0 failures / 0 errors      ← 本轮全量 --junitxml 解析
+        （逐文件 --collect-only -q 汇总复核一致）
+mypy:   Success: no issues found in 71 source files        ← 本轮新增 core/findings.py（70 → 71）
+node --check web/static/app.js: 语法检查通过（本轮改的就是它）
 git diff --check: 退出码 0
-本轮未做新的实机验收（纯后端节奏 + 前端展示改动，无新增路由）：
-        真实扫描一律不在实现/测试期发起；节奏的正确性由
-        「Runner 收到的 config」「命令行多出的 -rl」「真实测到的步骤间隔」三类用例证明
-        （见 docs/TEST_REPORT.md §7）
-        沿用上一轮实机结论：Web + worker 双进程链路、三条拒绝路径、mock 任务 202 → succeeded
+本轮前端另做了一次**一次性 DOM 桩人工核对**（项目没有浏览器测试）：
+        在 Node 里用最小 document/fetch 桩加载真实的 web/static/app.js，
+        走真实的点击路径（`.job-detail` → refreshDetail → renderDetail → /results），
+        断言渲染出四段标题、notes 免责句、级别徽标与截断提示；
+        mock 空结果那一路另跑一遍，确认四段各自显示「本次任务没有这一类结果」。
+        探针文件跑完即删，不入库。
 覆盖口径（口径与上一轮相同，用一次性探针重跑）：
-        声明的方法绑定 49 / 路由规则 47 —— 本轮**零新增路由**，与 Phase 2 相同
-业务 .py 97 个被测试提及 87 个（新增 core/pace.py 被 37 条用例直接覆盖），
-        未提及的仍是同样 10 个（全在 agent/）
+        声明的方法绑定 50 / 路由规则 48 —— 本轮**新增 1 条路由**
+        （`GET /api/jobs/<job_id>/results`），这是方案 Phase 4 要求的入口本身
+本轮新增 58 项：test_findings.py 35 + test_job_results_api.py 20 +
+        两份鉴权清单各补参数（test_api_auth_contract.py 24 → 26、
+        test_m3_jobs_api.py 45 → 46）
+        逐文件差额用 git worktree 检出 Phase 3（5960bc0）后两树对跑 --collect-only 求差
+业务 .py 92 个被测试提及 82 个（新增 core/findings.py 被 35 条用例直接覆盖），
+        未提及的仍是同样 10 个（全在 agent/）——
+        同一探针在 Phase 3 工作树上跑出 91 / 81，差的就是本轮新增的 core/findings.py
 交付报告：docs/milestones/本机验收报告_公网授权测试模式_2026-10-02.md（目录被忽略，本机材料）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → **Phase 3 Scan Profile `1091`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → **Phase 4 结果体验 `1149`**
 
-> 本轮新增 105 项（`test_tool_registry.py` 34 + `test_projects.py` 26 +
-> `test_public_scan_mode.py` 45）。**排除这三个文件后收集数仍为 901**，
-> 与上一轮逐条相等 —— 即没有任何既有用例被删改。
-> （该文件从 44 增至 45 是本轮补的一条：方案第 4 节把目标类型写成「域名 / IP / CIDR」，
-> 原先只有域名那条在公网入口链路上有覆盖，现补上 IP 与 CIDR 的放行/拒绝对照。）
+> 本轮 +58 = 两个新文件（35 + 20）+ 两处既有鉴权清单补参数（+2、+1）。
+> 逐文件差额**实测**得出：`git worktree add --detach <tmp> 5960bc0` 检出 Phase 3 后，
+> 两个工作树各跑一遍 `--collect-only -q` 求差，差额恰好只有这四行 ——
+> 即没有任何既有用例被删改。
+>
+> 另有一处刻意的**新增参数**：`ADMIN_ONLY` 补上了 `GET /api/jobs/job_x`（详情本身）。
+> 它自 Phase 2 起就一直缺失（`/steps`、`/events`、`/artifacts` 都在，唯独详情不在），
+> 属本轮顺手补齐的覆盖缺口，不是行为变更 —— 该接口本来就是需登录的。
 
 ---
 
@@ -632,12 +678,12 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-510fa41   ← 最近一次不含本文件改动的提交（Phase 2 公网授权测试入口）
+f88dd57   ← 最近一次不含本文件改动的提交（Phase 4 结果体验：代码 + 测试）
+f88dd57  feat(results): Phase 4 结果体验 —— 从 Job 导向结果，四段派生成结论
+5960bc0  docs: 同步下一阶段体验优化 Phase 1～3（决策单 / 代码地图 / API / 部署 / 测试报告 / 变更日志 / 状态板）
+59047ee  feat(pace): Phase 3 Scan Profile —— 工具组合 + 节奏，低频是可执行约束
 510fa41  feat(public-scan): Phase 2 公网授权测试入口 —— 只读试算 + 四步流程
 e94b180  feat(scan-center): Phase 1 UI 清理 —— 隐藏内部 ID、去后台术语、简化流程
-35320cf  docs(state): 记录复跑审计的遗留项与两个新提交
-714ae22  docs(security): 复跑审计发现重写后明文仍可从回滚标签检出
-0efa43a  docs: 基线由 1003 对齐到 1004，并补交付报告与覆盖口径
 ```
 
 自检：
@@ -663,7 +709,7 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 | 产品代码 | `4428302`（测试隔离修复）、`0a3bd42`（后端）、`7018fb4`（前端） |
 | 测试与验收 | `26ddf3a`（测试与探针）、`7bfb8e7`（补 IP/CIDR 用例） |
 | 文档 | `207af8c`（文档同步）、`1a34310`（哈希同步 + 密钥清理补记）、`5614491`（审计专节）、`9a72058`（交付报告 + 测试报告增量）、`0efa43a`（基线 1003→1004 对齐） |
-| 下一阶段体验优化 | `e94b180`（Phase 1 UI 清理）、`510fa41`（Phase 2 公网授权测试入口）、Phase 3 见下 |
+| 下一阶段体验优化 | `e94b180`（Phase 1 UI 清理）、`510fa41`（Phase 2 公网授权测试入口）、`59047ee` + `5960bc0`（Phase 3 Scan Profile 代码 + 文档）、`f88dd57`（Phase 4 结果体验代码 + 测试）、Phase 4 文档同步见下 |
 | 状态板（只改本文件） | `db159ff` 及此后每一条 `docs(state):…` |
 
 **纯快进，无需 force** —— 已实测 `git merge-base --is-ancestor origin/main HEAD` 退出码 0。
@@ -801,10 +847,12 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                  # 期望 All checks passed!
-python -m pytest                                        # 期望 1004 passed, 2 skipped
-python -m mypy app.py core api jobs storage.py modules scripts  # 期望 Success: no issues found in 68 source files
+python -m pytest                                        # 期望 1149 passed, 2 skipped
+python -m mypy app.py core api jobs storage.py modules scripts  # 期望 Success: no issues found in 71 source files
 python scripts/check_env.py                             # 期望退出码 0/1（未配 .env 时为 1），fail 项为 0
 ```
+
+> 这三个数字以「最近一次验证」为准（本节是 Phase 4 时的快照）。
 
 **运行期产物隔离（重要）**：测试**从不**写仓库的 `results/`、`exports/` 与
 `results/local.db`。**保障有两层，缺一不可**：

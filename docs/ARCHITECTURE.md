@@ -334,15 +334,17 @@ Diff 只看 `DIFFABLE_ATTRIBUTES`，且比较的是**归一化后的 canonical k
 > （README 的接口条数、匿名只读条数、测试基线）**保留在此作为历史**，
 > 并标出当时与现在的实际值 —— 删掉它们会让人以为这些坑从没存在过。
 
-1. ~~`README.md` 说「12 个 RESTful 接口」~~ ▶ **已修**：实际 `/api/*` 路由为 **34 条**
-   （见 [`API.md`](API.md)），README 已改为不写死条数。
+1. ~~`README.md` 说「12 个 RESTful 接口」~~ ▶ **已修**：实际 `/api/*` 路由为 **42 条**
+   （截至 Phase 4，见 [`API.md`](API.md) §1；P1 §14 修这条时是 34 条），
+   README 已改为不写死条数。
 2. ~~`README.md` 的「鉴权现状」只列了 3 个匿名只读接口~~ ▶ **已修**：当时实际是 **5 个**，
    后续又加上 `/api/export/<id>/download` 与 `/api/exports`，**现在是 7 个**
    （由 `test_api_auth_contract.py` / `test_export_contract.py` 锁定）。
 3. `README.md` 的常见问题 Q6 仍在说「`/` 报 `TemplateNotFound`，index.html 是占位文件」——
    该问题已在 M1 修复，模板与静态资源都在，`GET /` 返回 200。
 4. ~~`README.md` 的测试基线写 `759 passed`~~ ▶ **已修**：当时基线为 826，现为
-   **1004 passed / 2 skipped**（[`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.8 同源）。
+   **1149 passed / 2 skipped**（[`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.8 同源；
+   仍以 `PROJECT_STATE.md` 的「最近一次验证」为准）。
 5. `docs/SECURITY.md` **不存在**——方案建议的四份文档里，安全文档实际位于仓库根
    [`SECURITY.md`](../SECURITY.md)。
 6. `api/scopes.py` 注释称 404 会被转成 `error_code=bad_request`，实测为 `not_found`

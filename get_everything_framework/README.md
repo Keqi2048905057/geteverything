@@ -40,7 +40,7 @@
 | 🚀 **一键部署** | 提供 Windows / Linux 自动安装脚本，Go 工具、Python 依赖、系统工具一站搞定 |
 | 🔧 **20+ 工具集成** | subfinder / amass / dnsx / httpx / nmap / naabu / katana / gospider / waybackurls / dirsearch / feroxbuster / ENScan ... |
 | 📊 **统一数据存储** | SQLite 数据库 + JSONL / TXT 多格式输出，跨工具结果自动合并去重 |
-| 🌐 **Web API** | `/api/*` 共 34 个接口（其中 24 个需管理员身份、7 个只读接口匿名可读）+ 免登录的 `GET /health`；逐条说明见 [`docs/API.md`](../docs/API.md) |
+| 🌐 **Web API** | `/api/*` 共 42 个接口（其中 32 个需管理员身份、7 个只读接口匿名可读、3 个登录相关公开）+ 免登录的 `GET /health`；逐条说明见 [`docs/API.md`](../docs/API.md)（该文件用 `app.url_map` 实测枚举，与本表冲突时以它为准） |
 | 🤖 **LLM Agent** | 自然语言描述扫描任务由**正则 + 模板**规划（`agent/intent.py` / `agent/planner.py`）；`agent/providers/*` 已实现但**当前无调用方**，运行时不发大模型请求 |
 | 📤 **多格式导出** | 支持按域名 / 工具 / 分类导出 CSV / JSON |
 | 🎯 **目标管理** | 支持手动输入 + 批量导入 + 配置文件管理 |
@@ -187,11 +187,14 @@ python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
 ### 测试与验收
 
 ```bash
-python -m pytest                                          # 1004 passed, 2 skipped
+python -m pytest                                          # 1149 passed, 2 skipped
 python -m ruff check .                                    # All checks passed!
-python -m mypy app.py core api jobs storage.py modules scripts  # Success: no issues found in 68 source files
+python -m mypy app.py core api jobs storage.py modules scripts  # Success: no issues found in 71 source files
 python scripts/check_env.py                               # 环境自检（只读）
 ```
+
+> 这三个数字以仓库根的 [`PROJECT_STATE.md`](../PROJECT_STATE.md)「最近一次验证」为准
+> （本节是 Phase 4 时的快照）。
 
 测试**从不**触碰仓库的 `results/`：`tests/conftest.py` 会把两个数据库、上传目录、
 产物目录、导出目录全部指向临时目录。
@@ -245,15 +248,23 @@ python scripts/check_env.py                               # 环境自检（只�
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
-| POST | `/api/jobs` | 需登录 | 创建任务（必填 `scope_id`，目标须在 Scope 内；可选 `idempotency_key`） |
+| POST | `/api/jobs` | 需登录 | 创建任务（必填 `scope_id`，目标须在 Scope 内；可选 `idempotency_key` / `pace`） |
 | GET | `/api/jobs` | 需登录 | 任务列表 |
-| GET | `/api/jobs/<job_id>` | 需登录 | 任务详情（含进度与错误码） |
+| GET | `/api/jobs/<job_id>` | 需登录 | 任务详情（含进度、节奏与错误码） |
+| GET | `/api/jobs/<job_id>/results` | 需登录 | **结果体验（Phase 4）**：一次给出「发现资产 / 服务 / 技术栈 / 风险提示」四段 + `counts` + `notes`（**不是漏洞扫描结论**，见下） |
 | POST | `/api/jobs/<job_id>/cancel` | 需登录 | 请求取消 |
 | POST | `/api/jobs/<job_id>/retry` | 需登录 | 重试（interrupted / failed）；返回 `next_attempt_at`（退避窗口） |
 | GET | `/api/jobs/<job_id>/steps` | 需登录 | 步骤与结构化观测 |
 | GET | `/api/jobs/<job_id>/events` | 需登录 | 任务事件流 |
 | GET | `/api/jobs/<job_id>/artifacts` | 需登录 | 原始证据登记（不含服务器路径） |
 | GET | `/api/artifacts/<artifact_id>` | 需登录 | 读取**截断 + 脱敏**后的证据文本 |
+
+> **`/results` 的「风险提示」不是漏洞结论**：本框架不做漏洞扫描
+> （`nuclei` 不在 `RUNNER_REGISTRY`，全仓没有 CVE / CVSS / 严重级别数据）。
+> 第四段给的是**从已有观测里读出来的、值得人工看一眼的事实**，
+> 级别只有 `info` / `notice` / `attention` 三档，且每次响应都带一句免责说明。
+> 请一并读 `notes` —— 其中「未做 HTTP 探测的主机」与「失败的步骤」两类提示
+> 是在告诉你**哪里没看**，而不是「那里没问题」。
 
 > **幂等（P0-7a）**：带 `idempotency_key` 重复 `POST /api/jobs` 时，只要上一个同键任务
 > **还没终结**（`queued` / `running`），就返回**同一个** `job_id` 且响应里 `reused=true`。

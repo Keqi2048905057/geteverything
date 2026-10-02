@@ -97,6 +97,13 @@ mypy 0 error（63 source files），`check_env.py` 退出码 1（= warn，fail 0
 * `check_env.py` 在**未配 `.env` 的本机**上退出码为 1、`fail 0`，且不改动任何文件；
 * `ruff` / `mypy` / `node --check` 三条静态检查的实际输出（见 §1）。
 
+> ⚠️ **口径提醒**：上面第一条（901）与第二条（41/40）是 **M7 当时的快照**。
+> 后续里程碑只在本文件末尾**增量追加**（§6 Phase 2、§7 Phase 3、§8 Phase 4），
+> 刻意不改写前面的实测记录 —— 所以本节的数字**以对应的增量小节为准**。
+> 截至 Phase 4：用例 **1149**（1147 passed / 2 skipped）、方法绑定 **50 / 49 被命中**，
+> 未走到的仍只有 `GET /api/tool/<tool_name>/results` 一条
+> （§3.1 的这条结论在各轮中一直成立，见 §8.2 的重跑记录）。
+
 **仅代码审查、尚未实测**
 
 * Linux 侧的全部行为：CI 只在 push 后跑，**本地无法验证** Linux 上的两条 POSIX 用例
@@ -114,6 +121,11 @@ mypy 0 error（63 source files），`check_env.py` 退出码 1（= warn，fail 0
 ## 1. 复现方式与实测结果
 
 四条命令，都在 `get_everything_framework/` 下执行：
+
+> **本节是 M7 那一轮的原始实测记录（基线 901 / mypy 63 文件）**，
+> 后面各轮的增量见 §6（Phase 2）、§7（Phase 3）、§8（Phase 4）。
+> 当前基线以 §8 与 `PROJECT_STATE.md` 的「最近一次验证」为准 ——
+> 保留本节原样，是为了让「当时到底跑出了什么」可被追溯。
 
 ```powershell
 python -m pytest -q                # 901 passed, 2 skipped, 0 failures / 0 errors
@@ -680,3 +692,163 @@ node --check web/static/scan_center.js                          # 语法通过
 
 本轮的价值同样不在 +55，而在**把「低频」从文案变成了可观察的执行事实**：
 能证明它的不是接口 JSON，而是 Runner 收到的 `config`、多出来的 `-rl`，以及真实测到的等待时间。
+
+---
+
+## 8. Phase 4：结果体验 —— 从 Job 导向结果（1149）
+
+> 本轮依据《下一阶段体验优化与公网扫描能力演进方案》第 6 节 Phase 4
+> 「结果体验：从 Job 导向结果；展示：发现资产；服务；技术栈；风险信息」。
+> §1～§7 的实测记录不改写。
+
+### 8.1 实测结果
+
+```powershell
+cd get_everything_framework
+python -m pytest                    # 1149 passed, 2 skipped, 0 failures / 0 errors
+python -m ruff check .              # All checks passed!
+python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 71 source files
+node --check web/static/app.js                                  # 语法通过
+git diff --check                                                # 退出码 0
+```
+
+| 项 | Phase 3 | 本轮 |
+|---|---|---|
+| 用例总数（`--collect-only` 汇总 + `--junitxml` 复核，两者一致） | 1091 | **1149**（+58；junit `tests="1149"`，其中 **1147 passed / 2 skipped**） |
+| `test_*.py` 文件 | 36 | **38**（新增 `tests/unit/test_findings.py`、`tests/integration/test_job_results_api.py`） |
+| mypy 源文件 | 70 | **71**（新增 `core/findings.py`） |
+| `app.url_map` 规则总数 / 方法绑定 | 47 / 49 | **48 / 50**（+1 路由，即 Phase 4 的入口本身） |
+| 被用例真实命中的方法绑定 | 47 / 48 | **49 / 50**（探针重跑，见 8.2） |
+
+**+58 的构成（逐文件，可复算）**：
+
+| 文件 | Phase 3 收集 | 本轮收集 | 增量 |
+|---|---|---|---|
+| `tests/unit/test_findings.py`（新） | — | 35 | **+35** |
+| `tests/integration/test_job_results_api.py`（新） | — | 20 | **+20** |
+| `tests/integration/test_api_auth_contract.py` | 24 | 26 | **+2** |
+| `tests/integration/test_m3_jobs_api.py` | 45 | 46 | **+1** |
+| **合计** | | | **+58** |
+
+> 后两处是**补登记既有接口**，不是新增功能用例：`ADMIN_ONLY` 补上了
+> `GET /api/jobs/job_x`（详情本身）与 `GET /api/jobs/job_x/results`。
+> 详情那条自 Phase 2 起就一直缺失（`/steps`、`/events`、`/artifacts` 都在，唯独详情不在），
+> 属顺手补齐的覆盖缺口 —— 该接口本来就是需登录的，不是行为变更。
+> 校验：`1091 + 58 = 1149`。
+>
+> **这四行是逐文件实测出来的，不是推算** —— 用 `git worktree add --detach <tmp> 5960bc0`
+> 把 Phase 3 的提交单独检出，两个工作树各跑一遍 `--collect-only -q` 后逐文件求差，
+> 差额**恰好只有这四行**。这一步值得写在报告里：本报告 §1 开头那句
+> 「901 条用例全绿」曾经掩盖过一个真实缺陷（§2.3 的 Diff 别名 bug），
+> 所以「+58 是怎么来的」必须能被复算，而不是相信一个净增量数字。
+
+### 8.2 路由覆盖重跑：结论未变，仍是同一条未走到
+
+用与 §3.1 / §6.4 相同的一次性探针（包装 `flask.Flask.full_dispatch_request` 跑全量）：
+
+```text
+声明的方法绑定: 50
+测试命中的:     49
+
+== 没有被任何用例走到的方法绑定 ==
+    GET /api/tool/<tool_name>/results
+```
+
+新路由 `GET /api/jobs/<job_id>/results` **被真实走到**（`test_job_results_api.py` 里
+有正常路径的 200 用例）。`docs/TEST_REPORT.md` §3.1、`docs/CODEBASE_MAP.md` §9.21.1、
+`PROJECT_STATE.md`、`CHANGELOG.md` 里那句「唯一没被任何用例走到的是
+`GET /api/tool/<tool_name>/results`」**在新增一条路由之后依然成立**。
+
+### 8.3 本轮最重要的一条：把「风险信息」如实降级，而不是编造
+
+方案第 5 节提到 `nuclei`，但本次实现**没有**、也不可能给出漏洞结论：
+
+* `nuclei` 在 `core/tool_registry.py:KNOWN_UNAVAILABLE_TOOLS` 里，`internet_allowed=False`，
+  **不在** `RUNNER_REGISTRY`；
+* 全仓没有任何 CVE / CVSS / severity 数据表、字段或解析器。
+
+因此本轮的「风险提示」= **从已有观测里读出来的、值得人工看一眼的事实**。
+要证明的不是「这个功能有返回值」，而是**它不会把「没看」说成「没问题」**：
+
+| 要证明的事 | 用例 | 断言的可观察对象 |
+|---|---|---|
+| 免责说明每次都在（不是只在零提示时） | `test_every_result_carries_the_no_vulnerability_scanning_disclaimer` | 有 6 条提示的那次响应里仍有「不做漏洞扫描」「不等于」 |
+| 零提示也要带说明 | `test_zero_hints_still_ships_the_not_a_clean_bill_notice` | `counts` 全 0 的响应里 `notes` 仍非空 |
+| 不存在危险度分级 | `test_no_vulnerability_severity_concept_exists` | `RISK_LEVELS == ("info","notice","attention")`，且不含 low/medium/high/critical |
+| 出参里没有漏洞字段 | `test_summarize_never_emits_a_severity_or_cve_field` | 每条 hint 都没有 `severity` / `cve` |
+| 两类**覆盖缺口**被说出来 | `test_unprobed_hosts_are_reported_as_a_coverage_gap`、`test_failed_step_is_reported_as_incomplete_coverage` | `unprobed_hosts` / `incomplete_coverage` 两条 hint |
+| 任务还在跑时**不**报覆盖不完整 | `test_unfinished_or_successful_steps_do_not_report_incomplete_coverage` | `pending` / `running` 四种状态都不产生该 hint |
+
+### 8.4 「只看本次任务」的口径
+
+这是 Phase 4「从 Job 导向结果」的核心，也是最容易被写成「查全表」的地方：
+
+| 要证明的事 | 用例 |
+|---|---|
+| 上一次任务的资产不混进这次 | `test_results_only_include_this_jobs_observations` |
+| 与 `/diff` 完全同源 | `test_results_tail_does_not_shadow_the_diff_route`（两条尾段各自命中自己的视图） |
+
+`assets` 表没有 `job_id` 列，所以 `list_job_assets()` 从 `observations` 反查 ——
+这恰好就是两层模型（`Asset ↓ Observation ↓ Job/Run/Tool`）存在的理由。
+**零 schema 变更**：`jobs` / `assets` / `observations` 一字未改。
+
+### 8.5 只读性与鉴权
+
+| 要证明的事 | 用例 |
+|---|---|
+| 匿名 → 401 | `test_results_endpoint_requires_admin` + `test_api_auth_contract.py:ADMIN_ONLY` 的 16 条参数 |
+| 未知任务 → 404 | `test_results_endpoint_unknown_job_is_404` |
+| 连调两次不改任何东西 | `test_results_endpoint_is_read_only`（资产 / 观测 / 审计 / 事件四类行数全部不变） |
+| 不下发服务器路径 | `test_results_response_exposes_no_server_path` |
+| 非法 query 回落而不 400 | `test_results_observations_limit_is_clamped` |
+
+### 8.6 前端：本轮补了**第二次**一次性 DOM 桩人工核对
+
+项目没有浏览器测试（方案第 2.4 节：不引入前端框架 / 构建链），源码守卫只能证明
+「字符串在文件里」。因此本轮在 Node 里搭了一个最小 DOM 桩，加载**真实的**
+`web/static/app.js`，走**真实的点击路径**（`.job-detail` → 委托监听 → `refreshDetail`
+→ `renderDetail` → `fetch /results`），再断言渲染结果。
+
+实测输出（两份夹具，一份有数据、一份 mock 空结果）：
+
+```text
+有数据那份：  headings = 发现资产（4） / 服务（2） / 技术栈（3） / 风险提示（6）
+              riskBadges = [risk-high 建议人工确认 ×2, risk-medium 可留意 ×3, risk-low 信息 ×1]
+              notes = 1 条（免责说明）
+              fetchCalls 含 /api/jobs/<id>/results
+mock 空那份： headings = 发现资产（0） / 服务（0） / 技术栈（0） / 风险提示（0）
+              notes = 2 条（免责说明 + mock 说明）
+              emptyHints = 四条「本次任务没有这一类结果。」
+```
+
+**桩本身也踩过一次坑并被修正**：第一版桩只给了 `className` 没有 `classList`，
+而 `bindJobActions` 的委托监听用 `target.classList.contains(...)` 判定按钮 ——
+于是整条详情路径被静默跳过，探针输出「什么都没渲染」。
+若不修桩就会把**桩的缺陷**误读成**被测代码坏了**。这一点记在这里，
+因为「探针本身也会撒谎」是这类一次性核对最容易忽略的风险。
+
+对应源码级守卫（可随 CI 长期跑）：
+
+* `test_job_detail_frontend_renders_all_four_sections` —— `app.js` 里四段齐全 + `/results` 被请求 + `.job-results` / `.result-note` 在 CSS 里；
+* `test_job_detail_frontend_shows_the_notes` —— `notes` 真的被渲染；
+* `test_app_js_does_not_hardcode_risk_level_wording` —— 前端使用服务端 `level_label`，且不含写死的中文；
+* `test_runtime_copy_contains_no_markdown_markers` —— 运行时文案里不得出现 `**`
+  （渲染走 `textContent`，出现星号就会原样显示成半成品排版）。
+
+### 8.7 本轮新增的缺口
+
+| 未测项 | 现状 | 风险 |
+|---|---|---|
+| `job_events` 的页面渲染 | 结果区只渲染资产 / 观测派生物；事件流仍只能看 `GET /api/jobs/{id}/events` | 低：事件是排查用的，不是给人读的结论；本轮没有把它列为必做 |
+| `mock` 模式下三段为空 | 有 `MOCK_NOTICE` 明说这是预期行为 | 低：mock 本来就不产生观测，说清楚比伪造数据好 |
+| 四段列表的**截断路径** | 单测用 `monkeypatch` 把上限压到 2 覆盖了 `truncated` 与 `count`；**没有**造一份真实的大数据 | 低：截断逻辑与计数口径都已被断言，缺的只是规模 |
+| 前端结果区的**浏览器**渲染 | DOM 桩 + 源码守卫；仍无浏览器测试（与 §6.5 / §7.5 同一缺口） | 低：桩走的是真实代码路径 |
+| 真实 httpx 属性进入四段的端到端 | `_observe()` 用的是**真实形状**的 httpx 观测（`status_code` / `title` / `webserver` / `tech`），但不是真跑 httpx 子进程 | 低：形状与 `modules/httpx.py:_read_json_results` 一致，且有 `test_diff_matches_httpx_real_key_names` 同源锁定 |
+
+### 8.8 一句话结论
+
+本轮的价值不在 +58，而在**拒绝了一个看起来更漂亮的做法**：
+方案标题里写着「风险信息」，而项目**没有**漏洞扫描能力 ——
+于是本阶段交付的是「可观察事实 + 明确的免责说明 + 覆盖缺口提示」，
+并有用例禁止任何 `severity` / `cve` 字段出现。
+**一个把「没看」和「没问题」分开的页面，比一个看起来很专业的漏洞列表更有用。**
