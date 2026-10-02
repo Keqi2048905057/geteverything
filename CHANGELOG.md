@@ -952,8 +952,11 @@ $ python -m ruff check .     # All checks passed!
 $ python -m pytest           # 1003 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 68 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
-$ python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
+$ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
 ```
+
+> 探针的凭据与地址**都从环境变量读**（`LOCAL_ADMIN_TOKEN` / `GEF_VERIFY_BASE`），
+> 脚本里不写死任何值；缺失时以退出码 2 退出并打印设置方法。
 
 基线演进：上一轮 `901` → **本轮 `1003`**（新增 104：`test_tool_registry.py` 34 +
 `test_projects.py` 26 + `test_public_scan_mode.py` 44）。

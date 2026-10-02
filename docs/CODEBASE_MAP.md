@@ -2259,9 +2259,17 @@ agent/target_ranker.py
 - 真实公网扫描**不在本轮执行范围**：本轮实机验收全部打 `127.0.0.1` 与 RFC 6761 保留域
   `example.test`，`GEF_ALLOW_REAL_SCAN` 只在用例内临时打开。
   `scripts/verify_public_scan.py` 是可复跑的验收探针（只打保留域）。
+  **凭据一律从环境变量读**（`LOCAL_ADMIN_TOKEN`；地址用 `GEF_VERIFY_BASE`，
+  默认 `http://127.0.0.1:5000`），脚本里不写死任何值 —— 这是它能入库的前提。
+  缺失凭据时退出码 2，并打印「该设哪个环境变量」（只打变量名，不打值）。
 - **新增脚本必须进 `test_observability.py:_PRINT_ALLOWLIST`**：`scripts/verify_public_scan.py`
   用 `print` 把每一步的服务端原始响应（含错误体）打到 stdout，这正是它的用途，
-  所以按 `scripts/check_env.py` 的同规格登记了 `main` / `show` 两处。
+  所以按 `scripts/check_env.py` 的同规格登记了 `main` / `show` / `_admin_token` 三处。
   这个守卫的设计意图是**逼人回答「这条信息该不该进结构化日志」**，不是禁止 `print` ——
   漏登记时全量测试会红，正是它该有的行为（本轮就真实触发过一次）。
+  另有 `_ALLOWED_CREDENTIAL_PRINT`，管的是 print 里出现**凭据相关词**
+  （`token|secret|api_key|…`）的位置；注意它匹配的是**词**不是**值**——
+  正则必然命中「只是提到变量名」的语句，登记时必须自己确认打出来的是名字还是值
+  （探针的 `_admin_token` 属于此类：它打印 `LOCAL_ADMIN_TOKEN` 这个名字，
+  而且正是因为「没有值」才走到那一句）。
 
