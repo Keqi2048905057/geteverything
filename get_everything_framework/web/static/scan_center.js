@@ -4,8 +4,17 @@
  *
  *   步骤 1 · 输入目标      → 填目标，点「检查授权」调 POST /api/public-jobs/check
  *   步骤 2 · 确认授权范围  → 选项目 + 选范围（不够就现场补一个）
- *   步骤 3 · 选择工具      → 选 Scan Profile（资产发现 / Web 检查 / 自定义）
+ *   步骤 3 · 选择工具      → 选 Scan Profile（资产发现 / Web 基础检查 / 自定义），
+ *                            每张卡片上同时写明**节奏**（低频 / 常规）
  *   步骤 4 · 执行模式与提交 → mock 或 real，创建任务
+ *
+ * ── Scan Profile = 工具组合 + 节奏（下一阶段方案第 5、6 节 Phase 3） ──
+ * 节奏（`core/pace.py`）是「这个 Profile 打得多快」，不是权限：
+ *  * `light`  低频 —— 后端把并发与每秒请求数压下来，并在真实步骤之间留间隔；
+ *  * `normal` 常规 —— 完全沿用工具自身配置（历史行为）。
+ * 前端的责任只有两件：**如实显示**，以及**原样转发**。合并规则（模板档位与
+ * 请求档位取更保守的一档）只在服务端实现一次，因此这里把 pace 改错也放松不了
+ * 任何东西 —— 这正是「前端不是安全边界」的既有约定。
  *
  * ── 为什么第 1 步是「检查授权」而不是直接创建任务 ──────────────
  * 以前用户填完目标点创建，越界 / 没开 active_scan / 没开环境开关这三种情况
@@ -39,7 +48,17 @@
   "use strict";
 
   var ACTIVE_STRATEGY = "asset_discovery";
+  /**
+   * 当前选中策略的节奏档位（`light` / `normal`，见后端 `core/pace.py`）。
+   *
+   * 它是**提交时随请求带上的**一个字段，不是前端判定：服务端仍然按
+   * 「模板档位 + 请求档位取更保守的那一档」重新算一次，因此这里改错也放松不了
+   * 任何东西。带上它的意义是「你看到的节奏」与「请求里的节奏」是同一个值。
+   */
+  var ACTIVE_PACE = "light";
   var metadata = null;
+  /** pace key → {pace, pace_label, pace_description, step_delay_seconds} */
+  var paceIndex = {};
   /** scope_id → Scope 对象（来自 `GET /api/scopes`），用于把 ID 翻译成人话。 */
   var scopeIndex = {};
   /** 上一次试算的原始目标，用于「补范围」时自动带过去。 */
@@ -194,6 +213,15 @@
     return span;
   }
 
+  /** 节奏档位 → 「低频 · 降低并发与速率」。元数据缺席时退化为只显示 key。 */
+  function paceLabelOf(pace) {
+    var item = paceIndex[pace];
+    if (!item) return "节奏: " + pace;
+    var text = "节奏: " + item.pace_label;
+    if (item.pace_description) text += " · " + item.pace_description;
+    return text;
+  }
+
   // ── 元数据（项目 / 范围 / 策略 / 工具权限） ───────────────
 
   function loadMetadata() {
@@ -219,6 +247,10 @@
         }
 
         metadata = center;
+        paceIndex = {};
+        (center.paces || []).forEach(function (item) {
+          paceIndex[item.pace] = item;
+        });
         renderStrategies(center.strategies, center.restricted_tools);
         renderToolList(center.tools, center.restricted_tools);
         fillProjectSelects(center.projects);
@@ -266,8 +298,16 @@
       toolLine.textContent = parts.join(" · ") || "工具由你自选";
       label.appendChild(toolLine);
 
+      // 节奏是 Scan Profile 的第二维，必须和工具一样**写在卡片上**：
+      // 只把「低频」放在一句可切换的说明里，用户切走策略后就再也看不见它了。
+      var paceLine = document.createElement("span");
+      paceLine.className = "sc-strategy-pace";
+      paceLine.textContent = paceLabelOf(strategy.pace);
+      label.appendChild(paceLine);
+
       label.addEventListener("click", function () {
         ACTIVE_STRATEGY = strategy.key;
+        ACTIVE_PACE = strategy.pace || ACTIVE_PACE;
         Array.prototype.forEach.call(box.querySelectorAll(".sc-strategy"), function (node) {
           node.classList.toggle("is-selected", node.getAttribute("data-strategy") === strategy.key);
         });
@@ -278,6 +318,17 @@
 
       box.appendChild(label);
     });
+
+    // 首屏（还没点过任何卡片）也要显示**当前选中那一个**的节奏，
+    // 而不是 HTML 里写死的一句 —— 写死的文案会随着模板改动悄悄过期。
+    var active = null;
+    strategies.forEach(function (strategy) {
+      if (strategy.key === ACTIVE_STRATEGY) active = strategy;
+    });
+    if (active) {
+      ACTIVE_PACE = active.pace || ACTIVE_PACE;
+      setText("strategy-note", active.name + "：" + active.description, false);
+    }
 
     // 受限工具单独说明一次，避免用户以为界面漏了 nuclei。
     // 写进**独立**的提示元素，不再往 strategy-note 上累加 ——
@@ -762,6 +813,9 @@
         scope_id: (scopeSelect && scopeSelect.value) || "",
         targets: targets,
         strategy: ACTIVE_STRATEGY,
+        // 节奏随请求带上：服务端仍会按「模板档位 + 请求档位」取更保守的一档，
+        // 前端给错也放松不了任何东西；带上只是让请求与页面显示同一个值。
+        pace: ACTIVE_PACE,
       };
       if (ACTIVE_STRATEGY === "custom") payload.tools = selectedCustomTools();
       if ($("job-mock") && $("job-mock").checked) payload.mode = "mock";
@@ -775,6 +829,7 @@
         setText(
           "job-feedback",
           "任务已创建：" + data.job_id + "（" + data.status + "，模式 " + data.mode +
+            "，节奏 " + (data.pace_label || data.pace || ACTIVE_PACE) +
             "，共 " + data.total_steps + " 步）。worker 会异步执行。",
           false
         );

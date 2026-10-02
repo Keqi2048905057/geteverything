@@ -42,9 +42,19 @@ def create_job():
           "targets": ["example.test"],
           "tools": ["subfinder"],
           "mode": "mock",
+          "pace": "normal",          // 可选，见下
           "scenario": "success",     // 可选，仅 mock
           "idempotency_key": "..."   // 可选，见下
         }
+
+    ``pace``（可选，``light`` / ``normal``，见 ``core/pace.py``）：这是
+    「这条任务按多快的节奏跑」的**收紧**开关，不是权限开关 —— 它不能放开
+    Scope、``active_scan``、环境总开关与公网工具白名单中的任何一条。
+    缺省 ``normal``（= 引入 Scan Profile 之前的行为，不降速、不等待）；
+    ``light`` 会降低工具并发与每秒请求数，并在真实步骤之间留出间隔。
+    这条入口没有策略模板，基线就是 ``normal``，所以它只能把节奏**调低**
+    （写 ``normal`` 与不写等效），不存在「调高」这回事。
+    非法值 400，不静默回退 —— 拼错的档位拿到常规档是最危险的错法。
 
     幂等（P0-7a）：带 ``idempotency_key`` 时，同一个键在「上一个同键任务还没终结」
     期间只会产生一个任务；重复请求返回**同一个** ``job_id``，响应里
@@ -75,6 +85,7 @@ def create_job():
         mode=payload.get("mode"),
         scenario=payload.get("scenario"),
         idempotency_key=payload.get("idempotency_key"),
+        pace=payload.get("pace"),
     )
 
     return jsonify(submission.to_dict()), 202

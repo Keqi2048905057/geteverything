@@ -38,7 +38,7 @@ class SubfinderRunner(BaseRunner):
     def build_command(self, domain, options=None):
         """
         构建 Subfinder 命令行：subfinder -d <domain> -t <threads> -o <output_file>
-        可选参数包括 -timeout 和 -silent。
+        可选参数包括 ``-timeout``、``-silent`` 与 ``-rl``（每秒请求上限）。
 
         Args:
             domain: 目标域名字符串。
@@ -58,6 +58,12 @@ class SubfinderRunner(BaseRunner):
             "-o",
             output_file,
         ]
+
+        # 低频档（``core.pace``）会往 config 副本里塞 ``rate_limit``：
+        # 只有配置里真的有这个键才拼 ``-rl``，因此常规档的命令行与历史逐字节一致。
+        rate_limit = self.config.get("rate_limit")
+        if rate_limit:
+            cmd.extend(["-rl", str(rate_limit)])
 
         timeout = self.config.get("timeout")
         if timeout:

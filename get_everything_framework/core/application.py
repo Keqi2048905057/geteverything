@@ -73,6 +73,7 @@ from config import SCAN_LIMITS
 from core import audit, jobs as jobs_store, observability, projects, uploads
 from core.errors import BadRequestError
 from core.mock import SCENARIOS, normalize_scenario
+from core.pace import DEFAULT_PACE, PACE_LABELS, PACE_LEVELS, coerce_pace, resolve_pace
 from core.policy import validate_job_targets
 from core.projects import Project
 from core.safety import MODE_MOCK, MODE_REAL, resolve_mode
@@ -80,6 +81,7 @@ from core.scope import Scope
 from core.tool_registry import (
     STRATEGY_ASSET_DISCOVERY,
     assert_tools_internet_allowed,
+    resolve_strategy_pace,
     resolve_strategy_tools,
 )
 
@@ -144,6 +146,7 @@ class JobSubmission:
         targets: 实际入库的、已过 Scope 校验的目标列表。
         reused: 是否命中幂等键（``True`` 表示没有新建任务）。
         idempotency_key: 规范化后的幂等键，未提供时为 ``None``。
+        pace: 最终生效的扫描节奏（``light`` / ``normal``，见 :mod:`core.pace`）。
     """
 
     job: dict
@@ -153,9 +156,11 @@ class JobSubmission:
     targets: list[str]
     reused: bool
     idempotency_key: str | None = None
+    pace: str = DEFAULT_PACE
 
     def to_dict(self) -> dict:
         """``POST /api/jobs`` 的响应体（202 Accepted）。"""
+        pace = coerce_pace(self.pace)
         return {
             "ok": True,
             "job_id": self.job["id"],
@@ -164,6 +169,10 @@ class JobSubmission:
             "total_steps": self.job["total_steps"],
             "scope_id": self.job["scope_id"],
             "reused": self.reused,
+            # 把「这次任务按什么节奏跑」如实回给调用方：页面要显示它，
+            # 脚本要能断言它，而执行期是**从库里读回**同一个值（不做第二份判定）。
+            "pace": pace,
+            "pace_label": PACE_LABELS.get(pace, pace),
         }
 
 
@@ -177,6 +186,7 @@ def create_scan_job(
     scenario: str | None = None,
     idempotency_key: Any = None,
     created_by: str = "local-admin",
+    pace: Any = None,
 ) -> JobSubmission:
     """创建扫描任务的**唯一**编排入口。
 
@@ -196,6 +206,9 @@ def create_scan_job(
         scenario: 仅 mock 有效的场景名。
         idempotency_key: 可选幂等键（同一键只允许一个未终结任务）。
         created_by: 创建者标识。
+        pace: 扫描节奏（``light`` / ``normal``）。缺省 ``normal``，即与引入
+            Scan Profile 之前**逐字节一致**的历史行为；调用方若传非法值则
+            400（不静默回退 —— 写了拼错的档位却拿到常规档是最危险的错法）。
 
     Returns:
         JobSubmission: 含 job / scope / 实际入库的 tools 与 targets。
@@ -218,6 +231,22 @@ def create_scan_job(
         key = jobs_store.normalize_idempotency_key(idempotency_key)
     except ValueError as exc:
         raise BadRequestError(str(exc), details={"field": "idempotency_key"}) from exc
+
+    # 节奏：缺省 ``normal``（= 历史行为），非法值 400。
+    # 放在工具校验之前判，与幂等键同理：参数格式错误应当先于「工具不支持」报出。
+    #
+    # 用 ``resolve_pace`` 而不是宽松的 ``coerce_pace``：请求体里写了拼错的档位
+    # （例如 ``"low"``）必须报错，而不是静默落成 ``normal`` —— 那样使用者会以为
+    # 自己已经用了最保守的一档。读**库里的**历史值才用宽松版本（见 core/jobs.py）。
+    # ``create_authorized_public_job`` 已经把模板档位与请求档位合并过，
+    # 这里再走一次是幂等的（合法档位合并后仍是它自己），不存在第二份判定。
+    try:
+        resolved_pace = resolve_pace(DEFAULT_PACE, pace)
+    except ValueError as exc:
+        raise BadRequestError(
+            str(exc),
+            details={"field": "pace", "supported": list(PACE_LEVELS)},
+        ) from exc
 
     # 延迟导入：``core/`` 是纯领域层，不在 import 期依赖顶层编排模块
     # （``tool_runner`` → ``modules/`` → ``core.errors``，避免潜在环）。
@@ -261,6 +290,7 @@ def create_scan_job(
         scenario=chosen_scenario,
         created_by=created_by,
         idempotency_key=key,
+        pace=resolved_pace,
     )
 
     detail: dict = {
@@ -269,6 +299,7 @@ def create_scan_job(
         "tools": selected_tools,
         "targets": validated_targets,
         "total_steps": job["total_steps"],
+        "pace": resolved_pace,
     }
     if reused:
         # 命中已有任务不是一次「新建」：只记一条「重复请求被折叠」的可追溯记录
@@ -299,6 +330,7 @@ def create_scan_job(
         targets=validated_targets,
         reused=reused,
         idempotency_key=key,
+        pace=resolved_pace,
     )
 
 
@@ -318,6 +350,7 @@ class AuthorizedJobSubmission:
         strategy: 生效的策略模板 key。
         tools: 最终工具列表（已过公网白名单）。
         targets: 已过 Scope 校验的目标。
+        pace: 最终生效的节奏（模板缺省与请求合并后的结果，只能收紧）。
     """
 
     submission: JobSubmission
@@ -325,6 +358,7 @@ class AuthorizedJobSubmission:
     strategy: str
     tools: list[str]
     targets: list[str]
+    pace: str = DEFAULT_PACE
 
     def to_dict(self) -> dict:
         """``POST /api/public-jobs`` 的响应体（沿用 202 Accepted）。"""
@@ -348,6 +382,7 @@ def create_authorized_public_job(
     upload_id: Any = None,
     strategy: str | None = None,
     tools: Any = None,
+    pace: Any = None,
     mode: str | None = None,
     scenario: str | None = None,
     idempotency_key: Any = None,
@@ -364,7 +399,10 @@ def create_authorized_public_job(
     1. ``project_id`` 必填且项目必须存在（404 记录在案）；
     2. ``scope_id`` 必须**已关联到该项目** —— 光有 Scope 不算授权证据；
     3. 策略模板解析出的工具必须全部在公网白名单内
-       （:func:`core.tool_registry.assert_tools_internet_allowed`）。
+       （:func:`core.tool_registry.assert_tools_internet_allowed`）；
+    4. 节奏档位由模板缺省与请求合并得出，且**只能收紧**
+       （:func:`core.tool_registry.resolve_strategy_pace`）。
+       「低频资产发现」因此不会被一次请求改回常规档。
 
     模式语义（刻意如此，不要改成「静默降级」）：缺省 ``real``。
     如果环境开关 ``GEF_ALLOW_REAL_SCAN`` 没开，这里会**明确报 403**，
@@ -378,6 +416,8 @@ def create_authorized_public_job(
         upload_id: 受控上传 ID（与 ``targets`` 可同时给出）。
         strategy: 策略模板 key，缺省 ``asset_discovery``。
         tools: 自定义工具列表（仅 ``custom`` 模板允许）。
+        pace: 请求体显式指定的节奏（可选）。只能把模板档位**收紧**到
+            ``light``，不能放松；非法值 400。
         mode: ``real`` / ``mock``；缺省 ``real``。
         scenario: 仅 mock 有效的场景名。
         idempotency_key: 可选幂等键。
@@ -417,6 +457,10 @@ def create_authorized_public_job(
     resolved_tools = resolve_strategy_tools(resolved_strategy, split_str_list(tools, "tools"))
     assert_tools_internet_allowed(resolved_tools)
 
+    # 节奏闸门：模板自带一档（当前三档模板全是 ``light``），请求体只能收紧。
+    # 放在工具闸门之后：工具越权是更根本的问题，应当先报出来。
+    resolved_pace = resolve_strategy_pace(resolved_strategy, pace)
+
     # 缺省 real：公网授权测试的语义就是真实扫描，不静默降级。
     submission = create_scan_job(
         scope_id=scope_ref,
@@ -427,6 +471,7 @@ def create_authorized_public_job(
         scenario=scenario,
         idempotency_key=idempotency_key,
         created_by=created_by,
+        pace=resolved_pace,
     )
 
     return AuthorizedJobSubmission(
@@ -435,4 +480,5 @@ def create_authorized_public_job(
         strategy=resolved_strategy or STRATEGY_ASSET_DISCOVERY,
         tools=resolved_tools,
         targets=list(submission.targets),
+        pace=resolved_pace,
     )

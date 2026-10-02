@@ -11,6 +11,18 @@
 让「授权公网测试模式」可以在不碰 Runner、不碰 Scope/Policy 判定的前提下，
 于 Application Service 层多出一道**工具白名单**闸门。
 
+## 扫描节奏（Scan Profile 的第二维，下一阶段方案第 5、6 节 Phase 3）
+
+「引入 Scan Profile」不能只等于「换个工具组合」：同一组工具在别人的资产上
+可以打得多快，是使用者真正关心的第二个问题。因此每个模板额外带一档
+``pace``（见 :mod:`core.pace`），由 :func:`resolve_strategy_tools` 的姊妹函数
+``core.application.create_authorized_public_job`` 解析并落进任务审计，
+最终由 ``jobs.executor`` 在执行期**真正执行**（降低并发 / 请求速率 / 步骤间隔），
+而不是只在页面上写一句「低频」。
+
+节奏**不是**安全闸门：Scope、``active_scan``、``GEF_ALLOW_REAL_SCAN``、
+公网工具白名单各自独立判定，本模块不参与，也不放松其中任何一条。
+
 ## 与既有边界的关系
 
 * 本模块**不判定 Scope**，也**不判定环境开关** —— 那两件事仍然只发生在
@@ -30,6 +42,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from core.errors import BadRequestError
+from core.pace import (
+    DEFAULT_PACE,
+    PACE_LABELS,
+    PACE_LEVELS,
+    PACE_LIGHT,
+    coerce_pace,
+    resolve_pace,
+)
 
 # ── 风险等级 ──────────────────────────────────────────────
 
@@ -285,7 +305,7 @@ STRATEGY_CUSTOM = "custom"
 
 @dataclass(frozen=True)
 class ScanStrategy:
-    """一档扫描策略模板。
+    """一档扫描策略模板（Scan Profile = 工具组合 + 节奏）。
 
     Attributes:
         key: 模板标识（请求里传这个值）。
@@ -295,6 +315,9 @@ class ScanStrategy:
         restricted_tools: 模板提到但当前**不可用**的工具（如 ``nuclei``），
             只用于前端如实展示，绝不进入任务。
         risk_level: 模板整体风险等级（取其中最高的工具）。
+        pace: 该模板的**缺省节奏**（见 :mod:`core.pace`）。请求可以把它
+            收紧到 ``light``，但**不能**把它放松 —— 见
+            :func:`resolve_strategy_pace`。
     """
 
     key: str
@@ -303,8 +326,10 @@ class ScanStrategy:
     tools: list[str] = field(default_factory=list)
     restricted_tools: list[str] = field(default_factory=list)
     risk_level: str = RISK_LOW
+    pace: str = DEFAULT_PACE
 
     def to_dict(self) -> dict:
+        pace = coerce_pace(self.pace)
         return {
             "key": self.key,
             "name": self.name,
@@ -313,34 +338,47 @@ class ScanStrategy:
             "restricted_tools": list(self.restricted_tools),
             "risk_level": self.risk_level,
             "risk_label": RISK_LABELS.get(self.risk_level, self.risk_level),
+            "pace": pace,
+            "pace_label": PACE_LABELS.get(pace, pace),
         }
 
 
-#: 三档模板（方案第 4 节）。工具名**必须**在 :data:`TOOL_POLICIES` 里且
-#: ``internet_allowed=True``，否则 :func:`resolve_strategy_tools` 会拒绝 ——
+#: 三档模板（方案第 4 节；节奏维度见下一阶段方案第 5、6 节 Phase 3）。
+#: 工具名**必须**在 :data:`TOOL_POLICIES` 里且 ``internet_allowed=True``，
+#: 否则 :func:`resolve_strategy_tools` 会拒绝 ——
 #: 这条不变量有测试锁定，避免以后有人往模板里塞一个禁止公网的工具。
+#:
+#: 三档模板的节奏**一律是** ``light``：公网授权测试打的是**别人的**资产，
+#: 「拿到书面授权」不等于「可以施加任意流量」。这条默认值是硬约束的一部分，
+#: 请求体只能把它收紧（本来就是最紧的一档），永远无法放松
+#: —— 见 :func:`resolve_strategy_pace`。
+#: ``normal`` 档因此只出现在**不带模板**的历史入口（``POST /api/jobs``、
+#: 首页表单），那里的目标由使用者自己提供，行为与引入本模块之前逐字节一致。
 STRATEGIES: dict[str, ScanStrategy] = {
     STRATEGY_ASSET_DISCOVERY: ScanStrategy(
         key=STRATEGY_ASSET_DISCOVERY,
         name="资产发现",
-        description="被动子域枚举 + 存活探测，流量最轻，适合作为授权测试的第一步。",
+        description="被动子域枚举 + 存活探测。低频档，适合作为授权公网测试的第一步。",
         tools=["subfinder", "httpx"],
         risk_level=RISK_LOW,
+        pace=PACE_LIGHT,
     ),
     STRATEGY_WEB_FINGERPRINT: ScanStrategy(
         key=STRATEGY_WEB_FINGERPRINT,
-        name="Web 信息收集",
-        description="对已知目标做存活与标题/状态码/服务端识别。",
+        name="Web 基础检查",
+        description="对已知目标做存活与标题/状态码/服务端识别，不含漏洞扫描。低频档。",
         tools=["httpx"],
         restricted_tools=["nuclei"],
         risk_level=RISK_LOW,
+        pace=PACE_LIGHT,
     ),
     STRATEGY_CUSTOM: ScanStrategy(
         key=STRATEGY_CUSTOM,
         name="自定义模式",
-        description="由使用者自行勾选工具，仍受公网白名单限制。",
+        description="由使用者自行勾选工具，仍受公网白名单与低频节奏限制。",
         tools=[],
         risk_level=RISK_LOW,
+        pace=PACE_LIGHT,
     ),
 }
 
@@ -354,6 +392,58 @@ def list_strategies() -> list[ScanStrategy]:
     """按固定顺序列出策略模板。"""
     order = (STRATEGY_ASSET_DISCOVERY, STRATEGY_WEB_FINGERPRINT, STRATEGY_CUSTOM)
     return [STRATEGIES[key] for key in order]
+
+
+def resolve_strategy(key: str | None) -> ScanStrategy:
+    """把外部传入的模板 key 解析成模板对象。
+
+    「缺省即资产发现」与「未知即报错」这两条口径集中在这里，避免
+    :func:`resolve_strategy_tools` 与 :func:`resolve_strategy_pace` 各写一份。
+
+    Args:
+        key: 模板标识；``None`` / 空串视为 ``asset_discovery``。
+
+    Returns:
+        ScanStrategy: 命中的模板。
+
+    Raises:
+        BadRequestError: 模板未登记（``details["supported"]`` 给出合法取值）。
+    """
+    resolved_key = (key or STRATEGY_ASSET_DISCOVERY).strip().lower() or STRATEGY_ASSET_DISCOVERY
+    strategy = get_strategy(resolved_key)
+    if strategy is None:
+        raise BadRequestError(
+            f"未知的扫描策略: {key!r}",
+            details={"field": "strategy", "supported": [item.key for item in list_strategies()]},
+        )
+    return strategy
+
+
+def resolve_strategy_pace(key: str | None, requested: object = None) -> str:
+    """解析本次任务最终生效的**节奏**档位。
+
+    模板自带一档缺省节奏（``asset_discovery`` 是 ``light``），请求体可以
+    显式再指定一次。合并规则见 :func:`core.pace.resolve_pace`：**只能收紧**，
+    因此「低频资产发现」不会被一次请求悄悄改回常规档。
+
+    Args:
+        key: 模板标识（``None`` 视为 ``asset_discovery``）。
+        requested: 请求体里的 ``pace``；``None`` / 空串表示不干预。
+
+    Returns:
+        str: ``light`` 或 ``normal``。
+
+    Raises:
+        BadRequestError: 模板未知，或 ``requested`` 不是合法档位。
+    """
+    strategy = resolve_strategy(key)
+    try:
+        return resolve_pace(strategy.pace, requested)
+    except ValueError as exc:
+        raise BadRequestError(
+            str(exc),
+            details={"field": "pace", "supported": list(PACE_LEVELS)},
+        ) from exc
 
 
 def resolve_strategy_tools(key: str | None, tools: list[str] | None = None) -> list[str]:
@@ -376,13 +466,7 @@ def resolve_strategy_tools(key: str | None, tools: list[str] | None = None) -> l
     Raises:
         BadRequestError: 模板不存在、自定义模式没给工具，或工具与模板不一致。
     """
-    resolved_key = (key or STRATEGY_ASSET_DISCOVERY).strip().lower() or STRATEGY_ASSET_DISCOVERY
-    strategy = get_strategy(resolved_key)
-    if strategy is None:
-        raise BadRequestError(
-            f"未知的扫描策略: {key!r}",
-            details={"field": "strategy", "supported": [item.key for item in list_strategies()]},
-        )
+    strategy = resolve_strategy(key)
 
     requested = [str(item).strip() for item in (tools or []) if str(item).strip()]
 

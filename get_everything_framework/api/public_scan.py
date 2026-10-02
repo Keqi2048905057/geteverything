@@ -5,7 +5,7 @@
 * ``POST /api/public-jobs``        —— 在授权项目下创建公网测试任务（需登录）
 * ``POST /api/public-jobs/check``  —— **只读试算**：目标落在哪些授权范围内、
   现在缺哪一道闸门（需登录）
-* ``GET  /api/scan-center``        —— 扫描中心的元数据（项目 / 策略模板 / 工具权限）
+* ``GET  /api/scan-center``        —— 扫描中心的元数据（项目 / 策略模板 / 工具权限 / 节奏档位）
 
 硬性要求（方案第 2、6 节）：
 
@@ -32,6 +32,7 @@ from core import authorization, projects
 from core.application import create_authorized_public_job, split_str_list
 from core.auth import require_admin
 from core.errors import BadRequestError
+from core.pace import list_paces
 from core.tool_registry import (
     KNOWN_UNAVAILABLE_TOOLS,
     internet_allowed_tools,
@@ -52,16 +53,17 @@ def create_public_job():
           "targets": ["www.example.test"],
           "strategy": "asset_discovery",  // 可选，缺省资产发现
           "tools": ["httpx"],             // 仅 strategy=custom 时使用
+          "pace": "light",                // 可选，只能收紧到 light，不能放松
           "mode": "real",                 // 可选，缺省 real
           "idempotency_key": "..."        // 可选
         }
 
     Returns:
         202 + 与 ``POST /api/jobs`` 同形状的响应，外加 ``project_id`` /
-        ``strategy`` / ``authorized_public``。
+        ``strategy`` / ``authorized_public`` / ``pace``。
 
     Raises:
-        BadRequestError: 参数缺失、策略非法、工具不在公网白名单。
+        BadRequestError: 参数缺失、策略非法、工具不在公网白名单、``pace`` 非法。
         NotFoundError: 项目不存在。
         ScopeViolationError: Scope 未开 ``active_scan``，或环境开关未开，或目标越界。
     """
@@ -78,6 +80,7 @@ def create_public_job():
         upload_id=payload.get("upload_id"),
         strategy=payload.get("strategy"),
         tools=payload.get("tools") or payload.get("tool"),
+        pace=payload.get("pace"),
         mode=payload.get("mode"),
         scenario=payload.get("scenario"),
         idempotency_key=payload.get("idempotency_key"),
@@ -158,7 +161,10 @@ def scan_center_metadata():
     一次给全，前端不必串行请求三个接口：
 
     * ``projects``       —— 可选项目（含已关联 Scope 的 ID，但不含目标清单）；
-    * ``strategies``     —— 三档策略模板（含 ``nuclei`` 这类「受限但登记在案」的项）；
+    * ``strategies``     —— 三档策略模板（含 ``nuclei`` 这类「受限但登记在案」的项，
+      以及每档的 ``pace`` / ``pace_label``）；
+    * ``paces``          —— 扫描节奏档位（``light`` / ``normal``）与各自的含义、
+      步骤间隔秒数，供页面解释「低频到底是什么」；
     * ``tools``          —— 工具权限元数据（风险等级 / 是否允许公网 / 默认勾选）；
     * ``internet_allowed_tools`` —— 第一阶段公网白名单，便于前端把禁用项置灰。
 
@@ -172,6 +178,7 @@ def scan_center_metadata():
             "ok": True,
             "projects": [item.to_dict() for item in items],
             "strategies": [item.to_dict() for item in list_strategies()],
+            "paces": list_paces(),
             "tools": [item.to_dict() for item in list_tool_policies()],
             "restricted_tools": [item.to_dict() for item in KNOWN_UNAVAILABLE_TOOLS.values()],
             "internet_allowed_tools": internet_allowed_tools(),

@@ -196,6 +196,10 @@ def test_strategy_to_dict_shape():
         "restricted_tools",
         "risk_level",
         "risk_label",
+        # Scan Profile 的第二维：节奏（下一阶段方案第 5、6 节 Phase 3）。
+        # 它必须随模板一起下发，否则前端只能靠猜或者写死一份文案。
+        "pace",
+        "pace_label",
     }
 
 

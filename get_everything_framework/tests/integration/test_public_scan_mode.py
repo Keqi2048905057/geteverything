@@ -760,6 +760,44 @@ def test_scan_center_page_hides_internal_ids_in_labels(admin_client):
     assert 'id.textContent = project.id' not in source
 
 
+def test_scan_center_frontend_shows_and_forwards_the_pace(admin_client):
+    """前端必须**显示**节奏，并把选中的节奏**原样转发**。
+
+    两条都不可少：
+    * 只显示不转发 —— 请求里没有 ``pace``，服务端按模板档位走，恰好也对（模板是
+      ``light``），但页面显示与请求内容从此可以悄悄不一致；
+    * 只转发不显示 —— 用户不知道自己要打多快，等于把降速做成暗箱。
+
+    这里只做源码级守卫（项目没有浏览器测试）；渲染路径另用一次性 DOM 桩人工核对过。
+    """
+    from pathlib import Path
+
+    js_path = Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js"
+    source = js_path.read_text(encoding="utf-8")
+
+    # 显示：卡片上有节奏行，文案来自服务端元数据（不写死）。
+    assert "sc-strategy-pace" in source
+    assert "paceLabelOf(" in source and "paceIndex" in source
+    assert 'pace: ACTIVE_PACE' in source, "提交时没有把当前节奏带上"
+
+    css_path = Path(__file__).resolve().parents[2] / "web" / "static" / "app.css"
+    assert ".sc-strategy-pace" in css_path.read_text(encoding="utf-8")
+
+
+def test_scan_center_js_does_not_hardcode_pace_wording(admin_client):
+    """节奏的中文说明只应来自服务端（``paces[]``），前端不得写死第二份。
+
+    写死就会漂移：后端把「低频」的解释改了，页面还停在上一个版本。
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    for hardcoded in ("降低并发与请求速率", "使用工具默认并发与速率"):
+        assert hardcoded not in source, f"scan_center.js 写死了节奏说明: {hardcoded}"
+
+
 def test_scan_center_page_separates_restricted_tools_note(admin_client):
     """受限工具说明写进**独立**元素，不再往策略说明上累加。
 
@@ -779,3 +817,329 @@ def test_scan_center_page_renders_recent_jobs(admin_client, fake_real_runner):
 
     body = admin_client.get("/scan-center").get_data(as_text=True)
     assert job_id in body
+
+
+# ── Phase 3：Scan Profile = 工具组合 + 节奏（下一阶段方案第 5、6 节） ──
+#
+# 这一节要证的不是「页面显示了低频」，而是「低频真的改变了发出去的请求」：
+# 后端把节奏翻译成 Runner 的 ``-t`` / ``-rl``，并在真实步骤之间留出间隔。
+# 所有 real 用例都把 ``build_runner`` 换成假 runner，因此没有任何外部流量。
+
+
+def test_scan_center_metadata_exposes_paces(admin_client, monkeypatch):
+    """``/api/scan-center`` 必须下发档位元数据 —— 否则页面只能写死一份文案。"""
+    # conftest 把低频间隔钉成 0（测试不该为礼貌间隔付墙钟），这里恢复一个
+    # 真实值来验证「元数据如实反映当前设置」，而不是断言一个写死的常数。
+    monkeypatch.setenv("GEF_PACE_LIGHT_STEP_DELAY_SEC", "1.5")
+    body = admin_client.get("/api/scan-center").get_json()
+
+    paces = {item["pace"]: item for item in body["paces"]}
+    assert set(paces) == {"light", "normal"}
+    assert paces["light"]["pace_label"] == "低频"
+    assert paces["light"]["pace_description"]
+    # 低频档必须真的带一个正的间隔秒数，否则「低频」与「常规」没有可观察差别。
+    assert paces["light"]["step_delay_seconds"] == 1.5
+    assert paces["normal"]["step_delay_seconds"] == 0
+
+
+def test_every_strategy_card_carries_its_pace(admin_client):
+    """每张策略卡片都要带节奏 —— 卡片是用户唯一能看见 Profile 全貌的地方。"""
+    body = admin_client.get("/api/scan-center").get_json()
+
+    for strategy in body["strategies"]:
+        assert strategy["pace"] in {"light", "normal"}, strategy
+        assert strategy["pace_label"], strategy
+
+
+def test_public_job_defaults_to_the_template_pace(admin_client, fake_real_runner):
+    """资产发现模板的缺省档是 ``light``：公网测试的第一步必须最保守。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id)
+    assert resp.status_code == 202, resp.get_json()
+    body = resp.get_json()
+    assert body["pace"] == "light"
+    assert body["pace_label"] == "低频"
+
+    # 落库的创建事件与审计都要记下这一档，否则「这个任务当时按什么节奏跑」不可查。
+    job_id = body["job_id"]
+    created = next(
+        event for event in jobs_store.list_events(job_id) if event["event_type"] == jobs_store.EVENT_JOB_CREATED
+    )
+    assert created["detail"]["pace"] == "light"
+    assert jobs_store.pace_of_job(job_id) == "light"
+
+    audited = [
+        event for event in audit.list_events(limit=50) if event["event_type"] == audit.EVENT_JOB_CREATED
+    ]
+    entry = next(event for event in audited if event["target_id"] == job_id)
+    assert entry["detail"]["pace"] == "light"
+
+
+def test_public_job_request_cannot_relax_the_template_pace(admin_client, fake_real_runner):
+    """**只能收紧**：请求里写 ``pace=normal`` 也改不回常规档。
+
+    这是本阶段最重要的一条 —— 如果请求能放松模板档位，那么「低频资产发现」
+    就只是一个可以被一次 HTTP 请求改掉的界面文案。
+    """
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, pace="normal")
+    assert resp.status_code == 202, resp.get_json()
+    assert resp.get_json()["pace"] == "light"
+    assert jobs_store.pace_of_job(resp.get_json()["job_id"]) == "light"
+
+
+def test_public_job_accepts_an_explicit_light_pace(admin_client, fake_real_runner):
+    """显式写 ``light`` 与缺省结果一致（幂等，不产生第二份判定）。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, pace="light")
+    assert resp.status_code == 202
+    assert resp.get_json()["pace"] == "light"
+
+
+def test_public_job_rejects_an_unknown_pace(admin_client, fake_real_runner):
+    """非法档位必须 400 而不是静默回退 —— 写错 ``low`` 却拿到常规档最危险。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, pace="low")
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["error_code"] == "bad_request"
+    assert body["details"]["field"] == "pace"
+    assert body["details"]["supported"] == ["light", "normal"]
+    assert jobs_store.list_jobs() == []
+
+
+def test_job_detail_reports_the_pace(admin_client, fake_real_runner):
+    """``GET /api/jobs/<id>`` 要能回答「这个任务是按什么节奏跑的」。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+    job_id = _public_job(admin_client, project["id"], scope_id).get_json()["job_id"]
+
+    detail = admin_client.get(f"/api/jobs/{job_id}").get_json()["job"]
+    assert detail["pace"] == "light"
+
+
+def test_legacy_job_entry_still_defaults_to_normal(admin_client):
+    """历史入口（``POST /api/jobs``，不带模板）必须保持引入前的行为：常规档。
+
+    这是 Phase 3 的回归底线 —— 加了 Scan Profile 不能让老调用方突然变慢。
+    """
+    scope_id = _make_scope(admin_client, active_scan=False)
+    resp = admin_client.post(
+        "/api/jobs",
+        json={"scope_id": scope_id, "targets": ["www.example.test"], "tools": ["subfinder"]},
+    )
+    assert resp.status_code == 202, resp.get_json()
+    body = resp.get_json()
+    assert body["pace"] == "normal"
+    assert jobs_store.pace_of_job(body["job_id"]) == "normal"
+
+
+def test_legacy_job_entry_accepts_an_explicit_light_pace(admin_client):
+    """老入口也能被**收紧**到低频档（运维手工降速的正规入口）。"""
+    scope_id = _make_scope(admin_client, active_scan=False)
+    resp = admin_client.post(
+        "/api/jobs",
+        json={
+            "scope_id": scope_id,
+            "targets": ["www.example.test"],
+            "tools": ["subfinder"],
+            "pace": "light",
+        },
+    )
+    assert resp.status_code == 202
+    assert resp.get_json()["pace"] == "light"
+
+
+def test_legacy_job_entry_rejects_an_unknown_pace(admin_client):
+    scope_id = _make_scope(admin_client, active_scan=False)
+    resp = admin_client.post(
+        "/api/jobs",
+        json={
+            "scope_id": scope_id,
+            "targets": ["www.example.test"],
+            "tools": ["subfinder"],
+            "pace": "turbo",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["details"]["field"] == "pace"
+    assert jobs_store.list_jobs() == []
+
+
+def test_light_pace_reaches_the_runner_config(admin_client, monkeypatch):
+    """低频档必须在**真正发起请求的那一层**生效：Runner 的 config 被换成低预算。
+
+    只断言「接口返回了 pace=light」是不够的 —— 那只能证明它被显示了。
+    这里检查 Runner 实际拿到的 ``config``，也就是 ``build_command`` 读的那个对象。
+    """
+    from core import pace as pace_module
+    from jobs.executor import execute_job
+
+    seen = []
+
+    class _RecordingRunner:
+        category = "subdomain"
+        config = {"threads": 50, "timeout": 10}
+        last_execution = {}
+
+        def __init__(self, tool_name):
+            # 假 Runner 必须如实报出自己被要求扮演的工具名：节奏预算按
+            # ``tool_name`` 查表，报错了就查不到预算（那正是这条用例要抓的）。
+            self.tool_name = tool_name
+
+        def run(self, target):
+            seen.append(dict(self.config))
+            from core.runner_result import RunnerResult
+
+            return RunnerResult.ok([], exit_code=0)
+
+    monkeypatch.setattr("modules.registry.build_runner", lambda name: _RecordingRunner(name))
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+    job_id = _public_job(admin_client, project["id"], scope_id, strategy="web_fingerprint").get_json()["job_id"]
+
+    jobs_store.claim_next_job("w-pace", lease_seconds=300)
+    execute_job(job_id)
+
+    assert seen, "Runner 一次都没被调用"
+    assert seen[0]["threads"] == pace_module.LIGHT_TOOL_BUDGET["httpx"]["threads"]
+    assert seen[0]["rate_limit"] == pace_module.LIGHT_TOOL_BUDGET["httpx"]["rate_limit"]
+
+
+def test_normal_pace_leaves_the_runner_config_untouched(admin_client, monkeypatch):
+    """常规档不得改写 Runner 的 config —— 这是「历史行为不变」的可执行口径。"""
+    from jobs.executor import execute_job
+
+    seen = []
+
+    class _RecordingRunner:
+        tool_name = "subfinder"
+        category = "subdomain"
+        config = {"threads": 50, "timeout": 10}
+        last_execution = {}
+
+        def run(self, target):
+            seen.append(dict(self.config))
+            from core.runner_result import RunnerResult
+
+            return RunnerResult.ok([], exit_code=0)
+
+    monkeypatch.setattr("modules.registry.build_runner", lambda name: _RecordingRunner())
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+
+    scope_id = _make_scope(admin_client, active_scan=True)
+    job_id = admin_client.post(
+        "/api/jobs",
+        json={"scope_id": scope_id, "targets": ["www.example.test"], "tools": ["subfinder"], "mode": "real"},
+    ).get_json()["job_id"]
+
+    jobs_store.claim_next_job("w-pace", lease_seconds=300)
+    execute_job(job_id)
+
+    assert seen == [{"threads": 50, "timeout": 10}]
+    assert "rate_limit" not in seen[0]
+
+
+def test_light_pace_waits_between_real_steps(admin_client, monkeypatch):
+    """低频档在真实步骤之间真的会等 —— 这是「礼貌间隔」的唯一可观察证据。"""
+    import time as time_module
+
+    from jobs.executor import execute_job
+
+    class _Runner:
+        tool_name = "subfinder"
+        category = "subdomain"
+        config = {}
+        last_execution = {}
+
+        def run(self, target):
+            from core.runner_result import RunnerResult
+
+            return RunnerResult.ok([], exit_code=0)
+
+    monkeypatch.setattr("modules.registry.build_runner", lambda name: _Runner())
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    monkeypatch.setenv("GEF_PACE_LIGHT_STEP_DELAY_SEC", "0.3")
+
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+    # 资产发现 = subfinder + httpx，一个目标 → 2 步 → 1 个间隔。
+    job_id = _public_job(admin_client, project["id"], scope_id).get_json()["job_id"]
+
+    jobs_store.claim_next_job("w-pace", lease_seconds=300)
+    started = time_module.perf_counter()
+    execute_job(job_id)
+    elapsed = time_module.perf_counter() - started
+
+    assert elapsed >= 0.3, f"低频档没有在步骤之间等待（耗时 {elapsed:.3f}s）"
+
+
+def test_normal_pace_does_not_wait_between_real_steps(admin_client, monkeypatch):
+    """常规档一次等待都不该多出来（引入 Scan Profile 前是什么样，现在还是）。"""
+    import time as time_module
+
+    from jobs.executor import execute_job
+
+    class _Runner:
+        tool_name = "subfinder"
+        category = "subdomain"
+        config = {}
+        last_execution = {}
+
+        def run(self, target):
+            from core.runner_result import RunnerResult
+
+            return RunnerResult.ok([], exit_code=0)
+
+    monkeypatch.setattr("modules.registry.build_runner", lambda name: _Runner())
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    # 即使低频间隔被设得很大，常规档也**不能**受它影响。
+    monkeypatch.setenv("GEF_PACE_LIGHT_STEP_DELAY_SEC", "5")
+
+    scope_id = _make_scope(admin_client, active_scan=True)
+    job_id = admin_client.post(
+        "/api/jobs",
+        json={
+            "scope_id": scope_id,
+            "targets": ["a.www.example.test", "b.www.example.test"],
+            "tools": ["subfinder"],
+            "mode": "real",
+        },
+    ).get_json()["job_id"]
+
+    jobs_store.claim_next_job("w-pace", lease_seconds=300)
+    started = time_module.perf_counter()
+    execute_job(job_id)
+    elapsed = time_module.perf_counter() - started
+
+    assert elapsed < 2.0, f"常规档多出了等待（耗时 {elapsed:.3f}s）"
+
+
+def test_retry_keeps_the_original_pace(admin_client, fake_real_runner):
+    """retry 之后节奏必须还是原来那一档：它属于任务，不属于某一次执行。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+    job_id = _public_job(admin_client, project["id"], scope_id).get_json()["job_id"]
+
+    jobs_store.claim_next_job("w-pace", lease_seconds=300)
+    jobs_store.finish_job(job_id, status=jobs_store.STATUS_FAILED)
+    assert jobs_store.retry_job(job_id)["status"] == "queued"
+
+    assert jobs_store.pace_of_job(job_id) == "light"
+
+
+def test_pace_of_job_falls_back_for_legacy_rows(app_module):
+    """没有创建事件的老任务读回缺省档，而不是抛异常把 worker 弄停。"""
+    from core import pace as pace_module
+
+    assert jobs_store.pace_of_job("job_does_not_exist") == pace_module.DEFAULT_PACE

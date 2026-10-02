@@ -182,6 +182,7 @@ class HttpxRunner(BaseRunner):
 
         命令行：``httpx -l <input_file> -o <output_file> -json -threads <N>``
         始终启用 ``-title``、``-status-code``、``-web-server``、``-cdn``。
+        配置里带 ``rate_limit`` 时追加 ``-rl``（每秒请求上限，低频档用）。
 
         Args:
             domain: 目标域名字符串。
@@ -205,6 +206,12 @@ class HttpxRunner(BaseRunner):
             "-threads",
             str(self.config["threads"]),
         ]
+
+        # 低频档（``core.pace``）会往 config 副本里塞 ``rate_limit``：
+        # 只有配置里真的有这个键才拼 ``-rl``，因此常规档的命令行与历史逐字节一致。
+        rate_limit = self.config.get("rate_limit")
+        if rate_limit:
+            cmd.extend(["-rl", str(rate_limit)])
 
         timeout = self.config.get("timeout")
         if timeout:

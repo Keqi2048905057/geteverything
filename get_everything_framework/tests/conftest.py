@@ -50,6 +50,13 @@ os.environ.setdefault("SECRET_KEY", "test-only-" + "a1b2c3d4" * 6)
 os.environ["GEF_ALLOW_REAL_SCAN"] = "false"
 os.environ["GEF_LOG_FORMAT"] = "json"
 
+# 扫描节奏（``core.pace``）里低频档的**步骤间隔**同样钉死为 0：
+# 它是「礼貌地少发请求」这一产品行为，不该让整个测试套件为每个低频任务
+# 多付 1.5 秒墙钟（``asset_discovery`` 这类模板的缺省档就是 ``light``）。
+# 需要验证「低频确实会等」的用例自己 ``monkeypatch.setenv`` 一个小值
+# （见 ``tests/unit/test_pace.py``），因此这里归零不会掩盖该行为。
+os.environ["GEF_PACE_LIGHT_STEP_DELAY_SEC"] = "0"
+
 TEST_ADMIN_TOKEN = "test-local-admin-token"
 
 

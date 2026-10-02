@@ -29,6 +29,7 @@ from core import jobs as jobs_store
 from core import observability
 from core.errors import ErrorCode
 from core.mock import run_mock
+from core.pace import DEFAULT_PACE, apply_to_runner, step_delay_for
 from core.runner_result import PARSER_VERSION
 
 # 步骤结果状态 → 任务聚合状态权重
@@ -82,12 +83,21 @@ def _failed_outcome(error_code: str, message: str) -> dict:
     }
 
 
-def _execute_real_step(step: dict, scope_id: str | None = None) -> dict:
+def _execute_real_step(step: dict, scope_id: str | None = None, pace: str = DEFAULT_PACE) -> dict:
     """real 步骤：调用真实 runner 的统一入口 ``run()``。
 
     真实执行前由 API 层完成 Scope 与环境开关校验；这里在执行**之前**再复检一次
     （方案第 5.3 节「每个 Step 执行前」），落盘原始证据并把结果归一化成
     ``job_steps`` 的形状。
+
+    ``pace``（见 :mod:`core.pace`）在**构造之后**写进 runner 的 ``config`` 副本
+    （:func:`core.pace.apply_to_runner`）：低频档因此真的会变成 ``-t 5 -rl 3``
+    这样的命令行参数，而不是页面上的一个标签。
+
+    为什么覆盖 ``config`` 而不是换一条构造路径：``build_runner(tool_name)``
+    是测试替换真实 Runner 的接缝（``monkeypatch.setattr``）。改成
+    ``build_scoped_runner(name, pace)`` 会让所有假 Runner 失效、真的去执行外部
+    命令 —— 那正是「测试期不许打真实目标」这条硬约束最容易被绕过的地方。
 
     ``run()`` 内部已经接住 ``SystemExit`` / ``FileNotFoundError`` /
     ``TimeoutError`` 等异常（否则会直接把 worker 进程带走），因此这里
@@ -117,6 +127,12 @@ def _execute_real_step(step: dict, scope_id: str | None = None) -> dict:
 
     try:
         runner = build_runner(tool_name)
+        # 节奏在真正发起请求的这一层生效。覆盖失败（例如假 Runner 没有 config）
+        # 绝不能影响执行本身，因此单独兜底。
+        try:
+            apply_to_runner(runner, pace)
+        except Exception:  # noqa: BLE001 - 降速是策略，不是执行前提
+            pass
         result = runner.run(target)
     except Exception as exc:  # noqa: BLE001 - 兜底：任何异常都不能带走 worker
         return _failed_outcome(ErrorCode.UNKNOWN_ERROR, f"{type(exc).__name__}: {exc}")
@@ -227,10 +243,14 @@ def execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
     Args:
         job_id: 任务 ID。
         renew: 可选的续租回调，每完成一个步骤调用一次（``callable() -> None``）。
-        step_delay: 每个步骤之间人为 sleep 的秒数。
+        step_delay: 每个步骤之间人为 sleep 的秒数（``--step-delay``）。
 
     Returns:
         dict: 执行后的 job。
+
+    扫描节奏（``core.pace``）**不从这个函数传进来**，而是按 ``job_id`` 从库里
+    读回（:func:`core.jobs.pace_of_job`）—— worker 是独立进程，且任务可能被
+    retry 或在另一个 worker 上重启，节奏必须是任务自身的属性而不是调用参数。
 
     方案第 19 节：整段执行都绑定 ``job_id`` 关联上下文，于是执行期内任何一层
     （包括 runner 与派生资产落盘）打的结构化事件都自动带上 job_id，不需要
@@ -253,37 +273,83 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
     total = len(jobs_store.list_steps(job_id))
     done = total - len(steps)
 
-    # 方案第 19 节：任务开始事件。job_id 绑到本次执行，步骤事件自动继承。
-    observability.log_event(
-        observability.EVENT_JOB_STARTED,
-        job_id=job_id,
-        mode=job["mode"],
-        total_steps=total,
-        pending_steps=len(steps),
-    )
-
     mode = job["mode"]
     scenario = job["scenario"]
     # 执行期复检要用 job 上的 scope_id：步骤快照里没有这一列。
     scope_id = job.get("scope_id")
+
+    # ── 扫描节奏（Scan Profile 的第二维，见 core.pace） ──
+    # **从库里读回**，不从内存里的创建请求传下来：worker 是另一个进程，
+    # 拿不到那次请求的任何内存状态；而且任务被 retry / worker 重启后，
+    # 节奏必须仍然是原来那一档（审计与复现都要求它是可查的事实）。
+    pace = jobs_store.pace_of_job(job_id)
+    # 低频档的「礼貌间隔」只发生在**真实**步骤之间。mock 不产生任何外部流量，
+    # 对它等待只会让演练变慢，不会让任何人少收到一个请求。
+    #
+    # 刻意**不**与 ``--step-delay`` 合并成 ``max()``：那一个参数是运维在命令行上
+    # 显式要求的降速，语义与「这个 Profile 是低频档」不同，两者同时出现时
+    # 叠加是更诚实的结果（使用者自己看得见两处设置）。缺省路径下两者都是 0，
+    # 因此不带 Profile 的任务一次 sleep 都不会多出来。
+    pace_step_delay = step_delay_for(pace) if mode == "real" else 0.0
+
+    # 方案第 19 节：任务开始事件。job_id 绑到本次执行，步骤事件自动继承。
+    # 带上 pace：排障时「这个任务为什么这么慢」应当一眼可见，而不是去猜。
+    observability.log_event(
+        observability.EVENT_JOB_STARTED,
+        job_id=job_id,
+        mode=mode,
+        total_steps=total,
+        pending_steps=len(steps),
+        pace=pace,
+    )
+
     step_statuses: list[str] = [
         step["status"] for step in jobs_store.list_steps(job_id) if step["status"] != jobs_store.STEP_PENDING
     ]
     cancelled = False
+    # 本**轮执行**里是否已经真跑完过至少一步。只用来判断「该不该在两步之间等」：
+    # retry 之后 pending_steps 只剩没跑的步骤，第一步入场等待没有意义。
+    executed_any = False
 
     for step in steps:
         if jobs_store.is_cancel_requested(job_id):
             cancelled = True
             break
 
+        # ── 步骤之间的礼貌间隔（低频档） ──
+        # 与 ``--step-delay`` 同一个位置、同一层：必须在**真正发起请求之前**，
+        # 且不能放进 ``modules/base.py`` —— 那条路绕不到 ``_execute_stdout``、
+        # ``shuffledns`` / ``enscan`` 的自定义流程，mock 也根本不过去。
+        #
+        # 长等待之前先续租：间隔若长过租约，任务会被别的 worker 判成过期而
+        # 标成 interrupted。续租**只在真的会等**的时候调用，因此缺省路径
+        # （不做任何等待）的回调次数与 Phase 3 之前完全一致。
+        if pace_step_delay and executed_any:
+            if renew is not None:
+                renew()
+            deadline = time.monotonic() + pace_step_delay
+            while True:
+                # 分片睡：等待期间取消仍然最多晚 1 秒生效，
+                # 而不是让「取消」被压在一整段长间隔之后。
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if jobs_store.is_cancel_requested(job_id):
+                    cancelled = True
+                    break
+                time.sleep(min(1.0, remaining))
+            if cancelled:
+                break
+
         jobs_store.start_step(step["id"])
+        executed_any = True
         step_started = time.perf_counter()
         # 方案第 19 节：把 step_id 绑到当前执行流，于是这一步内任何一层
         # （runner / 脱敏 / artifact 落盘）打的结构化事件都自动带 step_id。
         with observability.bind(step_id=step["id"]):
             if mode == "real":
                 # real 步骤在执行前重新读一次 Scope 并复检目标（方案第 5.3 节）。
-                outcome = _execute_real_step(step, scope_id)
+                outcome = _execute_real_step(step, scope_id, pace)
             else:
                 outcome = _execute_mock_step(step, scenario)
 

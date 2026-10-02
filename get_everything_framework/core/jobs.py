@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 from core import db
 from core.errors import ErrorCode
 from core.ids import new_job_event_id, new_job_id, new_step_id
+from core.pace import DEFAULT_PACE, coerce_pace
 
 # ── 状态机（方案第 6.1 节） ───────────────────────────────
 
@@ -320,6 +321,7 @@ def create_job(
     scenario: str | None = None,
     created_by: str = "local-admin",
     idempotency_key: str | None = None,
+    pace: str | None = None,
 ) -> dict:
     """创建任务并展开步骤快照，返回 queued 状态的 job（不含「是否命中幂等键」）。
 
@@ -335,6 +337,7 @@ def create_job(
         scenario=scenario,
         created_by=created_by,
         idempotency_key=idempotency_key,
+        pace=pace,
     )
     return job
 
@@ -349,6 +352,7 @@ def create_job_with_status(
     scenario: str | None = None,
     created_by: str = "local-admin",
     idempotency_key: str | None = None,
+    pace: str | None = None,
 ) -> tuple[dict, bool]:
     """创建任务并展开步骤快照，返回 ``(job, reused)``。
 
@@ -368,6 +372,7 @@ def create_job_with_status(
         scenario: mock 场景名（仅 mock 模式有效）。
         created_by: 创建者标识。
         idempotency_key: 可选的幂等键（同一键只允许一个未终结任务）。
+        pace: 扫描节奏档位（``light`` / ``normal``）。见 :mod:`core.pace`。
 
     Returns:
         tuple[dict, bool]: 新建或命中的 job，以及「是否命中已有任务」。
@@ -381,6 +386,10 @@ def create_job_with_status(
         raise ValueError("tools 不能为空")
 
     key = normalize_idempotency_key(idempotency_key)
+    # 节奏**只写进事件详情**，不加列、不改表结构（DECISIONS §1 E 限纯增量）。
+    # 「任务当时是什么节奏」是审计事实，放 job_events 比放 jobs 列更合适：
+    # 事件不可改，且 Phase 3 明确不接受任何 DB 结构变更。
+    job_pace = coerce_pace(pace)
 
     job_id = new_job_id()
     created_at = _now()
@@ -455,6 +464,7 @@ def create_job_with_status(
                     "upload_id": upload_id,
                     "scenario": scenario,
                     "idempotency_key": key,
+                    "pace": job_pace,
                 },
             )
             hit_id = job_id
@@ -524,13 +534,43 @@ def list_events(job_id: str, limit: int = 200) -> list[dict]:
     return [_event_to_dict(row) for row in rows]
 
 
+def pace_of_job(job_id: str) -> str:
+    """读回任务创建时记录的扫描节奏（见 :mod:`core.pace`）。
+
+    节奏**不是** ``jobs`` 表的列：加列属于 DB 结构变更，而 Phase 3 明确不接受
+    任何结构变更（``docs/DECISIONS.md`` §1 E「限纯增量」）。它写在
+    ``job.created`` 事件的 ``detail`` 里，这里按事件读回。
+
+    读不到时返回 :data:`core.pace.DEFAULT_PACE`（``normal``）—— 这与 Phase 3
+    之前的行为**逐字节一致**：老任务没有这个字段，本来就该按常规档跑。
+
+    为什么要在**执行时**读回，而不是在内存里从创建请求一路传下来：
+    worker 是**另一个进程**，它只从数据库拿任务；把节奏放进内存等于
+    「重启 worker 就丢节奏」，而审计与复现都要求它是可查的。
+    """
+    db.ensure_schema()
+    row = _fetchone(
+        "SELECT detail_json FROM job_events WHERE job_id = ? AND event_type = ? "
+        "ORDER BY rowid ASC LIMIT 1",
+        (job_id, EVENT_JOB_CREATED),
+    )
+    if row is None:
+        return DEFAULT_PACE
+    try:
+        detail = json.loads(row["detail_json"] or "{}")
+    except (TypeError, ValueError):
+        return DEFAULT_PACE
+    return coerce_pace(detail.get("pace") if isinstance(detail, dict) else None)
+
+
 def get_job_detail(job_id: str) -> dict | None:
-    """任务详情 = job + steps + events。"""
+    """任务详情 = job + steps + events（外带创建时的扫描节奏）。"""
     job = get_job(job_id)
     if job is None:
         return None
     job["steps"] = list_steps(job_id)
     job["events"] = list_events(job_id)
+    job["pace"] = pace_of_job(job_id)
     return job
 
 

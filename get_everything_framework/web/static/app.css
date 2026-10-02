@@ -510,6 +510,16 @@ ul.artifacts li {
   word-break: break-all;
 }
 
+/* 节奏（Scan Profile 的第二维）：比工具行更醒目一点 ——
+   「这个 Profile 打得多快」是授权公网测试里最该被看见的一句话。 */
+.sc-strategy-pace {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #58a6ff);
+}
+
 /* 工具勾选列表：被禁工具置灰且不可勾选，但仍列出并给出原因。 */
 .sc-tools {
   display: grid;
