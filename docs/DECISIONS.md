@@ -104,6 +104,44 @@
 > 命令退出码为 1 是 PowerShell 把 git 的 stderr 进度输出当异常处理所致（`NativeCommandError`），
 > 不是推送失败 —— 已用远端 ref 复核确认落地。
 
+### 3.4 推送前安全审计（2026-10-02 · 公网授权测试模式体验版，只读）
+
+审计对象：`origin/main..HEAD` 的 6 个提交（`4428302` / `0a3bd42` / `7018fb4` /
+`26ddf3a` / `207af8c` / `db159ff`）。**未执行 push** —— 按用户偏好等确认。
+
+| 检查项 | 方法 | 结论 |
+|---|---|---|
+| 运行期产物是否入库 | `git diff --name-only origin/main..HEAD` 按 `results/ uploads/ exports/ backups/ SecLists/ *.db *.exe .env heartbeat *.pem *.key` 匹配（31 个变更文件） | ✅ 命中 0 条 |
+| 全仓库已跟踪文件是否含数据库/密钥/样本 | `git ls-files` 同上模式（共 172 个已跟踪文件） | ✅ 命中 0 条 |
+| 新增行是否含硬编码密钥 | 全 6 提交 `git log -p` 的 3691 行新增，匹配 `(secret_key\|api_key\|password\|passwd) = "<8+ 字符>"` | ✅ 命中 0 条 |
+| 新增行是否含高强度密钥形状 | 同上匹配 `sk-…` / `ghp_…` / `AKIA…` / `eyJ….` | ✅ 命中 0 条 |
+| 历史里是否有明文残留 | 逐提交逐文件 `git show <commit>:<file>` 匹配本轮实际 Token / 上一轮 Token | ✅ 待推送范围内 0 命中；`origin/main` 已有历史亦 0 命中 |
+| 是否与远端分叉 | `git rev-list --left-right --count origin/main...HEAD` | ✅ `0 6` —— 纯快进，**无需** force |
+| 最大文件 | `git diff --stat` | ✅ 最大 `docs/CODEBASE_MAP.md` 205 KB，纯文本文档 |
+
+**审计拦下过一处真实问题（本轮最重要的一条）**：新增脚本
+`scripts/verify_public_scan.py` 里写死了本机管理员 Token 明文
+（`TOKEN = "<32 字符>"`），而且该明文**已经进入**本轮 `test:` 提交的对象里。
+
+处置方式与理由：
+1. **重写该未推送提交**（`469be5d` → `26ddf3a`），而不是「再补一个删除提交」——
+   后者会让明文**永久留在历史**里，只是不再出现在最新快照中。
+   该操作未违反第 4 节红线：这里只重写了**本地未推送**的提交，
+   没有 `git push --force`、没有 `git filter-repo`、动的是 6 个提交中的 1 个。
+2. 重写用 `git reset --mixed`（**不是** `--hard`）逐提交重建，两个待保留的文件改动
+   先 `Copy-Item` 到 `%TEMP%` 备份，过程可逆。
+3. **回滚点**：标签 `backup-before-secret-purge` 指向重写前的 `e934c30`；
+   旧提交对象仍可解析（`git cat-file -t e934c30` → `commit`），
+   恢复只需 `git reset backup-before-secret-purge`。**该标签暂不删除**，等用户确认后再清理。
+4. 脚本改为 `LOCAL_ADMIN_TOKEN` 环境变量读取、缺失时退出码 2，
+   地址用 `GEF_VERIFY_BASE` 覆盖，**脚本内不写死任何值**。
+5. 重写后复跑：全量 `1003 passed / 2 skipped`、ruff 全过、mypy 0 error（68 文件）；
+   并重新用环境变量方式跑通一次实机验收探针（退出码 0）。
+
+> 这条也是「token 明文入库」这类问题的**通用处置口径**：
+> 只要提交还没推送，就该重写而不是补删除提交。
+> 若已经推送出去，则明文已被远端持有，重写无法收回 —— 那种情况只能立即轮换凭据。
+
 ### 3.1 用户本轮（2026-10-02，弹窗确认）已授权的项
 
 > 以下是 Agent 主动弹出询问后、**用户明确勾选授权**的项，效力等同第 1 节预授权，
