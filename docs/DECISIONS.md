@@ -137,6 +137,8 @@
    地址用 `GEF_VERIFY_BASE` 覆盖，**脚本内不写死任何值**。
 5. 重写后复跑：全量 `1003 passed / 2 skipped`、ruff 全过、mypy 0 error（68 文件）；
    并重新用环境变量方式跑通一次实机验收探针（退出码 0）。
+   （此处 1003 是**当时**的真实数字；之后又补了一条 CIDR 用例，现行基线为 **1004**，
+   见 `PROJECT_STATE.md` 的「最近一次验证」。）
 
 > 这条也是「token 明文入库」这类问题的**通用处置口径**：
 > 只要提交还没推送，就该重写而不是补删除提交。
@@ -246,7 +248,7 @@
 > 新增 `core/tool_registry.py`、`core/projects.py`、`api/projects.py`、`api/public_scan.py`、
 > `scripts/verify_public_scan.py`、扫描中心页（`app.py:scan_center()` +
 > `web/templates/scan_center.html` + `web/static/scan_center.js`）、
-> `core/application.py:create_authorized_public_job()`，以及 104 项新测试。
+> `core/application.py:create_authorized_public_job()`，以及 105 项新测试。
 >
 > **唯一需要复核的判断（其余均无争议）**：本轮在 `core/db.py` **新增了两张表**
 > （`projects` / `project_scopes`）。第 2 节边界写着「若导致需要改动数据库结构……

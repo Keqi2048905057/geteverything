@@ -559,7 +559,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 31. **敏感产物已进 Git**（`git ls-files` 实测 83 个跟踪文件中包含）：`results/scan_results.db`、`results/*.txt`、`results/outs/*.json`（真实企业名与域名）、`uploads/*.txt`（真实目标清单）、`scripts/dirsearch.exe`、`scripts/OneForAll.exe`、`scripts/oneforall.exe`、`SecLists/raft-small-directories.txt`。仓库根的 `.gitignore` 虽有 `**/results/`、`**/uploads/`、`*.db`，但对**已跟踪文件无效**。
 32. **首页无模板**：`app.py:160` 渲染 `index.html`，仓库无 `web/` 目录（当时的实施方案也把它列为 P0）。▶ **M1 已解决**：`web/templates/` 与 `web/static/` 已补齐。
 33. **测试覆盖极薄**：`tests/` 下只有 2 个单元测试文件（导入、布局、常量），`tests/integration/` 与 `tests/fixtures/` 均为占位 `__init__.py`；**没有任何针对 Runner、storage、intent/planner 的测试**，也没有 mock runner。
-   ▶ **早已解决**：现在 `tests/unit/` + `tests/integration/` 共 **1003 项通过 / 2 skipped**（含公网体验版新增 104 项），`tests/fixtures/` 有了真实 fixture（`local_http_server.py`，见 §9.17）。
+   ▶ **早已解决**：现在 `tests/unit/` + `tests/integration/` 共 **1004 项通过 / 2 skipped**（含公网体验版新增 105 项），`tests/fixtures/` 有了真实 fixture（`local_http_server.py`，见 §9.17）。
 34. **`app.py` 只有单个应用实例**（模块级 `app = Flask(...)`），没有 `create_app()` 工厂；`tests/unit/test_smoke.py:21` 直接 `import app` 并检查 `app.app.url_map`。
 35. **`_is_storage_question` 关键词过宽**：`agent/action.py:25-38` 的 `DATABASE_QUERY_KEYWORDS` 含 `"数据库"`、`"保存位置"`、`"db"` 等；`:138` 的条件只在"非 analyze 意图且无扫描词"时短路，边界用例（如"把结果保存位置告诉我然后扫一下"）容易被误判成纯问答而**静默不执行扫描**。
 36. **`modules/registry.py` 的 import 期全量加载**：任何单个 adapter 的语法/依赖错误都会让 `import modules` 失败，进而 `/api/tools`、`/api/run`、`/api/tools` 全部 500（例如 `modules/enscan.py` 若缺依赖）。没有按需加载或容错注册。
@@ -816,14 +816,14 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1003 passed, 2 skipped, 0 failures
+$ python -m pytest           # 1004 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 68 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 $ python scripts/check_env.py      # 退出码 0/1/2；只读，不建库、不执行任何扫描（见 §9.20）
 $ node --check web/static/{app.js,assets.js,scan_center.js}   # 前端无构建链，只做语法检查
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检脚本 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → **公网授权测试模式体验版 `1003`**（见 §9.22）。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检脚本 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → **公网授权测试模式体验版 `1004`**（见 §9.22）。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -2232,22 +2232,29 @@ agent/target_ranker.py
 > 且红的原因与被测代码毫无关系。凡是 `.env` 能覆盖、而测试又对其有断言的开关，
 > 都必须在 conftest 里钉死。
 
-#### 9.22.6 回归测试（+104，901 → 1003 passed / 2 skipped）
+#### 9.22.6 回归测试（+105，901 → 1004 passed / 2 skipped）
 
 | 文件 | 覆盖 |
 |---|---|
 | `tests/unit/test_tool_registry.py`（34） | 元数据完整性（注册表 ↔ 元数据表**双向**无缺漏）、白名单恰好两个、判定报错形状、模板解析的四种拒绝 |
 | `tests/unit/test_projects.py`（26） | 创建/校验/上限/去重、关联幂等、**`scopes` 表结构逐列比对**、关联项目不改写 Scope 本体 |
-| `tests/integration/test_public_scan_mode.py`（44） | 方案第 9 节五类（Scope / Policy / Job / Tool / Worker）+ 第 11 节验收 + 扫描中心页面 + 两条源码守卫 + 旧链路不受影响 |
+| `tests/integration/test_public_scan_mode.py`（45） | 方案第 9 节五类（Scope / Policy / Job / Tool / Worker）+ 第 11 节验收 + 扫描中心页面 + 两条源码守卫 + 旧链路不受影响 |
 | `tests/conftest.py` | 环境变量钉死（见 §9.22.5） |
 
-> 计数口径：`--collect-only` 汇总（`34 + 26 + 44 = 104`）；
+> 计数口径：`--collect-only` 汇总（`34 + 26 + 45 = 105`）；
 > 排除这三个文件后收集数为 **901**，与上一轮基线**逐条相等** ——
 > 即本轮没有任何既有用例被删改。
 
-方案第 9 节的五类对应关系：**Scope** → `test_public_domain_scope_can_be_created`；
+方案第 9 节的五类对应关系：**Scope** → `test_public_domain_scope_can_be_created`
+与 `test_public_ip_target_is_checked_against_allowed_cidrs`；
 **Policy** → `test_out_of_scope_target_is_403`；**Job** → `test_public_job_enters_queue_with_audit_record`；
 **Tool** → `test_blocked_tool_cannot_be_submitted`（5 个参数化）；**Worker** → `test_worker_executes_public_job`。
+
+> **为什么 Scope 那类有两条**：方案第 4 节把目标类型写成「域名 / IP / CIDR」，
+> 而第一版只有域名那条覆盖到了**公网入口链路上**。补的这条走
+> `allowed_cidrs`（域名留空）→ 网段内 IP 放行、网段外 IP 403，
+> 用的网段是 **RFC 5737 文档保留段**（`192.0.2.0/24` / `198.51.100.0/24`），
+> 与用 `example.test` 是同一个思路：即使真发出去也不指向任何人的资产。
 
 #### 9.22.7 本节的已知边界（不是缺陷，是范围）
 

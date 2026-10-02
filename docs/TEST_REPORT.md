@@ -1,8 +1,8 @@
 # TEST_REPORT.md — 测试报告（M7 交付项）
 
 > ⚠️ **基线已前移：本文件 §0–§5 描述的是 M7 那一轮（901 条用例）的历史快照，
-> 未逐处改写以免抹掉当时的实测记录。当前基线是 1003 条，本轮增量见文末
-> [§6 公网授权测试模式体验版](#6-公网授权测试模式体验版本轮增量1003)。**
+> 未逐处改写以免抹掉当时的实测记录。当前基线是 1004 条，本轮增量见文末
+> [§6 公网授权测试模式体验版](#6-公网授权测试模式体验版本轮增量1004)。**
 > 两处数字不一致时，以 §6 与 `PROJECT_STATE.md` 的「最近一次验证」为准。
 
 > **这份报告回答三件事**：**测了什么**、**没测什么**、**为什么没测**。
@@ -472,7 +472,7 @@ python -m pytest -m slow          # 只跑这 2 条（test_m7_local_e2e、test_j
 
 ---
 
-## 6. 公网授权测试模式体验版（本轮增量，1003）
+## 6. 公网授权测试模式体验版（本轮增量，1004）
 
 > **这一节与 §0–§5 的关系**：上面是 M7 那一轮的历史快照（当时 901 条），
 > 本节只记本轮增量，**不改写上面已经发布过的实测记录**。
@@ -482,7 +482,7 @@ python -m pytest -m slow          # 只跑这 2 条（test_m7_local_e2e、test_j
 
 ```powershell
 cd get_everything_framework
-python -m pytest                    # 1003 passed, 2 skipped, 0 failures / 0 errors（约 125 秒）
+python -m pytest                    # 1004 passed, 2 skipped, 0 failures / 0 errors（约 110 秒）
 python -m ruff check .              # All checks passed!
 python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 68 source files
 node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
@@ -490,24 +490,24 @@ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端�
 
 | 项 | 上一轮 | 本轮 |
 |---|---|---|
-| 用例总数 | 901 | **1003**（+104） |
+| 用例总数 | 901 | **1004**（+105） |
 | `test_*.py` 文件 | 31 | **34** |
 | `tests/unit/` 用例 | 668 | **728**（22 个文件） |
-| `tests/integration/` 用例 | 233 | **277**（12 个文件） |
+| `tests/integration/` 用例 | 233 | **278**（12 个文件） |
 | mypy 源文件 | 63 | **68**（新增 5 个） |
 | 声明的方法绑定 | 41 | **48** |
 | 被用例真实命中的绑定 | 40 | **47**（口径见 §6.4） |
 
-**+104 的构成（逐文件，可复算）**：
+**+105 的构成（逐文件，可复算）**：
 
 | 文件 | 用例数 |
 |---|---|
 | `tests/unit/test_tool_registry.py`（新） | 34 |
 | `tests/unit/test_projects.py`（新） | 26 |
-| `tests/integration/test_public_scan_mode.py`（新） | 44 |
-| **合计** | **+104** |
+| `tests/integration/test_public_scan_mode.py`（新） | 45 |
+| **合计** | **+105** |
 
-> 采集数 1005、执行数 1003 —— 差额 2 条是 POSIX-only 的 skip（同 §1），不是失败。
+> 采集数 1006、执行数 1004 —— 差额 2 条是 POSIX-only 的 skip（同 §1），不是失败。
 > **排除这三个新文件后采集数仍为 901**，与上一轮逐条相等 ——
 > 即本轮没有删改任何既有用例。
 > （`test_observability.py` 本轮也动过，但只往两个白名单集合里**加了条目**，
@@ -517,11 +517,17 @@ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端�
 
 | 方案原文 | 落在哪 |
 |---|---|
-| Scope —— 公网域名创建成功 | `test_public_scan_mode.py::test_public_domain_scope_can_be_created`（另见 `test_projects.py` 的 Scope-项目关联与 `test_scope.py` 的域名/CIDR 匹配规则） |
+| Scope —— 公网域名创建成功 | `test_public_scan_mode.py::test_public_domain_scope_can_be_created` + `::test_public_ip_target_is_checked_against_allowed_cidrs`（另见 `test_projects.py` 的 Scope-项目关联与 `test_scope.py` 的域名/CIDR 匹配规则） |
 | Policy —— 未授权域名拒绝 | `::test_out_of_scope_target_is_403`（`error_code == "scope_violation"`） |
 | Job —— 公网任务进入 Job 队列 | `::test_public_job_enters_queue_with_audit_record`（同时断言 `job.created` 审计事件） |
 | Tool —— 禁止工具无法提交 | `::test_blocked_tool_cannot_be_submitted`（5 个参数化：`nmap` / `dirsearch` / `naabu` / `feroxbuster` / `katana`）+ `test_tool_registry.py` 的 34 条元数据用例 |
 | Worker —— 任务正常执行 | `::test_worker_executes_public_job`（真实 `Worker` + 假 runner，走到 `succeeded 100%`） |
+
+> **Scope 那类为什么是两条**：方案第 4 节把目标类型写成「域名 / IP / CIDR」，
+> 而第一版只有域名那条覆盖到了**公网入口链路上**（`allowed_domains` 那条分支）。
+> 补的这条走 `allowed_cidrs`（域名留空）：网段内 IP → 202、网段外 IP → 403 且不落库。
+> 网段用 **RFC 5737 文档保留段**（`192.0.2.0/24` / `198.51.100.0/24`）——
+> 与用 `example.test` 是同一个思路：即便真发出去也不指向任何人的资产。
 
 **方案第 11 节验收标准的逐条落点**：六步链路 `test_public_job_enters_queue_with_audit_record`
 → `test_worker_executes_public_job`；三条「不会」各有一条**源码守卫**
@@ -569,7 +575,7 @@ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端�
 
 ### 6.6 一句话结论
 
-本轮的测试价值**不在 +104 这个数字**，而在两件事：
+本轮的测试价值**不在 +105 这个数字**，而在两件事：
 ① 把方案第 2、6 节的安全原则写成了**源码守卫**（功能对错之外的「结构对错」）；
 ② 实测暴露出「测试会读开发机 `.env`」这个**与被测代码无关的失败源**并修掉
 （`tests/conftest.py` 由 `setdefault` 改为赋值，详见 `CODEBASE_MAP.md` §7 第 37 条）。

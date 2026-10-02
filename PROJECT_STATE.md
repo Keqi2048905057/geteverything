@@ -382,7 +382,7 @@
 | **P1 Diff 的前端** | ✅ **已完成**：`/assets` 页底部有「两次任务对比」表单（基线与对比任务下拉、可选限定范围、「含未变」开关），四类分段渲染 + 属性差异（`status_code: 200 → 403`）；**清单条目可点进资产详情**（带 `asset_id` 的条目可点，详情面板会滚入视口） | — |
 | **P1 资产过期** | `mark_stale_assets(scope_id, last_seen_before=...)` 已实现且有用例 | **没有任何计划任务/接口调用它**，所以 `stale` / `gone` 目前永远是空的 |
 | **P1 §19 Observability** | ✅ **基础版已完成**：结构化单行 JSON 事件 + 四个关联 ID（`request_id` / `job_id` / `step_id` / `worker_id`，contextvars 绑定）+ 脱敏与容器上限 + 三条源码守卫；`GEF_LOG_LEVEL` / `GEF_LOG_FORMAT` 可配 | 仍属**基础版**：日志只写 stderr，**无文件输出与轮转**；**无 metrics / trace**；`configure_logging()` 只在两个进程入口调用，所以 `waitress-serve app:app` 这类外部启动方式不出结构化日志（在 `create_app()` 里配置会关掉 `propagate`、弄坏 pytest 的 `caplog`）；`request_id` 不跨进程（worker 是独立进程，跨进程串联要靠 `job_id`）；`/api/settings` 页未暴露日志级别开关 |
-| **公网授权测试模式体验版** | ✅ **已完成（本轮）**：项目 / 工具权限元数据 / 三档策略模板 / 扫描中心页 + 104 项新测试；实机验收全链路走通（见「已完成」专段） | 属**体验版**：白名单只有 `httpx` + `subfinder`（方案第 8 节刻意如此）；项目无归档/删除接口；扫描中心不做分页；`nuclei` 未接入 runner，只登记为「受限未开放」；项目 ↔ Scope 只有正向选择，没有反查界面 |
+| **公网授权测试模式体验版** | ✅ **已完成（本轮）**：项目 / 工具权限元数据 / 三档策略模板 / 扫描中心页 + 105 项新测试；实机验收全链路走通（见「已完成」专段） | 属**体验版**：白名单只有 `httpx` + `subfinder`（方案第 8 节刻意如此）；项目无归档/删除接口；扫描中心不做分页；`nuclei` 未接入 runner，只登记为「受限未开放」；项目 ↔ Scope 只有正向选择，没有反查界面 |
 | **真实公网扫描的实测证据** | 本轮及此前所有轮的实机验收都只用 `127.0.0.1` 与 RFC 6761 保留域 `example.test`，`GEF_ALLOW_REAL_SCAN` 只在用例内临时打开；`.env` 里虽已设为 `true`（用户确认目标均已授权） | **从未对真实外部目标发起过扫描** —— 这是硬约束下的设计选择，不是缺口。真实公网扫描要由用户自己决定何时、对哪个已授权目标发起 |
 
 ---
@@ -413,7 +413,7 @@
 - [x] 本机启动文档（`docs/DEPLOYMENT.md` + README 的「环境要求」「启动 Worker」两节）
 
 **M7 — 测试和交付**
-- [x] 单元测试 / API 测试 / worker 测试（1003 项，超出原计划）
+- [x] 单元测试 / API 测试 / worker 测试（1004 项，超出原计划）
 - [x] Scope 拒绝测试 / 上传安全测试 / 工具失败分类测试
 - [x] SQLite 并发测试（`tests/unit/test_db_concurrency.py`，13 例，含 `duplicate execution`）
 - [x] **本地 fixture HTTP 测试**（`tests/fixtures/local_http_server.py` + `tests/integration/test_m7_local_e2e.py`，
@@ -550,7 +550,7 @@
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1003 passed, 2 skipped, 0 failures / 0 errors      ← --collect-only 汇总口径
+pytest: 1004 passed, 2 skipped, 0 failures / 0 errors      ← --collect-only 汇总口径
 mypy:   Success: no issues found in 68 source files        ← 本轮新增 5 个源文件（63 → 68）
 node --check web/static/{app.js,assets.js,scan_center.js}: 语法检查通过（无前端构建链，只能做到这一步）
 git diff --check: 退出码 0
@@ -559,6 +559,9 @@ git diff --check: 退出码 0
         建项目 201 → 建 Scope 201 → 关联 201 → 未授权目标 403 → 禁工具 nmap 400
         → 未关联 Scope 400 → mock 任务 202 → worker 执行到 succeeded 100%
         全程只用 127.0.0.1 与 RFC 6761 保留域 example.test，未打任何真实外部目标
+        另用一次性探针确认方案第 4 节的「IP / CIDR」目标类型在公网入口上同样成立：
+        CIDR 内 IP → 202、CIDR 外 IP → 403、CIDR 形式目标 → 202
+        （网段用 RFC 5737 文档保留段 192.0.2.0/24 与 198.51.100.0/24）
 覆盖口径（一次性探针，方法与上一轮相同）：
         声明的方法绑定 48 / 被用例真实命中 47；未被走到的仍是同一条
         （GET /api/tool/<tool_name>/results，理由见 docs/TEST_REPORT.md §3.1）
@@ -566,11 +569,13 @@ git diff --check: 退出码 0
 交付报告：docs/milestones/本机验收报告_公网授权测试模式_2026-10-02.md（目录被忽略，本机材料）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → **公网授权测试模式体验版 `1003`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → **公网授权测试模式体验版 `1004`**
 
-> 本轮新增 104 项（`test_tool_registry.py` 34 + `test_projects.py` 26 +
-> `test_public_scan_mode.py` 44）。**排除这三个文件后收集数仍为 901**，
+> 本轮新增 105 项（`test_tool_registry.py` 34 + `test_projects.py` 26 +
+> `test_public_scan_mode.py` 45）。**排除这三个文件后收集数仍为 901**，
 > 与上一轮逐条相等 —— 即没有任何既有用例被删改。
+> （该文件从 44 增至 45 是本轮补的一条：方案第 4 节把目标类型写成「域名 / IP / CIDR」，
+> 原先只有域名那条在公网入口链路上有覆盖，现补上 IP 与 CIDR 的放行/拒绝对照。）
 
 ---
 
@@ -632,6 +637,7 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 > 并以环境变量方式重跑探针通过（退出码 0）。
 > **提交数增长后已复跑一次**（交付报告提交之后）：文件名黑名单 0 命中、
 > 新增行密钥形状 0 命中、明文 0 命中、纯快进 —— 结论不变。
+> （后续补了一条 CIDR 用例，基线由 1003 变为 **1004**；当轮复跑同样全绿。）
 
 **本轮的拆分口径**：一个逻辑变化一个提交，每个都能独立回滚 ——
 ① 纯测试隔离修复（与被测代码无关）；② 后端核心（新模块 + 表 + 编排入口）；
@@ -738,7 +744,7 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                  # 期望 All checks passed!
-python -m pytest                                        # 期望 1003 passed, 2 skipped
+python -m pytest                                        # 期望 1004 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules scripts  # 期望 Success: no issues found in 68 source files
 python scripts/check_env.py                             # 期望退出码 0/1（未配 .env 时为 1），fail 项为 0
 ```

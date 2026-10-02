@@ -187,7 +187,7 @@ python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
 ### 测试与验收
 
 ```bash
-python -m pytest                                          # 1003 passed, 2 skipped
+python -m pytest                                          # 1004 passed, 2 skipped
 python -m ruff check .                                    # All checks passed!
 python -m mypy app.py core api jobs storage.py modules scripts  # Success: no issues found in 68 source files
 python scripts/check_env.py                               # 环境自检（只读）
@@ -522,7 +522,7 @@ framework-main/
 │   └── run_local.ps1         # 本机联调版一键拉起 Web + worker
 │                             # （可选工具二进制请用安装脚本获取，不入库）
 │
-├── tests/                    # pytest（1003 例）；conftest 把运行期目录全指向临时目录
+├── tests/                    # pytest（1004 例）；conftest 把运行期目录全指向临时目录
 │   ├── unit/                 # 单元 + 真实子进程用例（runner 接口、并发、Diff、迁移…）
 │   ├── integration/          # API / 鉴权 / 导出契约 / 资产 API / 本地全链路 E2E
 │   │   └── test_m7_local_e2e.py   # 方案第 18 节：真实 httpx 打本地 fixture 走完全链路

@@ -342,7 +342,7 @@ Diff 只看 `DIFFABLE_ATTRIBUTES`，且比较的是**归一化后的 canonical k
 3. `README.md` 的常见问题 Q6 仍在说「`/` 报 `TemplateNotFound`，index.html 是占位文件」——
    该问题已在 M1 修复，模板与静态资源都在，`GET /` 返回 200。
 4. ~~`README.md` 的测试基线写 `759 passed`~~ ▶ **已修**：当时基线为 826，现为
-   **1003 passed / 2 skipped**（[`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.8 同源）。
+   **1004 passed / 2 skipped**（[`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.8 同源）。
 5. `docs/SECURITY.md` **不存在**——方案建议的四份文档里，安全文档实际位于仓库根
    [`SECURITY.md`](../SECURITY.md)。
 6. `api/scopes.py` 注释称 404 会被转成 `error_code=bad_request`，实测为 `not_found`
