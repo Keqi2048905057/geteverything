@@ -30,6 +30,26 @@ if str(PROJECT_ROOT) not in sys.path:
 # 不受这里影响。
 os.environ.setdefault("SECRET_KEY", "test-only-" + "a1b2c3d4" * 6)
 
+# 下面两个开关必须**钉死**，不能 setdefault：它们是「本机 .env 会写什么」与
+# 「测试要断言什么」之间的交界，一旦测试跟随开发者本机的 .env，
+# 同一份代码在这台机器绿、在那台机器红，且红的原因与被测代码毫无关系。
+#
+# 实测到的两处（都是本机存在 .env 之后才暴露）：
+#
+# * ``GEF_ALLOW_REAL_SCAN`` —— 本机 .env 里为 true 时，
+#   ``test_m2_security.py::test_health_exposes_mode_and_security_status``
+#   断言的 ``real_scan_enabled is False`` 被顶掉；
+# * ``GEF_LOG_FORMAT`` —— 本机 .env 里为 text 时，
+#   ``test_observability.py::test_configure_logging_filters_by_level``
+#   解析 JSON 失败（该用例断言的是 json 格式的默认行为）。
+#
+# 需要 real 模式的用例自己用 ``monkeypatch.setenv`` 打开（见
+# ``test_m4_runner_result.py::real_mode``），用例结束会自动回滚到这里设的值。
+# ``config.load_dotenv()`` 默认**不覆盖**已存在的环境变量，因此这里的赋值
+# 足以让 .env 不再影响测试。
+os.environ["GEF_ALLOW_REAL_SCAN"] = "false"
+os.environ["GEF_LOG_FORMAT"] = "json"
+
 TEST_ADMIN_TOKEN = "test-local-admin-token"
 
 
