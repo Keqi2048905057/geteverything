@@ -122,6 +122,14 @@ def test_public_scan_endpoints_require_admin(client, method, path):
 
 
 def test_public_domain_scope_can_be_created(admin_client):
+    """方案第 9 节 Scope 类：授权公网域名能建成 Scope，且 `active_scan` 如实保存。
+
+    这里刻意用方案第 4/11 节原文的示例域名，作为「方案要求的场景真的能建起来」的证据。
+    **它只是一个字符串**：写进的是本用例的临时库（`app_module` 夹具把
+    `LOCAL_DB_CONFIG["path"]` 指到 `tmp_path`），而且**本文件从来不会拿它去建任务** ——
+    所有任务用的目标都是 RFC 6761 保留域 `example.test` 及其子域。
+    也就是说：即便有人误把测试指向真实服务，这条用例也不会对任何真实资产发出请求。
+    """
     scope_id = _make_scope(admin_client, domains=["www.peizheng.edu.cn"], active_scan=True)
     body = admin_client.get(f"/api/scopes/{scope_id}").get_json()["scope"]
     assert body["allowed_domains"] == ["www.peizheng.edu.cn"]

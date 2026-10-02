@@ -41,7 +41,7 @@ def create_public_job():
         {
           "project_id": "proj_xxx",
           "scope_id": "scope_xxx",        // 必须是该项目下已关联的 Scope
-          "targets": ["www.example.edu.cn"],
+          "targets": ["www.example.test"],
           "strategy": "asset_discovery",  // 可选，缺省资产发现
           "tools": ["httpx"],             // 仅 strategy=custom 时使用
           "mode": "real",                 // 可选，缺省 real

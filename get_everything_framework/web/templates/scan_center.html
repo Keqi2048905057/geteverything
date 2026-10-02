@@ -85,6 +85,9 @@
           <input type="text" id="scope-name" name="name" placeholder="培正学院主站">
 
           <label for="scope-domains">授权域名（逗号分隔；子域用 *.example.com 或直接写根域）</label>
+          <!-- 占位符取自方案第 4/11 节的示例域名。它只是 placeholder：
+               浏览器不会把它当成值提交，用户必须自己敲进去 —— 也就是说
+               页面**没有任何默认目标**，不存在「不填就替你扫某个站」的可能。 -->
           <input type="text" id="scope-domains" name="allowed_domains"
                  placeholder="www.peizheng.edu.cn">
 
@@ -132,6 +135,7 @@
           </select>
 
           <label for="job-target">目标（逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
+          <!-- 同上：placeholder 只是示例，没有默认值。 -->
           <input type="text" id="job-target" name="targets" placeholder="www.peizheng.edu.cn" required>
 
           <label class="check-inline" for="job-mock">

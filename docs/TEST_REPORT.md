@@ -1,5 +1,10 @@
 # TEST_REPORT.md — 测试报告（M7 交付项）
 
+> ⚠️ **基线已前移：本文件 §0–§5 描述的是 M7 那一轮（901 条用例）的历史快照，
+> 未逐处改写以免抹掉当时的实测记录。当前基线是 1003 条，本轮增量见文末
+> [§6 公网授权测试模式体验版](#6-公网授权测试模式体验版本轮增量1003)。**
+> 两处数字不一致时，以 §6 与 `PROJECT_STATE.md` 的「最近一次验证」为准。
+
 > **这份报告回答三件事**：**测了什么**、**没测什么**、**为什么没测**。
 > §0 是方案第 23 节规定的里程碑输出；§1–§2 是可复现的事实；
 > §3 是诚实的缺口清单（缺口的价值不低于覆盖）；§4 说明这套测试凭什么可信。
@@ -464,3 +469,108 @@ python -m pytest -m slow          # 只跑这 2 条（test_m7_local_e2e、test_j
 | 逐文件代码地图 + 29 条「症状 → 排查位置」 | [`CODEBASE_MAP.md`](CODEBASE_MAP.md) |
 | 哪些安全项已修、哪些仍开着 | [`../SECURITY.md`](../SECURITY.md) |
 | 现在的阶段与下一步 | [`../PROJECT_STATE.md`](../PROJECT_STATE.md) |
+
+---
+
+## 6. 公网授权测试模式体验版（本轮增量，1003）
+
+> **这一节与 §0–§5 的关系**：上面是 M7 那一轮的历史快照（当时 901 条），
+> 本节只记本轮增量，**不改写上面已经发布过的实测记录**。
+> 依据：`docs/milestones/GetEverything_公网授权测试模式体验版方案.md` §9（五类测试）与 §11（验收标准）。
+
+### 6.1 实测结果
+
+```powershell
+cd get_everything_framework
+python -m pytest                    # 1003 passed, 2 skipped, 0 failures / 0 errors（约 125 秒）
+python -m ruff check .              # All checks passed!
+python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 68 source files
+node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
+```
+
+| 项 | 上一轮 | 本轮 |
+|---|---|---|
+| 用例总数 | 901 | **1003**（+104） |
+| `test_*.py` 文件 | 31 | **34** |
+| `tests/unit/` 用例 | 668 | **728**（22 个文件） |
+| `tests/integration/` 用例 | 233 | **277**（12 个文件） |
+| mypy 源文件 | 63 | **68**（新增 5 个） |
+| 声明的方法绑定 | 41 | **48** |
+| 被用例真实命中的绑定 | 40 | **47**（口径见 §6.4） |
+
+**+104 的构成（逐文件，可复算）**：
+
+| 文件 | 用例数 |
+|---|---|
+| `tests/unit/test_tool_registry.py`（新） | 34 |
+| `tests/unit/test_projects.py`（新） | 26 |
+| `tests/integration/test_public_scan_mode.py`（新） | 44 |
+| **合计** | **+104** |
+
+> 采集数 1005、执行数 1003 —— 差额 2 条是 POSIX-only 的 skip（同 §1），不是失败。
+> **排除这三个新文件后采集数仍为 901**，与上一轮逐条相等 ——
+> 即本轮没有删改任何既有用例。
+> （`test_observability.py` 本轮也动过，但只往两个白名单集合里**加了条目**，
+> 没有增删测试函数：前后都是 50 条，已实测核对。）
+
+### 6.2 方案第 9 节「五类测试」的逐条落点
+
+| 方案原文 | 落在哪 |
+|---|---|
+| Scope —— 公网域名创建成功 | `test_public_scan_mode.py::test_public_domain_scope_can_be_created`（另见 `test_projects.py` 的 Scope-项目关联与 `test_scope.py` 的域名/CIDR 匹配规则） |
+| Policy —— 未授权域名拒绝 | `::test_out_of_scope_target_is_403`（`error_code == "scope_violation"`） |
+| Job —— 公网任务进入 Job 队列 | `::test_public_job_enters_queue_with_audit_record`（同时断言 `job.created` 审计事件） |
+| Tool —— 禁止工具无法提交 | `::test_blocked_tool_cannot_be_submitted`（5 个参数化：`nmap` / `dirsearch` / `naabu` / `feroxbuster` / `katana`）+ `test_tool_registry.py` 的 34 条元数据用例 |
+| Worker —— 任务正常执行 | `::test_worker_executes_public_job`（真实 `Worker` + 假 runner，走到 `succeeded 100%`） |
+
+**方案第 11 节验收标准的逐条落点**：六步链路 `test_public_job_enters_queue_with_audit_record`
+→ `test_worker_executes_public_job`；三条「不会」各有一条**源码守卫**
+（`test_public_scan_api_never_calls_runners_directly`、`test_public_job_orchestration_is_in_application_service`、
+`test_service_delegates_to_single_job_entry`）。
+
+### 6.3 本轮测试里最重要的两条：源码守卫
+
+功能用例保证「现在是对的」，**源码守卫保证「以后不容易变错」**。方案第 2、6 节写着
+「禁止 Web → Runner」「不得绕过 Scope / Policy」，本轮把这两句话变成了可执行断言：
+
+* `test_public_scan_api_never_calls_runners_directly`：`api/public_scan.py` 的源码里
+  不得出现 `build_runner` / `run_tools` / `RUNNER_REGISTRY`；
+* `test_public_job_orchestration_is_in_application_service`：视图层不得内联
+  `assert_tools_internet_allowed` / `validate_job_targets` / `create_job_with_status` / `resolve_mode`
+  —— 否则就等于「另写了第二条 Policy 判定」；
+* `test_projects.py::test_projects_tables_are_additive_and_scopes_untouched`：
+  把 `PRAGMA table_info(scopes)` 的列名集合**写死**断言，锁住「只加表、不动 `scopes`」。
+
+### 6.4 本轮重跑的覆盖口径（数字与上一轮同一算法）
+
+用一次性探针重跑 `flask.Flask.full_dispatch_request`（§3.1 的原方法）后：
+
+```text
+声明的方法绑定: 48
+测试命中的:     47
+
+== 没有被任何用例走到的方法绑定 ==
+    GET /api/tool/<tool_name>/results      ← 仍然是同一条，理由见 §3.1
+```
+
+业务模块口径：`含 scripts` 共 96 个 `.py`，测试源码提及 **86** 个；
+未提及的仍是**同样那 10 个、全部在 `agent/`**（§3.2 的理由不变）。
+也就是说本轮新增的 5 个源文件**全部**被测试提及，缺口清单**没有变长**。
+
+### 6.5 本轮新增的缺口（诚实登记）
+
+| 未测项 | 现状 | 风险 |
+|---|---|---|
+| 扫描中心前端交互 | 仍是 `node --check` + 服务端字符串断言（**方案要求的「前端」到此为止，没有浏览器测试**） | 中：三个步骤表单的联动（项目 → Scope 下拉）只有人手点过 |
+| 真实公网目标 | 本项目**从未**对真实外部目标发起扫描（硬约束）；本轮 `real` 模式用例全部把 `modules.registry.build_runner` 换成假 runner，目标是 RFC 6761 保留域 `example.test` | 设计选择，不是缺口 —— 真实扫描何时/对哪个已授权目标发起，由使用者决定 |
+| `scripts/verify_public_scan.py` | 有实机验收记录，**没有自动化用例**（它需要真实 Web + worker 两个进程） | 低：它是验收工具，本身不是产品代码 |
+| 项目的归档 / 删除、扫描中心分页 | 功能未实现，因此无测试 | 低：属体验版刻意留白 |
+| `nuclei` 的真实行为 | 未接入 `RUNNER_REGISTRY`，只登记在 `KNOWN_UNAVAILABLE_TOOLS` 且 `internet_allowed=False` | 低：界面上如实显示为「受限未开放」，不假装可用 |
+
+### 6.6 一句话结论
+
+本轮的测试价值**不在 +104 这个数字**，而在两件事：
+① 把方案第 2、6 节的安全原则写成了**源码守卫**（功能对错之外的「结构对错」）；
+② 实测暴露出「测试会读开发机 `.env`」这个**与被测代码无关的失败源**并修掉
+（`tests/conftest.py` 由 `setdefault` 改为赋值，详见 `CODEBASE_MAP.md` §7 第 37 条）。
+第二件事正是本报告 §4.1 精神的延续：**测试的可信度取决于它不受环境影响，而不取决于条数。**
