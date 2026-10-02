@@ -35,7 +35,7 @@
       真实扫描总开关未开启（<code>GEF_ALLOW_REAL_SCAN=false</code>）：
       此处提交的公网任务会被 <code>403 scope_violation</code> 拒绝。
       在项目根 <code>.env</code> 中设为 <code>true</code> 后<strong>重启 Web 服务</strong>，再回来提交。
-      演练可改用下方「本地验证模式（mock）」。
+      演练可改用「本地验证模式（mock）」。
     </div>
   {% endif %}
 
@@ -52,19 +52,23 @@
       <!-- 步骤 1：授权项目 -->
       <div class="sc-step">
         <h3>步骤 1 · 授权项目</h3>
+        <p class="sc-step-note">
+          授权项目是<strong>授权证据的组织单位</strong>：一次授权测试对应一个项目，
+          授权说明与负责人记在这里。
+        </p>
         <form class="form" id="project-form" autocomplete="off">
           <label for="project-name">项目名称</label>
-          <input type="text" id="project-name" name="name" placeholder="培正学院授权测试" required>
+          <input type="text" id="project-name" name="name" placeholder="学校官网授权测试" required>
 
           <label for="project-note">授权说明（谁授权、范围、凭据形式）</label>
           <input type="text" id="project-note" name="authorization_note"
                  placeholder="2026-10-02 校方信息中心书面授权，仅被动信息收集" required>
 
-          <label for="project-owner">负责人</label>
+          <label for="project-owner">负责人（可选）</label>
           <input type="text" id="project-owner" name="owner" placeholder="张三">
 
           <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-            创建项目
+            创建授权项目
           </button>
         </form>
         <p class="sc-step-note" id="project-feedback">
@@ -74,49 +78,46 @@
 
       <!-- 步骤 2：授权范围 -->
       <div class="sc-step">
-        <h3>步骤 2 · 添加授权 Scope</h3>
-        <form class="form" id="scope-form" autocomplete="off">
-          <label for="scope-project">归属项目</label>
-          <select id="scope-project" name="project_id" required>
-            <option value="">— 请先创建项目 —</option>
-          </select>
+        <h3>步骤 2 · 授权范围</h3>
 
-          <label for="scope-name">范围名称</label>
-          <input type="text" id="scope-name" name="name" placeholder="培正学院主站">
+        <!-- 当前项目：只显示名称与负责人，不显示内部主键。 -->
+        <p class="sc-step-note" id="scope-project-current">当前项目：正在读取…</p>
+
+        <form class="form" id="scope-form" autocomplete="off">
+          <!-- 归属项目的真实 ID 放在隐藏字段里（仅供提交，不可见），
+               由 scan_center.js 随「当前项目」同步。 -->
+          <input type="hidden" id="scope-project" name="project_id" value="">
 
           <label for="scope-domains">授权域名（逗号分隔；子域用 *.example.com 或直接写根域）</label>
-          <!-- 占位符取自方案第 4/11 节的示例域名。它只是 placeholder：
-               浏览器不会把它当成值提交，用户必须自己敲进去 —— 也就是说
-               页面**没有任何默认目标**，不存在「不填就替你扫某个站」的可能。 -->
-          <input type="text" id="scope-domains" name="allowed_domains"
-                 placeholder="www.peizheng.edu.cn">
+          <!-- 占位符只是示例，浏览器不会把它当成值提交 —— 页面**没有默认目标**。 -->
+          <input type="text" id="scope-domains" name="allowed_domains" placeholder="www.example.cn">
 
-          <label for="scope-cidrs">授权 CIDR（逗号分隔，可选）</label>
+          <label for="scope-cidrs">授权网段（逗号分隔，可选）</label>
           <input type="text" id="scope-cidrs" name="allowed_cidrs" placeholder="203.0.113.0/24">
 
           <label class="check-inline" for="scope-active">
             <input type="checkbox" id="scope-active" name="active_scan" checked>
-            允许真实外部扫描（active_scan）
+            允许对该范围进行真实外部扫描
           </label>
 
           <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-            创建并关联到项目
+            添加授权范围
           </button>
         </form>
         <p class="sc-step-note" id="scope-feedback">
           框架禁止 <code>*</code> 这类全放行通配符，必须逐个显式列出。
-          目标本身不是域名也不是 IP/CIDR 时会被拒。
         </p>
 
         <div id="scope-list"></div>
       </div>
 
-      <!-- 步骤 3：策略模板 + 目标 -->
+      <!-- 步骤 3：目标与工具 -->
       <div class="sc-step">
-        <h3>步骤 3 · 扫描策略与目标</h3>
+        <h3>步骤 3 · 目标与工具</h3>
 
         <div class="sc-strategies" id="strategy-list"></div>
         <p class="sc-step-note" id="strategy-note">资产发现：被动子域枚举 + 存活探测，流量最轻。</p>
+        <div id="restricted-note" hidden></div>
 
         <div id="custom-tools" hidden>
           <p class="sc-step-note">自定义模式：勾选要用的工具（被禁工具无法勾选）。</p>
@@ -124,19 +125,19 @@
         </div>
 
         <form class="form" id="job-form" autocomplete="off" style="margin-top: 12px;">
-          <label for="job-project">项目</label>
+          <label for="job-project">授权项目</label>
           <select id="job-project" name="project_id" required>
-            <option value="">— 请先创建项目 —</option>
+            <option value="">还没有授权项目</option>
           </select>
 
-          <label for="job-scope">授权范围（只列出该项目下的 Scope）</label>
+          <label for="job-scope">授权范围（只列出该项目下的范围）</label>
           <select id="job-scope" name="scope_id" required>
-            <option value="">— 请先给项目添加 Scope —</option>
+            <option value="">这个项目还没有授权范围</option>
           </select>
 
           <label for="job-target">目标（逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
           <!-- 同上：placeholder 只是示例，没有默认值。 -->
-          <input type="text" id="job-target" name="targets" placeholder="www.peizheng.edu.cn" required>
+          <input type="text" id="job-target" name="targets" placeholder="www.example.cn" required>
 
           <label class="check-inline" for="job-mock">
             <input type="checkbox" id="job-mock" name="mode_mock">
@@ -145,27 +146,25 @@
 
           <div class="sc-actions">
             <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-              创建公网测试任务
+              创建测试任务
             </button>
           </div>
         </form>
         <p class="sc-step-note">
           提交后立即返回任务 ID（<code>queued</code>），由 worker 异步执行。
           执行前请确认 worker 已启动：<code>python -m jobs.worker</code>。
-          任务创建必须依次通过「项目 → 项目内 Scope → 公网工具白名单 → Policy / Scope / 模式」，
+          任务创建必须依次通过「项目 → 项目内范围 → 公网工具白名单 → Policy / Scope / 模式」，
           任何一条不过都会在<strong>创建任务之前</strong>被拒绝。
         </p>
       </div>
     </section>
 
     <section class="panel">
-      <h2>项目</h2>
+      <h2>授权项目</h2>
       <div id="project-list"></div>
       <p class="hint">
-        项目是<strong>授权证据的组织单位</strong>：一次授权测试对应一个项目，
-        项目下挂着由它派生、并被显式列入白名单的 Scope。
         关联项目<strong>不会</strong>放开任何权限 —— 能不能真实扫描仍然由
-        Scope 的 <code>active_scan</code> 与环境开关共同决定。
+        授权范围的<strong>真实扫描开关</strong>与环境总开关共同决定。
       </p>
     </section>
 
@@ -203,7 +202,7 @@
         <p class="hint">状态每 3 秒自动刷新；「详情」展开每个步骤的状态、错误码与耗时。</p>
       {% else %}
         <p class="hint">
-          还没有任务。按左侧三步走：先建项目 → 加 Scope → 创建任务。
+          还没有任务。按左侧三步走：先建授权项目 → 加授权范围 → 创建任务。
           创建后若状态一直停在 <code>queued</code>，说明 worker 没在跑。
         </p>
       {% endif %}

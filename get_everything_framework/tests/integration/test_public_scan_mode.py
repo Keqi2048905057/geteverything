@@ -517,7 +517,7 @@ def test_scan_center_page_renders_three_steps_for_admin(admin_client):
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
 
-    for heading in ("步骤 1 · 授权项目", "步骤 2 · 添加授权 Scope", "步骤 3 · 扫描策略与目标"):
+    for heading in ("步骤 1 · 授权项目", "步骤 2 · 授权范围", "步骤 3 · 目标与工具"):
         assert heading in body, heading
     # 方案第 7 节要求的三块：项目 / 创建任务 / 任务列表
     assert "创建任务" in body
@@ -566,6 +566,58 @@ def test_index_and_assets_link_to_scan_center(admin_client):
     """导航可达性：三个页面互相能找到扫描中心。"""
     assert "/scan-center" in admin_client.get("/").get_data(as_text=True)
     assert "/scan-center" in admin_client.get("/assets").get_data(as_text=True)
+
+
+# ── 体验优化 Phase 1：UI 清理（下一阶段方案第 2、6 节） ──────
+
+
+def test_scan_center_page_has_no_default_target(admin_client):
+    """页面**没有任何默认目标**：目标输入框只有 placeholder，没有 value。
+
+    这条守的是「不填就替你扫某个站」这类事故 —— 占位符是示例，浏览器不会提交它。
+    """
+    import re
+
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    for field in ("job-target", "scope-domains", "scope-cidrs"):
+        tag = re.search(r'<input[^>]*id="' + field + r'"[^>]*>', body)
+        assert tag is not None, f"页面缺少输入框 {field}"
+        assert "value=" not in tag.group(0), f"{field} 带上了默认值: {tag.group(0)}"
+
+
+def test_scan_center_page_hides_internal_ids_in_labels(admin_client):
+    """Phase 1「隐藏 Scope ID」的可执行口径：页面上不出现实体 ID 文案。
+
+    实体 ID 仍然存在（它要作为表单 value 提交），但**不能**出现在任何人类可读的
+    文案里。这里检查三种最容易漏进文案的写法，任何一条复活都会红。
+    """
+    from pathlib import Path
+
+    js_path = Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js"
+    source = js_path.read_text(encoding="utf-8")
+
+    # 1) 下拉框文案必须走翻译函数，不允许直接把 ID 当 label。
+    assert "scopeLabel(" in source and "projectLabel(" in source
+    for forbidden in (
+        "option.textContent = scopeId",
+        "option.textContent = project.id",
+        "scopes.textContent = \"Scope \"",
+    ):
+        assert forbidden not in source, f"scan_center.js 又把内部 ID 当文案了: {forbidden}"
+
+    # 2) 列表里不再输出裸 ID 列。
+    assert 'id.textContent = project.id' not in source
+
+
+def test_scan_center_page_separates_restricted_tools_note(admin_client):
+    """受限工具说明写进**独立**元素，不再往策略说明上累加。
+
+    累加会让「切换策略」后说明里混着上一轮的尾巴 —— 这正是 Phase 1 要清掉的
+    「异常展示」。这里断言容器存在且初始为空。
+    """
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    assert 'id="restricted-note"' in body
+    assert "本阶段未接入/未开放的工具" not in body
 
 
 def test_scan_center_page_renders_recent_jobs(admin_client, fake_real_runner):
