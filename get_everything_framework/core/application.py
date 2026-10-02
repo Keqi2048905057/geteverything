@@ -46,6 +46,10 @@ Worker / Runner         jobs/worker.py → jobs/executor.py → modules/
   ``create_scope`` / ``create_export`` / ``request_cancel`` / ``retry_job``
   尚未收拢，按「不要一次性无边界重写」的原则分批做）。
 * :func:`resolve_targets` —— 目标来源解析（显式列表 + 受控 ``upload_id``）。
+* :func:`create_authorized_public_job` —— **授权公网测试模式**下创建任务的唯一入口
+  （公网授权测试模式体验版方案第 4、6 节）。它在 :func:`create_scan_job` 之前
+  叠加「项目 / 项目内 Scope / 公网工具白名单」三道闸门，然后原样委派，
+  因此 Policy / Scope / mode 判定仍然只有一份实现。
 
 ## 各处共享的同一条入口
 
@@ -53,6 +57,10 @@ Worker / Runner         jobs/worker.py → jobs/executor.py → modules/
 POST /api/jobs      → api/jobs.py:create_job      ┐
 首页表单 POST /      → app.py:index               ├→ create_scan_job()
 Agent（P0-6 迁移中） → agent/action.py            ┘
+
+POST /api/public-jobs → api/public_scan.py        ┐
+扫描中心页面 POST /     → app.py:scan_center       ├→ create_authorized_public_job()
+                                                  ┘   → create_scan_job()
 ```
 """
 
@@ -62,12 +70,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from config import SCAN_LIMITS
-from core import audit, jobs as jobs_store, observability, uploads
+from core import audit, jobs as jobs_store, observability, projects, uploads
 from core.errors import BadRequestError
 from core.mock import SCENARIOS, normalize_scenario
 from core.policy import validate_job_targets
+from core.projects import Project
 from core.safety import MODE_MOCK, MODE_REAL, resolve_mode
 from core.scope import Scope
+from core.tool_registry import (
+    STRATEGY_ASSET_DISCOVERY,
+    assert_tools_internet_allowed,
+    resolve_strategy_tools,
+)
 
 
 def split_str_list(value: Any, field: str) -> list[str]:
@@ -285,4 +299,140 @@ def create_scan_job(
         targets=validated_targets,
         reused=reused,
         idempotency_key=key,
+    )
+
+
+# ── 授权公网测试模式（公网授权测试模式体验版方案第 4、6 节） ──────────
+
+
+@dataclass(frozen=True)
+class AuthorizedJobSubmission:
+    """一次「授权公网测试」提交的结果。
+
+    在 :class:`JobSubmission` 之外多带项目与策略信息，让页面不必再回查一次；
+    真正的任务字段仍然是同一个 ``job`` 字典。
+
+    Attributes:
+        submission: 底层 Job 提交结果（复用同一条编排）。
+        project: 该项目（授权证据的组织单位）。
+        strategy: 生效的策略模板 key。
+        tools: 最终工具列表（已过公网白名单）。
+        targets: 已过 Scope 校验的目标。
+    """
+
+    submission: JobSubmission
+    project: Project
+    strategy: str
+    tools: list[str]
+    targets: list[str]
+
+    def to_dict(self) -> dict:
+        """``POST /api/public-jobs`` 的响应体（沿用 202 Accepted）。"""
+        payload = self.submission.to_dict()
+        payload.update(
+            {
+                "project_id": self.project.id,
+                "project_name": self.project.name,
+                "strategy": self.strategy,
+                "authorized_public": True,
+            }
+        )
+        return payload
+
+
+def create_authorized_public_job(
+    *,
+    project_id: str | None,
+    scope_id: str | None,
+    targets: Any = None,
+    upload_id: Any = None,
+    strategy: str | None = None,
+    tools: Any = None,
+    mode: str | None = None,
+    scenario: str | None = None,
+    idempotency_key: Any = None,
+    created_by: str = "local-admin",
+) -> AuthorizedJobSubmission:
+    """创建「授权公网测试」任务 —— 公网模式下创建任务的**唯一**入口。
+
+    与 :func:`create_scan_job` 的关系是**叠加而非并列**：本函数在它之前多做
+    三道公网专属闸门，然后**原样调用**它，因此 Policy / Scope / mode 判定
+    仍然只发生在那一个地方，不存在第二条实现。
+
+    公网专属闸门（按顺序，任一条不过就在**创建任务之前**失败）：
+
+    1. ``project_id`` 必填且项目必须存在（404 记录在案）；
+    2. ``scope_id`` 必须**已关联到该项目** —— 光有 Scope 不算授权证据；
+    3. 策略模板解析出的工具必须全部在公网白名单内
+       （:func:`core.tool_registry.assert_tools_internet_allowed`）。
+
+    模式语义（刻意如此，不要改成「静默降级」）：缺省 ``real``。
+    如果环境开关 ``GEF_ALLOW_REAL_SCAN`` 没开，这里会**明确报 403**，
+    而不是悄悄退化成 mock —— 「以为打了真实目标、其实拿到假数据」是比
+    报错严重得多的误导。
+
+    Args:
+        project_id: 授权测试项目 ID，必填。
+        scope_id: 项目下已关联的 Scope ID，必填。
+        targets: 显式目标列表。
+        upload_id: 受控上传 ID（与 ``targets`` 可同时给出）。
+        strategy: 策略模板 key，缺省 ``asset_discovery``。
+        tools: 自定义工具列表（仅 ``custom`` 模板允许）。
+        mode: ``real`` / ``mock``；缺省 ``real``。
+        scenario: 仅 mock 有效的场景名。
+        idempotency_key: 可选幂等键。
+        created_by: 创建者标识。
+
+    Returns:
+        AuthorizedJobSubmission: 含 job / project / strategy / tools / targets。
+
+    Raises:
+        BadRequestError: 项目或 Scope 相关参数缺失、策略非法、工具越权。
+        NotFoundError: 项目不存在。
+        ScopeViolationError: 环境开关未开，或目标越界。
+    """
+    project = projects.require(str(project_id or "").strip() or "")
+
+    scope_ref = str(scope_id or "").strip()
+    if not scope_ref:
+        raise BadRequestError(
+            "必须提供 scope_id：授权公网测试必须指定项目下的授权范围",
+            details={"field": "scope_id"},
+        )
+    if scope_ref not in project.scope_ids:
+        # 「Scope 存在」不等于「这个项目授权了它」。两者都要成立才放行。
+        raise BadRequestError(
+            f"Scope {scope_ref} 未关联到项目 {project.id}："
+            "请先在项目下添加该授权范围，再创建公网测试任务",
+            details={
+                "field": "scope_id",
+                "project_id": project.id,
+                "attached_scope_ids": list(project.scope_ids),
+            },
+        )
+
+    # 工具闸门：先按模板解析，再验公网白名单（顺序不能反 ——
+    # 「模板里塞了 nmap」必须在创建任务之前被拒）。
+    resolved_strategy = (strategy or "").strip() or None
+    resolved_tools = resolve_strategy_tools(resolved_strategy, split_str_list(tools, "tools"))
+    assert_tools_internet_allowed(resolved_tools)
+
+    # 缺省 real：公网授权测试的语义就是真实扫描，不静默降级。
+    submission = create_scan_job(
+        scope_id=scope_ref,
+        targets=targets,
+        tools=resolved_tools,
+        upload_id=upload_id,
+        mode=mode or MODE_REAL,
+        scenario=scenario,
+        idempotency_key=idempotency_key,
+        created_by=created_by,
+    )
+
+    return AuthorizedJobSubmission(
+        submission=submission,
+        project=project,
+        strategy=resolved_strategy or STRATEGY_ASSET_DISCOVERY,
+        tools=resolved_tools,
+        targets=list(submission.targets),
     )

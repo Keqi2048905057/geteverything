@@ -17,6 +17,8 @@ PREFIX_ARTIFACT = "art"
 PREFIX_EXPORT = "exp"
 PREFIX_SCOPE = "scope"
 PREFIX_JOB_EVENT = "evt"
+# 授权测试项目（公网授权测试模式体验版方案第 4 节步骤 1）。
+PREFIX_PROJECT = "proj"
 
 
 def new_id(prefix: str) -> str:
@@ -58,3 +60,7 @@ def new_scope_id() -> str:
 
 def new_job_event_id() -> str:
     return new_id(PREFIX_JOB_EVENT)
+
+
+def new_project_id() -> str:
+    return new_id(PREFIX_PROJECT)

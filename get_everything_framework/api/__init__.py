@@ -10,6 +10,8 @@ Blueprint 注册入口，所有 API 路由统一通过 /api 前缀挂载。
     ├── health.py         # /health                            — 健康检查（无需登录）
     ├── tools.py          # /api/tools, /api/databases       — 工具列表 & 数据库信息
     ├── scan.py           # /api/run, /api/tool/<name>/run   — 扫描执行（需登录）
+    ├── projects.py       # /api/projects*                   — 授权测试项目（需登录）
+    ├── public_scan.py    # /api/public-jobs, /api/scan-center — 授权公网测试（需登录）
     ├── results.py        # /api/results, /api/tool/<name>/results, /api/export — 结果查询 & 导出
     ├── upload.py         # /api/upload                      — Agent 目标上传
     └── settings.py       # /api/settings                    — 系统配置（需登录）
@@ -25,7 +27,9 @@ api_bp = Blueprint("api", __name__, url_prefix="/api")
 from api import tools     # noqa: E402, F401
 from api import auth      # noqa: E402, F401
 from api import scopes    # noqa: E402, F401
+from api import projects  # noqa: E402, F401
 from api import jobs      # noqa: E402, F401
+from api import public_scan  # noqa: E402, F401
 from api import assets    # noqa: E402, F401
 from api import scan      # noqa: E402, F401
 from api import results   # noqa: E402, F401

@@ -318,6 +318,48 @@ def init_schema(path: str | None = None) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_step ON observations(job_id, step_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_observations_tool ON observations(source_tool)")
 
+        # ── 授权测试项目（公网授权测试模式体验版方案第 4 节） ────────
+        # 「项目」是授权证据的组织单位：一次授权测试 = 一个项目，项目下挂
+        # 由它派生并被显式列入白名单的 Scope。
+        #
+        # 迁移口径与 DECISIONS-E 一致：**只新增表**，`scopes` 表一个字段都不动。
+        # 因此旧库升级与既有数据完全不受影响；回滚只需
+        # `DROP TABLE project_scopes; DROP TABLE projects;`。
+        #
+        # 刻意**不给 scopes 加 project_id 列**：那会改动既有表结构（方案第 10 节
+        # 禁止项），而且一个 Scope 在概念上可以同时属于多个评估批次，
+        # 多对多关联表才是正确的形状。
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                id                 TEXT PRIMARY KEY,
+                name               TEXT NOT NULL,
+                authorization_note TEXT NOT NULL,
+                owner              TEXT,
+                created_at         TEXT NOT NULL,
+                created_by         TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_projects_created ON projects(created_at)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_scopes (
+                project_id TEXT NOT NULL,
+                scope_id   TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (project_id, scope_id)
+            )
+            """
+        )
+        # 反查方向（Scope → 项目）也要走索引：任务创建时会问「这个 Scope
+        # 挂在哪个项目下」，`projects` 侧的主键帮不上这个查询。
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_project_scopes_scope ON project_scopes(scope_id)"
+        )
+
         _migrate_columns(conn)
 
         # 依赖新增列的索引必须放在 ``_migrate_columns`` **之后**：

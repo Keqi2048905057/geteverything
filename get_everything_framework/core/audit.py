@@ -20,6 +20,9 @@ EVENT_LOGIN_FAILED = "auth.login_failed"
 EVENT_JOB_CREATED = "job.created"
 EVENT_JOB_CANCELLED = "job.cancelled"
 EVENT_JOB_RETRY_REQUESTED = "job.retry_requested"
+# 公网授权测试模式：项目（授权证据的组织单位）与 Scope 的关联。
+EVENT_PROJECT_CREATED = "project.created"
+EVENT_PROJECT_SCOPE_ATTACHED = "project.scope_attached"
 
 
 def _now() -> str:
