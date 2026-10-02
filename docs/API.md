@@ -49,9 +49,10 @@
 * 比对用 `hmac.compare_digest`（定长比较，避免时序侧信道）。
 * 未认证的统一返回 **401** + `error_code=unauthenticated`；**不回显 Token 值**。
 
-**需要认证的 24 条**：`/api/settings*`（4）、`/api/scopes*`（3）、`/api/jobs*`（9）、
+**需要认证的 30 条**：`/api/settings*`（4）、`/api/scopes*`（3）、`/api/jobs*`（9）、
 `/api/artifacts/<id>`（1）、`/api/assets*` 与 `/api/observations`（4）、`/api/run` 与
-`/api/tool/<n>/run`（2）、`/api/upload`（1）。
+`/api/tool/<n>/run`（2）、`/api/upload`（1）、**`/api/projects*`（4）与 `/api/public-jobs`、
+`/api/scan-center`（2）**。
 
 **匿名可读的 7 条**（有意保持的现状，由 `tests/integration/test_api_auth_contract.py` 与
 `tests/integration/test_export_contract.py` 锁定）：`/api/tools`、`/api/databases`、`/api/results`、
@@ -95,9 +96,10 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 | GET | `/` | 无 | 首页：任务列表 + 扫描表单 + Agent 对话 + 登录入口 |
 | POST | `/` | **执行类动作需登录** | 表单 `action=scan` 创建 mock 任务（未登录 401）；`action=chat` 可匿名 |
 | GET | `/assets` | 无 | 资产页骨架。匿名可打开但只显示提示，**不下发 Scope 名称**；数据由 `static/assets.js` 调 `/api/assets` |
+| GET | `/scan-center` | 无 | 扫描中心页骨架（公网授权测试模式）。匿名可打开但只显示提示；数据由 `static/scan_center.js` 调 `/api/scan-center`。**页面上的一切提交都只是转发到 `/api/…`**，闸门全在服务端 |
 | GET | `/login` | 无 | 登录页；已登录时重定向到 `/` |
 | POST | `/login` | 无 | 提交 `token` 表单字段；成功 302 → `/`，失败重渲染并提示 |
-| GET | `/static/<path:filename>` | 无 | `web/static/` 下的 `app.css` / `app.js` / `assets.js` |
+| GET | `/static/<path:filename>` | 无 | `web/static/` 下的 `app.css` / `app.js` / `assets.js` / `scan_center.js` |
 
 ---
 
@@ -304,6 +306,35 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > `GET /api/settings/enscan` 的 `config_path` 是**唯一**会回显服务端路径的字段，
 > 且它需要管理员身份——这是既有的有意设计，不是路径泄露。
 
+### 6.10 授权测试项目与公网任务（6 条，需认证）
+
+公网授权测试模式的入口。设计要点：**项目是授权证据的组织单位，不是权限开关** ——
+关联项目**不会**放宽任何限制，能不能真实扫描仍由 Scope 的 `active_scan` 与环境开关决定。
+
+| 方法 | 路径 | 请求 | 成功响应 | 主要错误 |
+|---|---|---|---|---|
+| POST | `/api/projects` | JSON `{name, authorization_note, owner?, scope_ids?}` | **201** `{"ok":true,"project":{...}}` | 400 `name`/`authorization_note` 缺失或过短；400 `scope_ids` 里有不存在的 Scope |
+| GET | `/api/projects` | — | `{"ok":true,"projects":[{...,"scope_ids","scope_count"}]}` | — |
+| GET | `/api/projects/<project_id>` | — | `{"ok":true,"project":{...}}` | 404 `not_found` |
+| POST | `/api/projects/<project_id>/scopes` | JSON `{scope_id}` | **201** `{"ok":true,"project":{...}}`（幂等） | 400 缺 `scope_id` 或 Scope 不存在；404 项目不存在 |
+| POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, mode?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限；403 越界或真实扫描开关未开；404 项目不存在 |
+| GET | `/api/scan-center` | — | `{"ok":true,"projects","strategies","tools","restricted_tools","internet_allowed_tools"}` | 401 |
+
+`strategy` 合法值 = `core/tool_registry.py:STRATEGIES`：`asset_discovery`（默认，= `subfinder` + `httpx`）、
+`web_fingerprint`（= `httpx`，`nuclei` 只作「受限未开放」展示）、`custom`（**必须**显式给 `tools`）。
+
+> **公网白名单恰好是 `{httpx, subfinder}`**（方案第 8 节），是代码常量而非运行期配置。
+> 核心不变量是「**没登记 = 禁止公网**」：`assert_tools_internet_allowed()` 对未登记工具
+> **直接拒绝**而不是默认放行。被禁工具的报错体里带 `blocked_tools`（含 `reason` 与
+> `risk_level`）与 `internet_allowed_tools`，调用方能直接看出该换成什么。
+>
+> **`mode` 默认是 `real` 且不会静默降级**：环境开关没开时返回 403，而不是退回 mock 给一份假数据。
+> 「以为打了真实目标、其实拿到编的数据」比直接报错危险得多。演练请显式传 `mode=mock`。
+>
+> 本接口**不创建 Scope** —— 那仍然只有 `POST /api/scopes` 一处。视图层不做任何闸门判断，
+> 全部转交 `core/application.py:create_authorized_public_job`（该函数再转交 `create_scan_job`），
+> 有源码守卫测试锁住「禁止 Web → Runner」与「不得另写第二条 Policy 判定」。
+
 ---
 
 ## 7. 本文的核对方法
@@ -313,7 +344,8 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 python -c "import app; [print(sorted(r.methods - {'HEAD','OPTIONS'}), r.rule) for r in app.app.url_map.iter_rules()]"
 ```
 
-统计口径：`len(list(app.app.url_map.iter_rules())) == 39`；含方法展开的绑定 41（`/` 与 `/login` 各 2 个方法）。
+统计口径（实测）：`len(list(app.app.url_map.iter_rules())) == 46`；含方法展开的绑定 48
+（`/` 与 `/login` 各 2 个方法）；其中 `/api/*` 为 **40** 条。
 
 匿名/需认证的划分以**实测响应码**为准（用 `app.test_client()` 逐个匿名请求），
 并与 `tests/integration/test_api_auth_contract.py` 的
@@ -321,7 +353,7 @@ python -c "import app; [print(sorted(r.methods - {'HEAD','OPTIONS'}), r.rule) fo
 
 ## 8. 文档与代码不一致（API 相关）
 
-1. **README 说「12 个 RESTful 接口」**：实际 `/api/*` 为 **34** 条。
+1. **README 说「12 个 RESTful 接口」**：实际 `/api/*` 为 **40** 条。
 2. **README 的匿名只读清单只有 3 条**：实际 7 条（多出 `/api/databases`、`/api/exports`、
    `/api/tool/<n>/results`、`/api/export/<id>/download`）。
 3. **README 提议用 `curl /api/tools` 做健康检查**：健康检查是 `GET /health`，README 全文

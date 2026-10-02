@@ -888,14 +888,76 @@ python scripts/check_env.py --strict   # 有警告也按退出码 2 处理（CI 
 **未动任何代码**：`agent/action.py` 994 行原样未改，`docs/DECISIONS.md` 未改
 （授权口径无需变更，仍是「先出影响说明」这一步）。
 
+### 公网授权测试模式体验版（本轮，方案第 5～11 节）
+
+依据：`docs/milestones/GetEverything_公网授权测试模式体验版方案.md`。
+一句话目标：**给「扫自己已获授权的公网目标」一个正规入口，而不是靠人手改 `.env` 与 Scope。**
+
+新增：
+
+- `core/tool_registry.py`：17 个 runner 的**工具权限元数据**
+  （`tool_name` / `risk_level` / `internet_allowed` / `default_enabled` / `reason`）
+  + 三档扫描策略模板（资产发现 / Web 信息收集 / 自定义）。
+  **核心不变量：没登记 = 禁止公网** —— `assert_tools_internet_allowed()` 对未知工具直接拒绝，
+  绝不默认放行；公网白名单恰好是 `{httpx, subfinder}`（方案第 8 节）。
+- `core/projects.py`：授权测试项目（创建 / 读取 / 关联既有 Scope / 按 Scope 反查项目）。
+  **只新增 `projects` + `project_scopes` 两张表，`scopes` 表零改动**（方案第 10 节 / DECISIONS-E）。
+- `api/projects.py`：`POST/GET /api/projects`、`GET /api/projects/{id}`、
+  `POST /api/projects/{id}/scopes`（关联**已存在**的 Scope，幂等；不创建 Scope）。
+- `api/public_scan.py`：`POST /api/public-jobs`（202 + `queued`）、
+  `GET /api/scan-center`（页面元数据，**不下发任何目标清单**）。
+- `app.py:scan_center()` + `web/templates/scan_center.html` + `web/static/scan_center.js`：
+  扫描中心页，三块 = 项目 / 创建任务 / 任务列表（方案第 7 节）。
+- `core/application.py:create_authorized_public_job()`：授权公网任务的**唯一**编排入口。
+- `scripts/verify_public_scan.py`：可复跑的实机验收探针（只打 RFC 6761 保留域 `example.test`）。
+
+变更：
+
+- `core/db.py`：`init_schema()` 里新增两张表与两个索引（纯加法，回滚即 `DROP TABLE`）。
+- `core/ids.py`：`PREFIX_PROJECT = "proj"` + `new_project_id()`。
+- `core/audit.py`：新增 `project.created` / `project.scope_attached` 两个事件类型。
+- `web/static/app.js`：把状态 / 步骤状态 / 错误码三张文案表挂到 `window.GEF_UI` 供扫描中心复用，
+  **同一个 `error_code` 在两个页面不会显示成不同的话**。
+- `web/templates/{index,assets}.html`：导航加「扫描中心」入口。
+
+**闸门顺序**（每一步不过就立刻返回，不产生落库副作用）：
+项目存在 → `scope_id` 属于该项目 → 策略模板解析 → 公网白名单校验 →
+（默认 `mode=real`）转交 `create_scan_job` → 目标 / 工具 / 幂等键 / 上限 / Scope-Policy / 环境开关 → 落库 → 审计。
+
+**一处刻意取舍**：真实扫描开关没开时**报错**，而不是静默退回 mock 给一份假数据。
+「以为打了真实目标、其实拿到编的数据」比直接报错危险得多（有专门用例锁住）。
+`mode=mock` 仍可显式指定，用于演练，闸门一条都不少。
+
+**方案第 2、6 节的两条红线都有源码守卫**：`api/public_scan.py` 里不允许出现
+`build_runner` / `run_tools` / `RUNNER_REGISTRY`；公网入口必须**复用** `create_scan_job`，
+不得另写一条 Policy 判定（`test_public_scan_api_never_calls_runners_directly` 等）。
+
+修复（测试隔离，**非被测代码缺陷**）：
+
+- `tests/conftest.py` 对 `GEF_ALLOW_REAL_SCAN` / `GEF_LOG_FORMAT` 由 `setdefault` 改为**赋值**。
+  本机新增 `.env` 后暴露出两处「测试跟随开发机配置」的失败：
+  `test_m2_security.py` 的 `real_scan_enabled is False` 断言被 `.env` 顶掉、
+  `test_observability.py` 的 JSON 解析拿到 `text` 格式。
+  `load_dotenv()` 默认不覆盖已存在的环境变量，因此赋值即可钉死；
+  需要 real 模式的用例仍用 `monkeypatch.setenv` 自行打开并在结束时回滚。
+
+**未动**：`scopes` 表结构、Scope/Policy 判定逻辑、认证授权、既有 API、同步 Runner 链路、
+Agent、`pyproject.toml`。**未引入**任何新依赖、React、Redis。
+**未对任何真实外部目标发起扫描** —— 本轮全部实机验收都打 `127.0.0.1` 与保留域 `example.test`。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 901 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 63 source files
-$ python scripts/check_env.py   # 退出码 1（fail 0；warn 4：.env 文件 / SECRET_KEY / LOCAL_ADMIN_TOKEN / worker 心跳）
+$ python -m pytest           # 1003 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 68 source files
+$ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
+$ python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
 ```
+
+基线演进：上一轮 `901` → **本轮 `1003`**（新增 104：`test_tool_registry.py` 34 +
+`test_projects.py` 26 + `test_public_scan_mode.py` 44）。
+排除这三个文件后收集数仍为 **901**，与上一轮逐条相等 —— 即没有任何既有用例被删改。
 
 测试报告的完整版见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（测了什么 / 没测什么 / 为什么没测）。
 
@@ -933,3 +995,13 @@ $ python scripts/check_env.py   # 退出码 1（fail 0；warn 4：.env 文件 / 
   日志只写 stderr，**没有文件输出与轮转**；只有日志，**没有 metrics / trace**；
   `request_id` 只在单个进程内关联，worker 是**独立进程**，HTTP 的 `request_id` 不会传到
   worker 的日志里（要靠 `job_id` 做跨进程串联）；`/api/settings` 页面尚未暴露日志级别开关。
+- **公网体验版的本轮边界**（都不是缺陷，是范围）：
+  - `nuclei` 在方案第 4 节被写作 `nuclei(限制)`，但本项目 runner 里**从未接入**它。
+    处理方式是如实登记进 `KNOWN_UNAVAILABLE_TOOLS` 且 `internet_allowed=False`，
+    在扫描中心按「受限未开放」展示并给出原因 —— **不假装有、也不悄悄漏掉**。
+  - 项目与 Scope 是**多对多**（`project_scopes`），但当前只有「项目 → 它的 Scope」正向选择；
+    反向（一个 Scope 被几个项目引用）只有后端 `projects.find_by_scope`，没有界面。
+  - 公网白名单是**代码常量**（`core/tool_registry.py`），不是数据库配置，
+    改它需要改代码 + 过测试，这是刻意的：白名单不该是一个能被顺手改掉的运行期设置。
+  - 项目**没有**归档/删除接口：一旦创建就长期存在（与既有 Scope 的现状一致）。
+  - 扫描中心页面**不做**分页：项目与任务各取前若干条，量大了要另做。

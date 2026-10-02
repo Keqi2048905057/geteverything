@@ -62,6 +62,10 @@
 - `[本轮] P1 §11 — 统一旧执行链（Legacy API → Adapter → Job Service → New Runner）—— 现状是 api/scan.py 同步扫描与 Job 链并存，两套模型不产同一份资产 — 合流要改的是「调用链拓扑」，不是单点实现，按第 4 节属大型重构 — 建议：单开一项预授权，并明确「旧同步接口保留、只是内部改走 Job Service」这一验收口径。`
 - `[DEFERRED] P1 §13 — SQLAlchemy + Alembic 替换手写 SQL + 迁移 —— 引入新依赖并重写整个数据访问层，风险等级与第 4 节的「SQLite → PostgreSQL」同类 — **本机联调版明确不做**（见 3.1 本轮口径），从「待授权」改为「已延期」，不再逐轮追问。`
 - `[DEFERRED] P1 §20（生产迁移门槛相关项）—— 属方案第 25 节「P1 后续生产迁移门槛」，已在执行方案里标注 `[DEFERRED]`，当前阶段不列入验收。`
+- `[本轮] 是否给 jobs 表补 project_id 列（让任务列表能显示「这次任务属于哪个授权项目」）—— 当前 jobs 表**没有** project_id 列，公网任务的项目信息只存在于创建时的审计事件与 API 响应里，任务列表与任务详情都**看不到**归属项目；补列属表结构改动（ADD COLUMN），按第 2 节边界退回第 1 节流程 — 建议：单开一项预授权，规格与 P0-7a 相同（纯增量 ADD COLUMN，可空，既有行语义不变）。**本轮刻意没有顺手加**，因为它不是方案第 5～11 节的要求。`
+
+> 本节只放**没有执行**的事项。本轮另有一项**已执行但判断依据需用户复核**的改动
+> （在 `core/db.py` 新增两张表），同类目但不属「未授权项」，完整说明见本节末尾。
 
 > **已从本节移出**：`P0-6`（Agent 改走 Job Service）—— 用户本轮已授权，见 3.1。
 
@@ -196,6 +200,40 @@
 > 期间修掉一处**测试间污染**：M7 E2E 的 `_drain_worker` 只 `startup()` 不 `shutdown()`，
 > `worker_id` 上下文泄漏到同线程的下一条用例（单独跑绿、全量跑炸）；
 > 现改用 `with Worker(...)`，并在 `conftest.py` 加了 autouse 的 contextvar 清理兜底。
+
+> **本轮已完成（公网授权测试模式体验版，方案第 5～11 节）—— 全落在第 2 节白名单内，
+> 但有一处判断需用户复核**：
+> 依据是用户本轮直接指派的 `docs/milestones/GetEverything_公网授权测试模式体验版方案.md`
+> （该文件本身受 `.gitignore:67` 忽略，不入库），因此**任务来源本身即为用户授权**。
+> 新增 `core/tool_registry.py`、`core/projects.py`、`api/projects.py`、`api/public_scan.py`、
+> `scripts/verify_public_scan.py`、扫描中心页（`app.py:scan_center()` +
+> `web/templates/scan_center.html` + `web/static/scan_center.js`）、
+> `core/application.py:create_authorized_public_job()`，以及 104 项新测试。
+>
+> **唯一需要复核的判断（其余均无争议）**：本轮在 `core/db.py` **新增了两张表**
+> （`projects` / `project_scopes`）。第 2 节边界写着「若导致需要改动数据库结构……
+> 则退回第 1 节流程」，而方案第 10 节也写着「本阶段禁止修改数据库核心结构」。
+> 本 Agent 的判断是**先例优先**：第 1 节 **E 项**的预填答案明确写着
+> 「只允许新增表 + 新增迁移脚本，**不得改动现有表结构、不得删除既有数据**」，
+> 且用户已对该项标注 ✅。本轮的改动与该规格**完全同级**：
+> `scopes` 表**逐列比对确认零改动**（`test_projects.py::test_projects_tables_are_additive_and_scopes_untouched`
+> 把 `PRAGMA table_info(scopes)` 的列名集合写死断言），未新增列、未删数据、未改既有索引；
+> 回滚方式就是 `DROP TABLE project_scopes; DROP TABLE projects;`，回到与改造前等价的状态。
+> 因此按 E 项口径执行，**未退回第 1 节流程**。
+> **若用户不认可这个类推，请指出** —— 撤销成本很低（两句 DROP TABLE + 删 6 个新文件）。
+>
+> **未动**：既有表结构与数据、Scope/Policy 判定逻辑、认证授权、审计机制、
+> 既有 API、同步 Runner 链路、Agent、`pyproject.toml`。
+> **未引入**任何新依赖、React、Redis、FastAPI、PostgreSQL。
+> **未对任何真实外部目标发起扫描** —— 实机验收全程只用 `127.0.0.1` 与 RFC 6761
+> 保留域 `example.test`，`GEF_ALLOW_REAL_SCAN` 只在测试用例内临时打开（`.env` 里的
+> `true` 是**上一轮已按用户确认写入的**，本轮未改它）。
+>
+> 顺带修掉一处**测试隔离缺陷**（第 2 节白名单「补充与更新测试」）：
+> `tests/conftest.py` 原先对 `GEF_ALLOW_REAL_SCAN` / `GEF_LOG_FORMAT` 用 `setdefault`，
+> 于是本机 `.env` 会把开发机配置变成隐式测试参数（实测两处失败）。
+> 改为**赋值**（`load_dotenv()` 默认不覆盖已存在的环境变量）。详见
+> `docs/CODEBASE_MAP.md` §7 第 37 条与 §9.22.5。
 
 ---
 

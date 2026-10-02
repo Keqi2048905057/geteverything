@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md`（2026-10-01）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + **公网授权测试模式体验版（项目 / 工具权限元数据 / 策略模板 / 扫描中心页，见 §9.22）**（2026-10-02）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -559,10 +559,13 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 31. **敏感产物已进 Git**（`git ls-files` 实测 83 个跟踪文件中包含）：`results/scan_results.db`、`results/*.txt`、`results/outs/*.json`（真实企业名与域名）、`uploads/*.txt`（真实目标清单）、`scripts/dirsearch.exe`、`scripts/OneForAll.exe`、`scripts/oneforall.exe`、`SecLists/raft-small-directories.txt`。仓库根的 `.gitignore` 虽有 `**/results/`、`**/uploads/`、`*.db`，但对**已跟踪文件无效**。
 32. **首页无模板**：`app.py:160` 渲染 `index.html`，仓库无 `web/` 目录（当时的实施方案也把它列为 P0）。▶ **M1 已解决**：`web/templates/` 与 `web/static/` 已补齐。
 33. **测试覆盖极薄**：`tests/` 下只有 2 个单元测试文件（导入、布局、常量），`tests/integration/` 与 `tests/fixtures/` 均为占位 `__init__.py`；**没有任何针对 Runner、storage、intent/planner 的测试**，也没有 mock runner。
-   ▶ **早已解决**：现在 `tests/unit/` + `tests/integration/` 共 759 项（不含 2 项 skip），`tests/fixtures/` 有了真实 fixture（`local_http_server.py`，见 §9.17）。
+   ▶ **早已解决**：现在 `tests/unit/` + `tests/integration/` 共 **1003 项通过 / 2 skipped**（含公网体验版新增 104 项），`tests/fixtures/` 有了真实 fixture（`local_http_server.py`，见 §9.17）。
 34. **`app.py` 只有单个应用实例**（模块级 `app = Flask(...)`），没有 `create_app()` 工厂；`tests/unit/test_smoke.py:21` 直接 `import app` 并检查 `app.app.url_map`。
 35. **`_is_storage_question` 关键词过宽**：`agent/action.py:25-38` 的 `DATABASE_QUERY_KEYWORDS` 含 `"数据库"`、`"保存位置"`、`"db"` 等；`:138` 的条件只在"非 analyze 意图且无扫描词"时短路，边界用例（如"把结果保存位置告诉我然后扫一下"）容易被误判成纯问答而**静默不执行扫描**。
 36. **`modules/registry.py` 的 import 期全量加载**：任何单个 adapter 的语法/依赖错误都会让 `import modules` 失败，进而 `/api/tools`、`/api/run`、`/api/tools` 全部 500（例如 `modules/enscan.py` 若缺依赖）。没有按需加载或容错注册。
+37. **测试会读开发机的 `.env`，导致「本机绿 / 别处红」**：`config.py` 的 `load_dotenv()` 在 `import config` 时就把 `.env` 灌进 `os.environ`，而测试进程没有任何隔离。**已实测两处**：本机 `.env` 写 `GEF_ALLOW_REAL_SCAN=true` 会顶掉 `test_m2_security.py` 对 `real_scan_enabled is False` 的断言；写 `GEF_LOG_FORMAT=text` 会让 `test_observability.py` 的 JSON 解析失败。
+   ▶ **已修**（公网体验版轮）：`tests/conftest.py` 对这两个变量用**赋值**而非 `setdefault`（`load_dotenv()` 默认不覆盖已存在的环境变量），需要 real 模式的用例自行 `monkeypatch.setenv` 并在结束时回滚。
+   **判断规则**：凡是「`.env` 能覆盖 + 测试有断言」的开关，都必须在 conftest 里钉死；只 `setdefault` 等于把本机配置变成隐式测试参数。详见 §9.22.5。
 
 ---
 
@@ -695,6 +698,13 @@ get_everything_framework/
 | GET | `/api/assets/{id}` | `api/assets.py` | **需管理员** | P1 新增；资产详情 + 观测时间线（倒序） |
 | GET | `/api/observations` | `api/assets.py` | **需管理员** | P1 新增；**必须给 `asset_id` 或 `job_id`**，否则 400（拒绝无条件全表扫描） |
 | GET | `/api/jobs/{a}/diff/{b}` | `api/jobs.py` | **需管理员** | P1 新增；Diff Engine，返回 added/removed/changed/unchanged + `counts`；任一 job 不存在 → 404 |
+| GET | `/scan-center` | `app.py:scan_center()` | — | **公网体验版新增**；扫描中心页（项目 / 创建任务 / 任务列表）。匿名可打开但只显示提示；数据由 `static/scan_center.js` 调 `/api/scan-center` |
+| POST | `/api/projects` | `api/projects.py` | **需管理员** | **公网体验版新增**；创建授权测试项目（201）。`name` / `authorization_note` 必填，`owner` / `scope_ids` 可选 |
+| GET | `/api/projects` | `api/projects.py` | **需管理员** | 同上；项目列表（含 `scope_ids` / `scope_count`） |
+| GET | `/api/projects/{id}` | `api/projects.py` | **需管理员** | 同上；不存在 → 404 `not_found` |
+| POST | `/api/projects/{id}/scopes` | `api/projects.py` | **需管理员** | 同上；把**已存在**的 Scope 关联进项目（201，幂等）。**不创建 Scope** —— 那仍然只有 `POST /api/scopes` |
+| POST | `/api/public-jobs` | `api/public_scan.py` | **需管理员** | 同上；**202 + `queued`**。授权公网测试的唯一任务入口，内部转交 `core.application.create_authorized_public_job` |
+| GET | `/api/scan-center` | `api/public_scan.py` | **需管理员** | 同上；页面元数据：`projects` / `strategies` / `tools` / `restricted_tools` / `internet_allowed_tools`。**不下发任何目标清单** |
 
 ### 9.3 双库架构（**最容易踩的坑**）
 
@@ -806,13 +816,14 @@ powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1   # 同时拉起 
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 901 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 63 source files
+$ python -m pytest           # 1003 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 68 source files
 $ python -m pytest -m "not slow"   # 跳过起真实子进程的 kill/重启用例
 $ python scripts/check_env.py      # 退出码 0/1/2；只读，不建库、不执行任何扫描（见 §9.20）
+$ node --check web/static/{app.js,assets.js,scan_center.js}   # 前端无构建链，只做语法检查
 ```
 
-> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检脚本 `900` → **M7 测试报告 + 测试运行期目录隔离修复 `901`**。
+> 演进：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 资产/观测/Diff/迁移 `701` → M7 类型收口 + Diff 可点 `707` → M5 字典可移植性 `715` → P0-7 幂等键/退避 + §16 Windows CI `739` → M7 SQLite 并发测试 `752` → M7 本地 fixture HTTP 全链路 E2E `759` → P1 §19 Observability（结构化日志与关联 ID）`828` → §14 文档三件套 + 导出格式 400 收口 `838` → Diff 属性别名归一 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检脚本 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → **公网授权测试模式体验版 `1003`**（见 §9.22）。
 > **P0 起 `pytest` 已零 warning**（原两条见 `PROJECT_STATE.md`「已修的两条 warning」）。
 > P1 新增 `core/assets.py` 时一度引入 10 条 mypy 报错（`result` / `items` 少了类型标注），
 > 补标注后回到 34；**M7 把剩下的 34 条全部清掉**（见 §9.13）。
@@ -2141,4 +2152,116 @@ agent/target_ranker.py
 **仍然成立的脆弱点**：`modules/base.py` / `modules/httpx.py` / `modules/dnsx.py` 的
 `OUTPUT_DIR` 也是导入期绑定，autouse 夹具只覆盖 `jobs.worker` 这一处；
 起真实子进程的用例必须**父进程 patch + 子进程传 `GEF_OUTPUT_DIR`** 两件都做。
+
+---
+
+### 9.22 公网授权测试模式体验版（方案第 5～11 节）
+
+> 依据：`docs/milestones/GetEverything_公网授权测试模式体验版方案.md`。
+> 目标是一句话：**让「扫自己的授权目标」这件事在框架里有正规入口，
+> 而不是靠人去手改 `.env` 和 Scope。**
+
+#### 9.22.1 为什么不是「把闸门放宽」
+
+方案第 2 节写死了两条产品原则，本节改动完全围绕它们：
+
+1. **不得绕过 Scope / Policy** —— 新入口不自己判断目标合不合法，
+   而是**转交** `core.application.create_scan_job`（P0-6 阶段一收拢出来的唯一编排入口）。
+   `test_public_scan_mode.py::test_service_delegates_to_single_job_entry` 直接从源码上锁这一点。
+2. **禁止 Web → Runner** —— `api/public_scan.py` 里不允许出现 `build_runner` / `run_tools`
+   / `RUNNER_REGISTRY` 字样；同样有源码守卫。
+
+所以本节的净新增是**三层闸门之上再加两层组织与白名单**，而不是把原来那三道闸拿走。
+
+#### 9.22.2 新增的四个模块
+
+| 文件 | 职责 | 关键不变量 |
+|---|---|---|
+| `core/tool_registry.py` | 17 个 runner 的**权限元数据**（`risk_level` / `internet_allowed` / `default_enabled` / `reason`）+ 三档策略模板 | ① **没登记 = 禁止公网**（`assert_tools_internet_allowed` 对未知工具直接拒，不默认放行）；② 公网白名单恰好 `{httpx, subfinder}`；③ 模板里的工具必须全部在白名单内（有测试） |
+| `core/projects.py` | 授权测试项目：创建 / 读取 / 关联既有 Scope / 按 Scope 反查项目 | 只**新增** `projects` + `project_scopes` 两张表，**`scopes` 表零改动**（方案第 10 节 / DECISIONS-E）；关联项目**不放宽**任何权限 |
+| `api/projects.py` | `/api/projects*` 四条路由 | 只关联**已存在**的 Scope；创建 Scope 仍然只有 `POST /api/scopes` 一处 |
+| `api/public_scan.py` | `/api/public-jobs`（202）+ `/api/scan-center`（页面元数据） | 视图层不含任何闸门逻辑，只做参数转发与 201/202 组装 |
+
+`api/__init__.py`、`core/db.py`（建表）、`core/ids.py`（`proj_` 前缀）、
+`core/audit.py`（`project.created` / `project.scope_attached`）都是**加法**。
+
+#### 9.22.3 公网任务的完整闸门顺序
+
+`core/application.py:create_authorized_public_job` 是唯一入口，顺序**刻意**如下
+（每一步都在前一步不通过时立刻返回，不产生任何落库副作用）：
+
+```text
+① 项目存在？           否 → 404 not_found
+② scope_id 挂在该项目下？ 否 → 400 bad_request（附 attached_scope_ids，告知当前挂了哪些）
+③ 解析策略模板 → 工具清单 → 公网白名单校验
+                        否 → 400 bad_request（附 blocked_tools + internet_allowed_tools）
+④ 默认 mode=real（**不静默降级为 mock**）→ 转交 create_scan_job
+⑤ create_scan_job 内部：目标非空 → 工具非空 → 幂等键 → 工具受支持 → 目标数上限
+                        → Scope/Policy → 环境开关 → 落库 → 审计
+```
+
+第 ④ 步是本次一个**刻意的取舍**：真实扫描失败时**报错**，而不是退回 mock 给一份假数据。
+理由是「以为打了真实目标、其实拿到编的数据」比直接报错危险得多
+（`test_real_mode_without_env_switch_is_403_and_does_not_fall_back_to_mock` 锁住）。
+
+`mode=mock` 仍然可以显式指定 —— 那是演练用的，闸门（①②③）一条都不少。
+
+#### 9.22.4 前端：扫描中心（方案第 7 节）
+
+- 新增页面 `GET /scan-center`（`web/templates/scan_center.html`），三块：项目 / 创建任务 / 任务列表；
+- 新增 `web/static/scan_center.js`：**全部判断都是转发**，不决定「能不能扫」；
+- `web/static/app.js` 末尾把三张文案表（状态 / 步骤状态 / 错误码）挂到 `window.GEF_UI`，
+  扫描中心复用它们 —— **同一个 `error_code` 在两页不会显示成不同的话**；
+- 被禁工具在界面上**置灰但保留展示**（附 `reason`），这是可用性提示而**不是**安全边界：
+  绕过 DOM 直接发请求一样会被后端 400。
+
+#### 9.22.5 一处**必须知道**的测试隔离修复
+
+新增 `.env`（本机开发配置）之后，全量测试冒出两个**与被测代码无关**的失败：
+
+| 失败用例 | 症状 | 根因 |
+|---|---|---|
+| `test_m2_security.py::test_health_exposes_mode_and_security_status` | `real_scan_enabled` 断言 `False` 却拿到 `True` | 本机 `.env` 里 `GEF_ALLOW_REAL_SCAN=true` 被 `config.load_dotenv()` 读进测试进程 |
+| `test_observability.py::test_configure_logging_filters_by_level` | `json.loads` 解析失败，拿到的是 `ts=… level=ERROR …` 文本 | 本机 `.env` 里 `GEF_LOG_FORMAT=text` |
+
+修法在 `tests/conftest.py`：对这两个变量用**赋值**而不是 `setdefault`
+（`load_dotenv()` 默认不覆盖已存在的环境变量），并写明为什么必须钉死。
+`test_m4_runner_result.py::real_mode` 用 `monkeypatch.setenv` 打开，用例结束自动回滚 —— 不受影响。
+
+> **教训**：「测试跟随开发者本机配置」会让同一份代码在这台机器绿、在那台机器红，
+> 且红的原因与被测代码毫无关系。凡是 `.env` 能覆盖、而测试又对其有断言的开关，
+> 都必须在 conftest 里钉死。
+
+#### 9.22.6 回归测试（+104，901 → 1003 passed / 2 skipped）
+
+| 文件 | 覆盖 |
+|---|---|
+| `tests/unit/test_tool_registry.py`（34） | 元数据完整性（注册表 ↔ 元数据表**双向**无缺漏）、白名单恰好两个、判定报错形状、模板解析的四种拒绝 |
+| `tests/unit/test_projects.py`（26） | 创建/校验/上限/去重、关联幂等、**`scopes` 表结构逐列比对**、关联项目不改写 Scope 本体 |
+| `tests/integration/test_public_scan_mode.py`（44） | 方案第 9 节五类（Scope / Policy / Job / Tool / Worker）+ 第 11 节验收 + 扫描中心页面 + 两条源码守卫 + 旧链路不受影响 |
+| `tests/conftest.py` | 环境变量钉死（见 §9.22.5） |
+
+> 计数口径：`--collect-only` 汇总（`34 + 26 + 44 = 104`）；
+> 排除这三个文件后收集数为 **901**，与上一轮基线**逐条相等** ——
+> 即本轮没有任何既有用例被删改。
+
+方案第 9 节的五类对应关系：**Scope** → `test_public_domain_scope_can_be_created`；
+**Policy** → `test_out_of_scope_target_is_403`；**Job** → `test_public_job_enters_queue_with_audit_record`；
+**Tool** → `test_blocked_tool_cannot_be_submitted`（5 个参数化）；**Worker** → `test_worker_executes_public_job`。
+
+#### 9.22.7 本节的已知边界（不是缺陷，是范围）
+
+- `nuclei` 在方案第 4 节被写作 `nuclei(限制)`，但**本项目 runner 里没有它**。
+  处理方式是如实登记进 `KNOWN_UNAVAILABLE_TOOLS` 且 `internet_allowed=False`，
+  在扫描中心作为「受限未开放」展示 —— **不假装有、也不悄悄漏掉**。
+- 项目与 Scope 是**多对多**（`project_scopes`），但当前 UI 只做「项目 → 它的 Scope」正向选择；
+  反向（一个 Scope 被几个项目引用）没有界面，只有 `projects.find_by_scope` 这一处后端能力。
+- 真实公网扫描**不在本轮执行范围**：本轮实机验收全部打 `127.0.0.1` 与 RFC 6761 保留域
+  `example.test`，`GEF_ALLOW_REAL_SCAN` 只在用例内临时打开。
+  `scripts/verify_public_scan.py` 是可复跑的验收探针（只打保留域）。
+- **新增脚本必须进 `test_observability.py:_PRINT_ALLOWLIST`**：`scripts/verify_public_scan.py`
+  用 `print` 把每一步的服务端原始响应（含错误体）打到 stdout，这正是它的用途，
+  所以按 `scripts/check_env.py` 的同规格登记了 `main` / `show` 两处。
+  这个守卫的设计意图是**逼人回答「这条信息该不该进结构化日志」**，不是禁止 `print` ——
+  漏登记时全量测试会红，正是它该有的行为（本轮就真实触发过一次）。
 
