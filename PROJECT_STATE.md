@@ -588,16 +588,20 @@ git diff --check: 退出码 0
 
 ```powershell
 git log -1 --format="%H %s"     # 以这条输出为准
-git status -sb                  # ## main...origin/main [ahead 9] = 有 9 个提交待推送（纯快进）
+git status -sb                  # ## main...origin/main [ahead 10] = 10 个提交待推送（纯快进）
 ```
+
+> **上表的 9 条 + 更新本文件的那条 `docs(state):` 提交 = 待推送的 10 条。**
+> 状态板自己也要提交，所以「待推送数」永远比表里多一条 —— 这不是不一致，
+> 是「本文件的改动无法记进本文件」的必然结果。以 `git rev-list --left-right --count` 为准。
 
 与 `origin/main` 的关系：`git log -1 origin/main` 当前为 `a2389e8`
 （更早的 5 个提交**已经推送完毕**）。
-**本轮 9 个提交尚未推送**：`4428302`（测试隔离修复）、`0a3bd42`（后端）、
+**本轮 10 个提交尚未推送**：`4428302`（测试隔离修复）、`0a3bd42`（后端）、
 `7018fb4`（前端）、`26ddf3a`（测试与探针）、`207af8c`（文档同步）、
 `db159ff`（状态板）、`1a34310`（哈希同步与密钥清理补记）、`5614491`（审计专节）、
-`9a72058`（交付报告 + 测试报告增量），
-`git rev-list --left-right --count origin/main...HEAD` 为 `0 9` —— **纯快进，无需 force**。
+`9a72058`（交付报告 + 测试报告增量），加更新本文件的 `docs(state):` 提交；
+`git rev-list --left-right --count origin/main...HEAD` 为 `0 10` —— **纯快进，无需 force**。
 按用户偏好「提交可做但不做 push，需等确认」，**推送前请再确认一次**
 （并重跑 `docs/DECISIONS.md` §3.4 那套推送前安全审计）。
 
