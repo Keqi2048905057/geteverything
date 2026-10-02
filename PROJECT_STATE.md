@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · **下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅** · 本地领先 origin/main 20 个提交（提交本阶段前；纯快进，待确认后推送）· M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · **下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅** · **23 个提交已推送（`a2389e8..b47fb1d`，快进无 force，未推任何标签）** · M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
 - 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → **下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（`59047ee` / `5960bc0`）→ Phase 4 结果体验 ✅（本轮）** → P0-6 阶段二 + M5 剩余 ⬜**
-- 更新日期：2026-10-02（下一阶段体验优化 Phase 1～4；此前公网授权测试模式体验版 / M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
+- 更新日期：2026-10-02（下一阶段体验优化 Phase 1～4；此后 23 个提交已推送并复核；M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
 
 ---
 
@@ -702,24 +702,30 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 > **判断待推送量一律用 `git rev-list --count origin/main..HEAD`，不要抄本节数字。**
 > 下面表格只列**不含**本文件改动的那些提交（即 `docs: 状态板…` / `docs(state):…` 之外的全部）。
 
-与 `origin/main` 的关系：`git log -1 origin/main` 当前为 `a2389e8`
-（更早的 5 个提交**已经推送完毕**）。
-**本轮的代码与文档提交尚未推送**，按内容分三类：
+与 `origin/main` 的关系：**已推送** —— `git log -1 origin/main` 当前为 `b47fb1d`，
+本地 `git status -sb` 为 `## main...origin/main`（**无 ahead**），
+`git rev-list --count origin/main..HEAD` = **0**。
+推送命令是显式的 `git push origin main`（**刻意不带 `--tags` / `--follow-tags`**），
+结果 `a2389e8..b47fb1d  main -> main`，快进无 force。
+推送后 `git ls-remote --tags origin` **返回空**，即**没有任何标签被推上去**；
+本地标签 `backup-before-secret-purge` 按你的答复「先不删除」**原样保留**
+（详见 `docs/DECISIONS.md` §3.6.1）。
+**本轮推送前的七项安全审计结论见 `docs/DECISIONS.md` §3.6.1**（49 个变更文件 / 179 个已跟踪文件 /
+9995 行新增，产物与密钥 0 命中；纯快进）。下表是**推送前**那一批提交的分类记录：
 
 | 类别 | 提交 |
 |---|---|
 | 产品代码 | `4428302`（测试隔离修复）、`0a3bd42`（后端）、`7018fb4`（前端） |
 | 测试与验收 | `26ddf3a`（测试与探针）、`7bfb8e7`（补 IP/CIDR 用例） |
 | 文档 | `207af8c`（文档同步）、`1a34310`（哈希同步 + 密钥清理补记）、`5614491`（审计专节）、`9a72058`（交付报告 + 测试报告增量）、`0efa43a`（基线 1003→1004 对齐） |
-| 下一阶段体验优化 | `e94b180`（Phase 1 UI 清理）、`510fa41`（Phase 2 公网授权测试入口）、`59047ee` + `5960bc0`（Phase 3 Scan Profile 代码 + 文档）、`f88dd57`（Phase 4 结果体验代码 + 测试）、Phase 4 文档同步见下 |
+| 下一阶段体验优化 | `e94b180`（Phase 1 UI 清理）、`510fa41`（Phase 2 公网授权测试入口）、`59047ee` + `5960bc0`（Phase 3 Scan Profile 代码 + 文档）、`f88dd57`（Phase 4 结果体验代码 + 测试）、`547d827` + `b47fb1d`（Phase 4 文档同步 + 状态板回填） |
 | 状态板（只改本文件） | `db159ff` 及此后每一条 `docs(state):…` |
 
 **纯快进，无需 force** —— 已实测 `git merge-base --is-ancestor origin/main HEAD` 退出码 0。
-按用户偏好「提交可做但不做 push，需等确认」，**推送前请再确认一次**
-（并重跑 `docs/DECISIONS.md` §3.4 那套推送前安全审计）。
+**本批 23 个提交已于 2026-10-02 经你确认后推送完毕**（`a2389e8..b47fb1d`，无 force）。
 
-> **推送前安全审计已跑（2026-10-02，只读，完整表格见 `docs/DECISIONS.md` §3.4）**：
-> 变更文件与 172 个已跟踪文件均无运行期产物、数据库、密钥、二进制；
+> **推送前安全审计已跑（2026-10-02，只读，完整表格见 `docs/DECISIONS.md` §3.4 与本轮 §3.6.1）**：
+> 变更文件与已跟踪文件均无运行期产物、数据库、密钥、二进制；
 > 新增行里无 `sk-` / `ghp_` / `AKIA` / JWT 形状；
 > `origin/main` 是 HEAD 的祖先（纯快进）；`origin/main` 已有历史里也 0 命中明文。
 > 审计**拦下过一处真实问题并已修复**：`scripts/verify_public_scan.py` 里写死了
@@ -739,10 +745,11 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 > 它们只能从 `refs/tags/backup-before-secret-purge` 到达。
 > `git push origin main` **不会**带上标签（已实测 `push.followTags` / `remote.origin.push` 均未设置），
 > 所以推送本身安全；但 `--tags` / `--follow-tags` / GUI 勾「推标签」会直接泄露。
-> **因此在推送 `main` 之前请先拍板**：删标签（建议，放弃原路回滚点、让明文不可达等 `git gc` 回收）
-> 还是保留并永不推标签；并建议顺手轮换 `.env` 里的 `LOCAL_ADMIN_TOKEN`。
-> 本 Agent **未删标签**（属第 4 节「删除历史备份」）、**未改 `.env`**，已列为新条目追加进
-> `docs/DECISIONS.md` 第 3 节，完整分析见 §3.4 末尾「🔴 推送前必须先清理」。
+> **你的答复是「先不删除」** —— 因此本 Agent **未删标签**、**未改 `.env`**；
+> 本轮推送已按该口径执行并复核：`git ls-remote --tags origin` **返回空**
+> （**一个标签都没推上去**），本地标签原样保留。
+> 若日后想了断：`git tag -d backup-before-secret-purge` + 轮换 `LOCAL_ADMIN_TOKEN`。
+> 完整分析见 `docs/DECISIONS.md` §3.4 末尾与 §3.6.1。
 
 **本轮的拆分口径**：一个逻辑变化一个提交，每个都能独立回滚 ——
 ① 纯测试隔离修复（与被测代码无关）；② 后端核心（新模块 + 表 + 编排入口）；

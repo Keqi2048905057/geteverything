@@ -26,6 +26,7 @@
 | ID | 事项 | 风险 | 预授权 | 预填答案（Agent 照此执行） | 回滚方法 |
 |---|---|---|---|---|---|
 | A | 公开 fork 上的敏感数据（20 个条目 + 悬空提交 736ad76） | 🔴 高 | ⬛ **不可授权** | **不执行**。需 `delete_repo` scope，当前 Token 无权（API 返回 403）。仅记录为 BLOCKED-USER 并在报告中提醒。 | 不适用（用户手动：设 private / 删 fork） |
+| A′ | 同上（**2026-10-02 用户已自行处置**） | — | — | 用户告知「fork 我已经删除」。本 Agent 只读复核：`git ls-remote Keqi2048905057/get_everything_framework` → 退出码 128 / `Repository not found`，确认不可匿名访问。**注意**：上游 `Linki4964/get_everything_framework` 仍在（`git ls-remote` 返回 HEAD `d86578a`），删除自己的 fork 不影响上游那份。 | 不适用 |
 | B | `SECRET_KEY` / `LOCAL_ADMIN_TOKEN` 缺失时的行为 | 🟡 中 | ✅ | **保持现状**（自动生成 + 现有 warning）。只允许补测试与文档说明，**不得改变默认启动行为**。 | 恢复 `config.py` 默认分支 |
 | C | 旧 clone（`E:\Programmingtools\get_everything_framework`）执行 `git rm --cached` 移除 19 个敏感文件 | 🟠 中高 | ⚠️ 需明确授权 | **默认不执行**。仅生成待执行清单（含文件列表与命令），不改索引。 | `git reset` 恢复索引（工作区文件不受影响） |
 | D | `/api/tools` `/api/results` `/api/export` 是否加鉴权 | 🟠 中 | ✅（限文档与测试） | **不改鉴权行为**（避免破坏本机脚本兼容性）。允许：补测试锁定当前契约、在 README/SECURITY 写明「这三个接口当前匿名可读、属已知项」。 | 回退文档改动 |
@@ -63,7 +64,9 @@
 - `[DEFERRED] P1 §13 — SQLAlchemy + Alembic 替换手写 SQL + 迁移 —— 引入新依赖并重写整个数据访问层，风险等级与第 4 节的「SQLite → PostgreSQL」同类 — **本机联调版明确不做**（见 3.1 本轮口径），从「待授权」改为「已延期」，不再逐轮追问。`
 - `[DEFERRED] P1 §20（生产迁移门槛相关项）—— 属方案第 25 节「P1 后续生产迁移门槛」，已在执行方案里标注 `[DEFERRED]`，当前阶段不列入验收。`
 - `[本轮] 是否给 jobs 表补 project_id 列（让任务列表能显示「这次任务属于哪个授权项目」）—— 当前 jobs 表**没有** project_id 列，公网任务的项目信息只存在于创建时的审计事件与 API 响应里，任务列表与任务详情都**看不到**归属项目；补列属表结构改动（ADD COLUMN），按第 2 节边界退回第 1 节流程 — 建议：单开一项预授权，规格与 P0-7a 相同（纯增量 ADD COLUMN，可空，既有行语义不变）。**本轮刻意没有顺手加**，因为它不是方案第 5～11 节的要求。`
+- `[本轮] Phase 4「风险信息」的口径是否被认可 —— 方案第 6 节写「风险信息」，但本框架**没有漏洞扫描能力**（`nuclei` 不在 `RUNNER_REGISTRY`，全仓无 CVE / CVSS / severity）。本 Agent 的判断是**如实降级**：第四段只给「从本次采集数据里读出来的可观察事实」，级别 `info`/`notice`/`attention`，每次响应恒带免责说明，出参无 `severity`/`cve` — **2026-10-02 用户答复：「先解释一下」**（只要求解释，未表态）→ 本 Agent **未改任何代码**，解释见 §3.5 该段；该项**仍待你复核**。若你要的是真正漏洞结论，需**先接入扫描器并单独授权**（不会在未授权下开放 `nuclei`）。`
 - `[本轮] 回滚点标签 backup-before-secret-purge 的处置 + 本机管理员 Token 是否轮换 —— 复跑推送前审计时发现：**被重写掉的 4 个旧提交对象仍在对象库里，明文 Token 仍可从中检出**，而它们只能从 `refs/tags/backup-before-secret-purge` 到达；`git push origin main` 本身不会带上标签（已实测 `push.followTags` / `remote.origin.push` 均未设置），但只要有人用 `--tags` / `--follow-tags` / GUI 勾「推标签」就会泄露 — 建议：确认 main 成果无误后执行 `git tag -d backup-before-secret-purge`（放弃原路回滚点，换明文彻底不可达，等待 `git gc` 回收），并顺手把 `.env` 里的 `LOCAL_ADMIN_TOKEN` 换一个新的 — **该标签属「历史备份」，删除需你确认；Token 属你的运行环境，本 Agent 不擅自改**。完整分析见 §3.4 末尾「🔴 推送前必须先清理」。`
+  > **2026-10-02 用户答复：先不删除** → 标签保留，Token 未轮换；本轮推送按 §3.6.1 复核确认**未推任何标签**。该项**仍开放**，等你日后决定。
 
 > 本节只放**没有执行**的事项。本轮另有一项**已执行但判断依据需用户复核**的改动
 > （在 `core/db.py` 新增两张表），同类目但不属「未授权项」，完整说明见本节末尾。
@@ -219,7 +222,7 @@ git grep -n -I "<本轮 Token>" $(git rev-list --all)
 理由见 `docs/CODEBASE_MAP.md` §9.23.5 —— 多一条构造入口就多一个「假 Runner 没被替换、
 真去执行外部命令」的机会，那正是本项目硬约束最不该留缝的地方。
 
-**Phase 4 的一处**判断需你知情（不是新增权限，而是「不做什么」）****：
+**Phase 4 的一处判断需你知情**（不是新增权限，而是「不做什么」）：
 方案第 6 节把结果体验的第四段写成「风险信息」，但本项目**没有**漏洞扫描能力
 （`nuclei` 不在 `RUNNER_REGISTRY`，全仓无 CVE / CVSS / severity 数据）。
 本 Agent 的判断是**如实降级、不假装**：第四段改为「从已有观测里读出来的、
@@ -236,6 +239,62 @@ git grep -n -I "<本轮 Token>" $(git rev-list --all)
 公网工具白名单（仍是 `subfinder` + `httpx`）、同步 Runner 链路、Agent、`pyproject.toml`、`.env`。
 **未对任何真实外部目标发起扫描** —— 本轮用例全部走 mock，
 或把 `modules.registry.build_runner` 换成假 runner，目标是 RFC 6761 保留域 `example.test`。
+
+### 3.6 用户对本轮五个待确认项的答复（2026-10-02，原话逐条落地）
+
+> 用户原话：**「可以先推送；先不删除；第三点有点不理解先给我解释一下；不跟踪；先不开工」**，
+> 随后补充**「fork 我已经删除」**。下表是逐条落地结果 —— **第 3 点只要求解释，未作授权判断**，
+> 因此该判断仍是「已执行、待你复核」状态，见下表末行的处理方式。
+
+| # | 待确认项 | 用户答复 | Agent 实际动作 | 证据 |
+|---|---|---|---|---|
+| 1 | 是否推送 23 个提交 | ✅ **可以先推送** | 先按 §3.4 七项口径**重跑只读安全审计**，再 `git push origin main` | 见 §3.7 |
+| 2 | 是否删除回滚标签 `backup-before-secret-purge` | ⬛ **先不删除** | **未删**。标签仍在（`git tag` 仍列出），4 个旧提交对象仍可达 | §3.6.1 末行 |
+| 3 | 是否认可 Phase 4「风险信息」口径 | ❓ **先解释**（未表态） | **不动代码**，把「它是什么 / 不是什么 / 与漏洞报告差在哪 / 若你要真结论要做什么」讲清楚；该判断**继续挂在「待你复核」**，不视作已认可 | 本文件 §3.5 那段「Phase 4 的一处判断需你知情」 |
+| 4 | 未跟踪文件是否继续不跟踪 | ✅ **不跟踪** | 维持 3.2 口径：`.dsh/skills/geteverythingskill/`、`GetEverything_长期产品化总方案_Flask版.md`、`GetEverything_DSH执行方案_Flask版.md` **三者都不入库**（注：主仓根目录另有两份本机过程材料 `GetEverything_DSH执行方案_Flask版.md` 的副本与 `本机联调版实施方案_DSH.md` 等，同样不跟踪） | `git status --porcelain` 里它们仍是 `??` |
+| 5 | P0-6 阶段二（Agent 执行异步化）是否开工 | ⬛ **先不开工** | **未动** `agent/`。影响说明 `docs/AGENT_ASYNC_IMPACT.md` 保持「已出、未开工」 | 本文件 §3 未变 |
+
+#### 3.6.1 本次推送前复跑的安全审计（七项，只读；口径同 §3.4）
+
+审计对象：`origin/main..HEAD` 的 **23 个提交**（`a2389e8..b47fb1d`），
+脚本为一次性只读探针，**不改仓库任何状态**。
+
+| 检查项 | 方法 | 结论 |
+|---|---|---|
+| 运行期产物是否入库 | `git diff --name-only origin/main..HEAD` 按 `results/ uploads/ exports/ backups/ SecLists/ *.db *.sqlite *.exe .env heartbeat *.pem *.key` 匹配（**49 个**变更文件） | ✅ 命中 0 条 |
+| 全仓库已跟踪文件是否含数据库/密钥/样本 | `git ls-files` 同上模式（共 **179 个**已跟踪文件） | ✅ 命中 0 条 |
+| 新增行是否含硬编码密钥 | 全 23 提交 `git log -p` 的 **9995** 行新增，匹配 `(secret_key\|api_key\|password\|passwd\|token)\s*=\s*"[^"]{8,}"` | ✅ 命中 0 条（2 条形似命中经逐行核对**全是文档占位符**：`$env:LOCAL_ADMIN_TOKEN="<取自 .env>"` 与 `= "<填 .env 里的管理员 Token>"`，不含任何真实值） |
+| 新增行是否含高强度密钥形状 | 同上匹配 `sk-…` / `ghp_…` / `AKIA…` / `eyJ….` | ✅ 命中 0 条 |
+| 历史里是否有明文残留（**可达性复核**） | `git grep -F <本轮 Token> $(git rev-list --all)` | ⚠️ 4 个提交仍可检出，**全部只从标签 `backup-before-secret-purge` 到达**；`git grep … HEAD` → **不命中**（`refs/heads/main` 干净） |
+| 是否与远端分叉 | `git rev-list --left-right --count origin/main...HEAD` = `0 23`；`git merge-base --is-ancestor origin/main HEAD` | ✅ 退出码 0 —— **纯快进，无需 force** |
+| 最大文件 | `git diff --numstat origin/main..HEAD` 排序 | ✅ 最大为测试文件 `tests/integration/test_public_scan_mode.py`（+1145 行）；全部为文本，无二进制 |
+
+**推送执行与结果**：用户授权后执行
+```powershell
+git push origin main          # 刻意不带 --tags / --follow-tags
+```
+→ 退出码 0，`a2389e8..b47fb1d  main -> main`。
+推送后复核：`git status -sb` 显示 `## main...origin/main`（**无 ahead**）、
+`git rev-list --count origin/main..HEAD` = **0**、`git log -1 origin/main` = `b47fb1d`、
+`git ls-remote --tags origin` **返回空**（即**没有任何标签被推上去**）、
+本地 `git tag` 仍列出 `backup-before-secret-purge`（**按用户答复「先不删除」原样保留**）。
+
+> 第 2 项的当前状态因此是：**明文仍未彻底不可达** —— 它只从那个本地标签可达，
+> 而该标签**从未被推送到远端**（上表 `git ls-remote --tags origin` 为空，
+> 且 `push.followTags` / `remote.origin.push` 均未设置，`push.default` 也未设置）。
+> 若你以后想彻底了断：`git tag -d backup-before-secret-purge` 即可，
+> 删除后那 4 个对象不可达，等 `git gc`（默认 `gc.pruneExpire=2 weeks`）回收；
+> 并建议顺手换掉 `.env` 里的 `LOCAL_ADMIN_TOKEN`。**两者都仍等你点头，本 Agent 未做。**
+
+**另：用户已自行删除公开 fork** `Keqi2048905057/get_everything_framework`。
+本 Agent 复核：`git ls-remote https://github.com/Keqi2048905057/get_everything_framework.git`
+→ **退出码 128 / `Repository not found`**，即该仓库已不可匿名访问；
+主仓 `origin`（`Keqi2048905057/geteverything`）不受影响。
+第 1 节 **A 项**（公开 fork 上 20 个敏感文件 + 悬空提交 `736ad76`）**至此由用户侧关闭** ——
+注意 `736ad76` 从来不在**主仓**对象库里（`git cat-file -t 736ad76` → `Not a valid object name`），
+主仓 `origin/main` 的 179 个已跟踪文件里也没有任何产物/数据库/密钥。
+但**上游 `Linki4964/get_everything_framework` 仍在**（`git ls-remote` 返回 `d86578a`），
+fork 删除只消除了「你这个副本」，不等于上游那份也跟着消失 —— 若你在意，需另行处理上游。
 
 ### 3.1 用户本轮（2026-10-02，弹窗确认）已授权的项
 
