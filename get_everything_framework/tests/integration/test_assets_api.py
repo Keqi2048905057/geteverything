@@ -337,3 +337,27 @@ def test_assets_js_wires_diff_items_to_asset_detail(client):
     assert "openDetail" in script and "asset-detail-panel" in script
     # 点击清单里的条目要能取到 asset_id 并打开详情。
     assert "diff-body" in script
+
+
+def test_assets_js_never_renders_a_raw_scope_id_as_text(client):
+    """方案第 4 节原则 2：前端**不显示** ``scope_id`` —— 实体 ID 只作表单 value。
+
+    资产详情的「所属范围」一行原先直接写 ``asset.scope_id || "（未限定）"``，
+    于是详情面板上会出现 ``scope_9f3c…``。这是「前端暴露内部模型」的典型形态：
+    用户看到的应该是一个**能对上号的授权资产**，而不是一串数据库主键。
+
+    这里只做源码级守卫（项目没有浏览器测试）：翻了就是翻了 —— 一旦有人把
+    它改回原样，红的是这条测试，而不是某个用户的困惑。
+    """
+    script = client.get("/static/assets.js").get_data(as_text=True)
+
+    assert "function scopeLabelById(" in script, "缺少 scope_id → 文案 的翻译函数"
+    # 具名的那一行必须走翻译函数。
+    assert "scopeLabelById(asset.scope_id)" in script
+    # 不允许把 scope_id 直接当文案塞进 DOM（``textContent`` / ``el(...)`` 两种写法）。
+    for forbidden in (
+        '["所属范围", asset.scope_id ||',
+        'el("dd", null, asset.scope_id)',
+        "textContent = asset.scope_id",
+    ):
+        assert forbidden not in script, f"assets.js 又把 scope_id 当文案了: {forbidden}"

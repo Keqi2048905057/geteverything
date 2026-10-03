@@ -140,7 +140,6 @@ def build_page_context(
     domain=None,
     scan_message=None,
     scan_error=None,
-    scan_report=None,
     chat_error=None,
 ):
     """构建页面模板所需的上下文数据"""
@@ -154,7 +153,6 @@ def build_page_context(
         "current_domain": domain or "",
         "scan_message": scan_message,
         "scan_error": scan_error,
-        "scan_report": scan_report,
         "chat_error": chat_error,
         "summary": summary,
         "domain_summary": domain_summary,
@@ -282,7 +280,6 @@ def index():
         domain=domain,
         scan_message=job_message,
         scan_error=job_error,
-        scan_report=None,
         chat_error=chat_error,
     )
     context["is_authenticated"] = local_auth.is_authenticated()

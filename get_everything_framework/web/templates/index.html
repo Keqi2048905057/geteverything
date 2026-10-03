@@ -32,17 +32,6 @@
   {% if scan_message %}
     <div class="alert alert-ok" role="status">{{ scan_message }}</div>
   {% endif %}
-  {% if scan_report %}
-    <div class="alert alert-info" role="status">
-      模拟扫描：范围 <code>{{ scan_report.scope_id }}</code> ·
-      目标 <code>{{ scan_report.targets | join(', ') }}</code> ·
-      模式 <code>{{ scan_report.mode }}</code> ·
-      发现 {{ scan_report.found_count }} 条
-      {% if scan_report.results %}
-        — {{ scan_report.results | join(', ') }}
-      {% endif %}
-    </div>
-  {% endif %}
 
   <main class="layout">
     <section class="panel">

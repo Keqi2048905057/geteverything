@@ -58,6 +58,31 @@
     return node ? node.value.trim() : "";
   }
 
+  /**
+   * 把 ``scope_id`` 翻成「授权资产」的可见文案（方案第 4 节原则 2）。
+   *
+   * 方案写明前端**不显示** ``scope_id`` / UUID / 数据库字段：实体 ID 只作为
+   * 表单 ``value`` 存在，任何人类可读的位置都要用名称 + 目标。
+   *
+   * 翻法就是读本页已经渲染好的两个下拉框 —— 它们是同一份 Scope 列表，
+   * 不再多请求一个接口、也不在前端存第二份数据。
+   * 按 ID 找不到（例如该范围已被删除）时返回 ""，由调用方给出一句人话，
+   * **而不是**把 ID 原样漏出去。
+   */
+  function scopeLabelById(scopeId) {
+    if (!scopeId) return "";
+    var selects = ["filter-scope", "diff-scope"];
+    for (var i = 0; i < selects.length; i += 1) {
+      var select = document.getElementById(selects[i]);
+      if (!select) continue;
+      for (var j = 0; j < select.options.length; j += 1) {
+        var option = select.options[j];
+        if (option.value === scopeId) return (option.textContent || "").trim();
+      }
+    }
+    return "";
+  }
+
   function buildQuery(withPaging) {
     var params = [];
     var scopeId = filterValue("filter-scope");
@@ -206,7 +231,10 @@
       ["状态", statusLabel(asset.status) + "（" + asset.status + "）"],
       ["首次发现", asset.first_seen || "—"],
       ["最近发现", asset.last_seen || "—"],
-      ["所属范围", asset.scope_id || "（未限定）"],
+      // 「所属范围」给的是**授权资产的名称 + 目标**，不是 scope_9f3c… 那一串
+      // （方案第 4 节原则 2：前端不显示 scope_id）。找不到对应文案时宁可说
+      // 「已不在当前授权资产列表里」，也不把内部 ID 兜出来。
+      ["所属范围", scopeLabelById(asset.scope_id) || (asset.scope_id ? "（该授权资产已不在列表中）" : "（未限定）")],
       ["置信度", asset.confidence || "—"],
     ].forEach(function (pair) {
       meta.appendChild(el("dt", null, pair[0]));

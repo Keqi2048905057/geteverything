@@ -134,3 +134,28 @@ def test_page_marks_scopes_without_active_scan(admin_client):
     home = admin_client.get("/").get_data(as_text=True)
     assert "仅被动" in home
     assert "已授权" not in home
+
+
+def test_page_has_no_dead_scan_report_block(admin_client):
+    """摸不到的模板分支不再留着（Phase 1「清理异常展示」）。
+
+    首页模板里曾有一段 ``{% if scan_report %}`` 的「模拟扫描：范围
+    ``{{ scan_report.scope_id }}``」提示块。它**永远渲染不出来** ——
+    ``app.py`` 的调用点一直传 ``scan_report=None``（首页同步扫描在 M3 已改成
+    创建异步任务），所以那段 HTML 是一块死代码。
+
+    死代码本身不报错，但它有两个实际害处：① 它是全仓唯一一处把 ``scope_id``
+    直接写进可见文案的地方，与方案第 4 节「前端不显示 scope_id」相抵触；
+    ② 下一个读代码的人会以为首页还有一条同步扫描路径。
+
+    这里从两头守：页面渲染不出它，模板源码里也没有它。
+    """
+    from pathlib import Path
+
+    home = admin_client.get("/").get_data(as_text=True)
+    assert "模拟扫描" not in home
+
+    template = (
+        Path(__file__).resolve().parents[2] / "web" / "templates" / "index.html"
+    ).read_text(encoding="utf-8")
+    assert "scan_report" not in template, "首页模板又出现了摸不到的 scan_report 分支"
