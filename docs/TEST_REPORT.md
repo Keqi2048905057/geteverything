@@ -1337,6 +1337,18 @@ operator / target / tools / mode  = audit_events.detail 的 operator / targets /
 刻意**不**写成「detail 里有哪些键」的白名单断言：那样每加一个 Phase 3 字段都要改测试，
 反而会诱导后人把这条边界顺手删掉。只查第 13 节点名的那六项。
 
+**这条用例不是「跑一遍看起来对」就算数** —— 本轮做了一次**变异验证**
+（先破坏实现，确认用例真的会红，再把实现原样改回）：
+
+```text
+变异：把 core/application.py:365-389 的 detail 里 "tools": selected_tools 一行删掉
+结果：test_job_audit_records_the_six_required_fields  FAILED（1 failed in 0.88s）
+还原：把该行加回 → 同一用例 PASSED（1 passed in 0.56s）
+复核：git status --short get_everything_framework/core/application.py 无输出（实现零改动）
+```
+
+也就是说这条断言真的**钉住了** `tools` 落审计，而不是「恰好通过」。
+
 `tools` 与 `mode` 在 `jobs` 表里也有一份，很容易被当成「审计表里重复了」删掉；
 一旦删掉，事后就再也分不清「这次开的是哪些工具、是真扫还是 mock 演练」——
 这是本条用例的真实价值，不是凑数。
@@ -1406,3 +1418,83 @@ operator / target / tools / mode  = audit_events.detail 的 operator / targets /
 二是审计查出的「同名异义会静默给错值」与「两个读出点的分组视图无守卫」——
 前者补文档映射、后者补一条逐分组 `==` 的守卫。**实现代码一行未改**：
 三条新用例在写下的当次就通过，两处收口只动 docstring 与文档。
+
+---
+
+## 13. 执行期双开关复检 + Phase 1 四处审计缺口收口（1305）
+
+> 本轮是**第一次改动执行期闸门**（`jobs/executor.py`）与**第一次同时跨三层**
+> （`core/` + `jobs/` + `web/`）。依据同一份工作单第 13 节「Real Mode 控制」
+> （`6GetEverything-下一阶段规划方案.md:397`）、第 6 节目标输入（`:228-251`）、
+> 第 4 节原则 2（`:158-191`）。设计判断记在 `docs/DECISIONS.md` §3.11、
+> 代码地图记在 `docs/CODEBASE_MAP.md` §9.29。
+
+### 13.1 实测结果
+
+```powershell
+cd get_everything_framework
+$env:PYTHONIOENCODING="utf-8"; python -m pytest -o addopts="" -q
+                                    # 1307 collected / 1305 passed, 2 skipped, 0 failures / 0 errors
+ruff check .                        # All checks passed!
+mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
+node --check web/static/scan_center.js                # 通过（本轮改动）
+node --check web/static/assets.js                     # 通过（本轮改动）
+node --check web/static/app.js                        # 通过（本轮未改）
+# 路由覆盖探针（算法同 §3.1 / §6.4 / §8.2 / §9.2 / §11.1 / §12.1）：
+#   declared: 50 / hit: 49 / never hit: GET /api/tool/<tool_name>/results
+```
+
+| 项 | §12 第 13 节缺口回填（`1746f41`） | 本轮 |
+|---|---|---|
+| 用例总数（`--collect-only -q` 汇总） | 1296 | **1307**（+11） |
+| 其中「修复既有用例」 | — | 1 条（`test_real_step_rechecks_target_still_in_scope`） |
+| `test_*.py` 文件 | 40 | 40（未新增文件） |
+| mypy 源文件 | 72 | **72**（未新增源文件） |
+| `app.url_map` 规则 / 方法绑定 / `/api/*` | 48 / 50 / 42 | **48 / 50 / 42**（**未新增路由**） |
+| 被用例真实命中的方法绑定 | 49 / 50 | **49 / 50**（探针重跑，第七轮结论不变） |
+
+**+11 的构成**（差额由 `git worktree add --detach <tmp> 1746f41` 检出基线后两个工作树各跑一遍
+`--collect-only -q` 求差得到，不是推算：1296 → 1307）：
+
+| 文件 | 用例 | 守什么 |
+|---|---|---|
+| `tests/unit/test_jobs_executor.py`（27 → **29**） | `test_real_step_rechecks_env_switch_at_execution_time` | 执行期复检 `GEF_ALLOW_REAL_SCAN`：删掉开关检查 → 红 |
+| 同上 | `test_real_step_rechecks_active_scan_at_execution_time` | 执行期复检 `Scope.active_scan`：删掉复检 → 红 |
+| `tests/unit/test_scope.py`（35 → **39**） | `test_normalize_target_accepts_schemeless_url`（参数化 3 例） | `www.example.test/a/b` → `www.example.test` |
+| 同上 | `test_normalize_target_still_reports_a_broken_cidr_as_cidr` | `192.0.2.0/99` 仍报 CIDR 错（不许修成域名） |
+| `tests/integration/test_public_scan_mode.py`（119 → **122**） | `test_scan_center_js_submits_the_current_target_input_not_a_stale_snapshot` | 提交取当前输入、输入变更使旧结论失效（四条口径） |
+| 同上 | `test_scan_center_target_label_mentions_url` | 第 6 节标签如实写「域名 / IP / 网段 / URL」 |
+| 同上 | `test_public_url_target_is_normalized_to_its_host` | 带协议 / 不带协议 / 带路径 → 落库同一个主机 |
+| `tests/integration/test_assets_api.py`（28 → **29**） | `test_assets_js_never_renders_a_raw_scope_id_as_text` | 详情面板不再出现 `scope_9f3c…` |
+| `tests/integration/test_m2_page_scan.py`（10 → **11**） | `test_page_has_no_dead_scan_report_block` | 摸不到的 `{% if scan_report %}` 分支不再回来 |
+
+### 13.2 唯一被修复的既有用例：它此前**依赖缺陷**
+
+`test_real_step_rechecks_target_still_in_scope`（`tests/unit/test_jobs_executor.py:241`）
+原先只把 Scope 建好就断言 `STATUS_SUCCEEDED` —— 它能通过，**恰好是因为执行期不看环境开关**。
+本轮把开关复检补上之后它第一个变红。**修法不是放松断言**：用例自己
+`monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")` 并建一个 `active_scan=True` 的 Scope，
+断言仍然是 `STATUS_SUCCEEDED` —— 它守的那件事（「目标仍在范围内就放行」）一字未变，
+变的是它不再靠一个缺陷才成立。
+
+### 13.3 变异验证（两条新用例不是「恰好通过」）
+
+```text
+变异：把 jobs/executor.py 新增的 real_scan_enabled() 检查与 require_active_scan() 复检
+      两处都改成 `if False:`
+结果：test_real_step_rechecks_env_switch_at_execution_time      FAILED
+      test_real_step_rechecks_active_scan_at_execution_time     FAILED
+还原：两处改回原样 → 同一对用例 PASSED
+复核：工作树里没有残留变异（git diff 中无 if False）
+```
+
+### 13.4 本轮**没测**的东西（如实列出）
+
+| 没测的 | 为什么 |
+|---|---|
+| 前端交互（改输入框 → 摘要有反应 → 提交被拦） | 项目**没有浏览器测试**（无 `package.json`、无 `tests/` 下 `.js`）。本轮新增的是**源码级守卫**，只能证明「代码里存在这四条口径」，不能证明「浏览器里真的这么跑」。渲染路径另用一次性 DOM 桩人工核对过，但那不是回归测试。 |
+| 真实外网目标 | 硬约束：不扫未授权目标。全部用例走 mock / 注入假 runner，目标是 `example.test` 与 RFC 5737 保留段。 |
+| 老入口 `POST /api/jobs` 不装公网白名单 | **刻意不改**（产品口径问题，会改既有 API 可用行为）。实测证据与三种可选口径记在 `docs/DECISIONS.md` §3.11.5 第 1 条。 |
+| `category` 同名异义 | §12.6 已定：不改行为，只补文档映射。本轮未动。 |
+| Agent 边界（方案第 12/16 节③） | §3.9 已挂「先不开工」，本轮**未触碰** `agent/` 任何文件。 |
+

@@ -1322,6 +1322,81 @@ Scan Profile **不能只等于「换个工具组合」** —— 同一组工具�
 `internet_allowed=false` 且只作受限展示）、路由总数（48 规则 / 50 绑定 /
 42 个 `/api/*`，未新增未删除）。本轮只改一个测试文件。
 
+#### 执行期双开关复检 + Phase 1 四处审计缺口收口
+
+方案第 13 节把「Real Mode 控制」写成必须保留的边界。创建期确实是三道闸门
+（`core/application.py:327` 目标校验 → `:329` `resolve_mode()` 读 `GEF_ALLOW_REAL_SCAN`
+→ `:332` `scope.require_active_scan()`），**但这三道都在「任务落库那一刻」就结束了**。
+`jobs/executor.py` 的 `_execute_real_step` 此前只复检了 Scope 成员资格，
+**既不 import `core/safety.py`、也不看 `active_scan`** —— 于是存在这条缝：
+
+```text
+real 任务入队（三道闸门全过）
+  → 排队 / 失败重试 / worker 重启补做期间，开关被关掉、或 active_scan 被收紧
+  → worker 取到任务，仍然把真实外网请求发出去（执行期没看这两件事）
+```
+
+等于「开关只管下单，不管出餐」。本轮收口（`jobs/executor.py:148-172`，+42/−4）：
+调用 Runner **之前**按创建期的**同一顺序**再各读一次，顺序是有意的 ——
+① `validate_step_target` → ② `real_scan_enabled()` → ③ `require_scope().require_active_scan()`
+→ ④ 工具是否已登记。越界 target 连「有没有开开关」都不该被回答；而已经删掉 Scope
+的任务报出的必须是「越界 / 范围不存在」，不能被一句「开关没开」盖过去 ——
+后者会让人以为是环境配置问题，而真正的变化是授权范围没了。
+
+- 错误码用 `scope_violation`（不是 `permission_denied`）：与 `core/safety.py:59-63`
+  创建期口径一致，复用前端已有的「目标超出授权范围」文案，**前端零改动**；
+  而 `permission_denied` 在 `modules/base.py:855-868` 已被退出码 126 占用。
+- **步骤级 `scope_violation` ≠ 任务级 `scope_violation`**：全部步骤复检失败时
+  `aggregate_status()` 给的是 `unknown_error`。这是既有聚合语义，本轮**没有**顺手改。
+- 新增 2 条用例（注入假 runner，零外部流量）；并**修好** 1 条既有用例 ——
+  `test_real_step_rechecks_target_still_in_scope` 此前**依赖「执行期不看开关」这个缺陷**
+  才通过，修好之后它自己开开关，断言仍然不变。
+
+**同轮把 Phase 1 审计查出的四处缺口一并收口**（均为「实现与页面说的不是同一件事」类）：
+
+- **提交的是快照而不是当前输入**：`bindJobForm` 原来写
+  `lastTargets.length ? lastTargets : splitList($("job-target").value)` ——
+  「检查授权 → 改输入框 → 直接创建任务」提交的是**改前**的目标，而页面上的绿灯
+  说的是改后的那个站。现在 `currentTargets()`（`scan_center.js:139`）是唯一事实来源，
+  提交、摘要、自动重算三处都改读它；新增 `checkIsFresh()` / `invalidateCheckResult()`
+  与输入框 `input` 监听，改了就让旧结论失效并要求重新检查。
+- **没写协议的 URL 被当成坏网段**：第 6 节写「用户输入：域名、IP、URL」，
+  但 `www.example.test/a/b`（地址栏直接复制的那种）此前掉进 CIDR 分支，报
+  「非法的 CIDR: www.example.test/a/b」。`core/scope.py:68-87` 新增 `elif "/" in text:`
+  分支，看 `/` **两边**再决定：`192.0.2.0/99` 仍如实报 CIDR 错，`example.test/24`
+  仍按网段形状保留（**不**静默当域名），只有两边都不像网段时才取主机那一段。
+- **`scope_id` 漏进可见文案**：资产详情「所属范围」直接渲染 `scope_9f3c…`，
+  违反方案第 4 节原则 2。新增 `assets.js:scopeLabelById()` 读本页已渲染的下拉选项
+  翻成名称，查不到时给「（该授权资产已不在列表中）」而**不是**把 ID 漏出去。
+- **死代码**：`index.html` 的 `{% if scan_report %}` 块永远渲染不出来（调用点一直传
+  `None`），且是全仓唯一一处把 `scope_id` 写进可见文案的地方 —— 删模板分支 +
+  `app.py` 的 `scan_report` 参数与实参；`scan_center.html` 的 `#scope-list`、
+  `app.css` 的 `.sc-scope-title` 都无任何引用，一并删除。
+- 另把第 6 节的目标标签从「域名 / IP / 网段」补成「域名 / IP / 网段 / **URL**」——
+  标签少写一种输入，用户就会以为贴 URL 会被拒。
+
+**本轮新增 5 条 / 修复 1 条**（`tests/unit/test_jobs_executor.py` 27 → 29、
+`tests/unit/test_scope.py` 35 → 39、`tests/integration/test_public_scan_mode.py`
+119 → 122、`tests/integration/test_assets_api.py` 28 → 29、
+`tests/integration/test_m2_page_scan.py` 10 → 11）。
+
+**变异验证**：把新增的开关检查与 `require_active_scan()` 复检两处改成 `if False:`
+→ 两条新用例同时 FAILED；还原 → PASSED；工作树无残留变异。
+
+**一条刻意没改的**（已登记 `docs/DECISIONS.md` §3.11.5 第 1 条等你拍板）：老入口
+`POST /api/jobs` 的 `mode="real"` **不装公网工具白名单** —— 实测 `tools=["nmap"]`
+返回 **202** 并落库，而同样参数打 `/api/public-jobs` 是 **400 + `blocked_tools`**。
+原因是 `assert_tools_internet_allowed()` 全仓只有一个生产调用点
+（`core/application.py:573`，公网编排）。这是「老入口要不要也变成公网入口」的
+产品口径问题，加上它会改变既有 API 可用行为（属破坏性变更），故**如实登记、未改**。
+
+**未动**：`agent/`、全部数据库表结构与数据（**零 DDL**）、`core/policy.py`（一行未改；
+`core/scope.py` 只改输入归一化，匹配语义未动）、认证授权、审计字段集合、
+公网工具白名单（**仍是 `subfinder` + `httpx`**）、路由总数（48 规则 / 50 绑定 /
+42 个 `/api/*`，未新增未删除）。
+**未对任何真实外部目标发起扫描** —— 全部用例走 mock / 注入假 runner，
+目标是 `example.test` 与 RFC 5737 保留段。
+
 ### 测试与验收基线
 
 ```text
@@ -1338,19 +1413,33 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 基线演进：公网体验版 `1004` → Phase 1 UI 清理 `1009` → Phase 2 `1036` → Phase 3 `1091`
 → Phase 4 `1149` → 规划方案 Phase 1 `1159` → 规划方案 Phase 2 `1189`
 → 规划方案 Phase 3 `1290` → 第 6 节自动匹配授权资产 `1293`
-→ **本轮（规划方案第 13 节：后端安全边界缺口回填）`1296`**。
+→ 规划方案第 13 节缺口回填 `1296`
+→ **本轮（执行期双开关复检 + Phase 1 四处审计缺口收口）`1307`**。
 
-本轮 +3 全部落在 `tests/integration/test_public_scan_mode.py`（116 → 119）：
+本轮的 +11 里，**5 条是新增、1 条是「修复一条此前依赖缺陷才通过的既有用例」**。
+逐文件差额由 `git worktree add --detach <tmp> 1746f41` 检出基线后两个工作树各跑一遍
+`--collect-only -q` 求差得到（1296 → 1307），不是推算：
+
+| 文件 | 基线 `1746f41` | 本轮 | 差额 |
+|---|---|---|---|
+| `tests/unit/test_jobs_executor.py` | 27 | 29 | +2 |
+| `tests/unit/test_scope.py` | 35 | 39 | +4（参数化 3 例算 3 条） |
+| `tests/integration/test_public_scan_mode.py` | 119 | 122 | +3 |
+| `tests/integration/test_assets_api.py` | 28 | 29 | +1 |
+| `tests/integration/test_m2_page_scan.py` | 10 | 11 | +1 |
+| 全量 | **1296** | **1307** | **+11** |
+
+上一轮 +3 全部落在 `tests/integration/test_public_scan_mode.py`（116 → 119）：
 `test_job_audit_records_the_six_required_fields`、
 `test_unregistered_tool_name_is_rejected_by_the_registry`、
 `test_both_registry_readouts_agree_on_the_groups_view`。
 
-上一轮 +3 也落在同一个文件（113 → 116）：
+上上轮 +3 也落在同一个文件（113 → 116）：
 `test_check_endpoint_exposes_the_auto_match_contract`、
 `test_scan_center_js_auto_selects_the_scope_from_server_verdict`、
 `test_target_to_job_flow_uses_the_auto_matched_scope`。
 
-本轮 +101 的构成（规划方案 Phase 3；用 `git worktree add --detach <tmp> ce0ef22`
+规划方案 Phase 3 的 +101 构成（用 `git worktree add --detach <tmp> ce0ef22`
 把规划方案 Phase 2 单独检出后**两个工作树各跑一遍 `--collect-only -q` 求差**得到，不是推算）：
 
 | 文件 | 基线 `ce0ef22` | 本轮 | 差额 |
@@ -1412,3 +1501,17 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
     改它需要改代码 + 过测试，这是刻意的：白名单不该是一个能被顺手改掉的运行期设置。
   - 项目**没有**归档/删除接口：一旦创建就长期存在（与既有 Scope 的现状一致）。
   - 扫描中心页面**不做**分页：项目与任务各取前若干条，量大了要另做。
+- **老入口 `POST /api/jobs` 不装公网工具白名单**（实测，2026-10-03，**刻意未改**）：
+  `assert_tools_internet_allowed()` 全仓只有一个生产调用点 ——
+  `core/application.py:573`（公网编排 `create_authorized_public_job`）。
+  因此老入口用 `tools=["nmap"]` + `mode="real"`（开关开 + `active_scan=True`）
+  返回 **202 并落库**，而同样参数打 `POST /api/public-jobs` 是 **400 + `blocked_tools`**。
+  这是「老入口要不要也变成公网入口」的产品口径问题，加上它会改变既有 API 可用行为
+  （`test_legacy_job_api_still_works` 契约要跟着动），属**破坏性变更**而非收口，
+  故如实登记在 `docs/DECISIONS.md` §3.11.5 第 1 条（含三种可选口径）等你拍板。
+  现状已在 `docs/API.md` §6 与 `docs/CODEBASE_MAP.md` §9.11.1 / §9.29.6 写明。
+- **执行期复检的错误码是步骤级、不是任务级**：`jobs/executor.py` 复检 Scope /
+  环境开关 / `active_scan` 失败时，**该步骤**记 `scope_violation`，但全部步骤都失败时
+  `aggregate_status()` 给的是 `unknown_error`。这是既有聚合语义（本轮刻意没有顺手改它，
+  改了会影响所有既有任务的终态判定），已在 `docs/CODEBASE_MAP.md` §9.29.3 写明。
+

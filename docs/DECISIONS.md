@@ -697,6 +697,174 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 路由总数（48 规则 / 50 绑定 / 42 个 `/api/*`，**未新增、未删除**；本轮只改一个测试文件）。
 **未推送**：口径同 §3.9 —— 等你确认后先跑七项推送前安全审计，再显式 `git push origin main`。
 
+### 3.11 执行期双开关复检 + Phase 1 四处审计缺口收口 + 一处待拍板的口径差（2026-10-03，无人值守）
+
+> 依据：同一份工作单第 13 节（`6GetEverything-下一阶段规划方案.md:390-399`「Real Mode 控制」）、
+> 第 6 节（`:228-251` 目标输入）、第 4 节原则 2（`:158-191` 前端不显示 `scope_id`）、
+> 第 5.2 节（`:208-225` 新流程）。沿用 §3.7～§3.10 的无人值守口径。
+
+**起因**：§3.10 之后又做了一次对 Phase 1～3 的**只读对照审计**（三条独立视角，未改文件）。
+本轮把其中**判定为真实缺陷**的四条收口，并把一条**判定为「口径不一致、需要你拍板」**的
+如实登记（见本节末「本次未授权项」），**没有**擅自改它的行为。
+
+#### 3.11.1 执行期只查 Scope、不查环境开关（**已修**，本节最重要的一条）
+
+第 13 节把「Real Mode 控制」写成必须保留的边界。创建期确实有三道闸门
+（`core/application.py:327` 目标校验 → `:329` `resolve_mode` 读 `GEF_ALLOW_REAL_SCAN`
+→ `:332` `scope.require_active_scan()`），**但这三道都在「任务落库那一刻」就结束了**。
+
+`jobs/executor.py` 的 `_execute_real_step` 此前只复检了 Scope（`validate_step_target`），
+**没有**复检环境开关、也**没有**复检 `active_scan`：它根本不 import `core/safety.py`。
+后果是真实存在的一条缝：任务排队 / 失败重试 / worker 重启补做期间，
+**环境开关被关掉、或 Scope 的 `active_scan` 被收紧**，那个已经没人愿意负责的真实外网
+请求照样会发出去 —— 等于「开关只管下单，不管出餐」。
+
+**收口方式**（`jobs/executor.py:148-172`，+42/−4）：在真正调用 Runner **之前**，
+按创建期的**同一顺序**各自再读一次：
+
+```text
+① validate_step_target(scope_id, target)      ← 原有，未动
+② real_scan_enabled()  未开 → 该步骤 scope_violation，Runner 不会被调用
+③ require_scope(scope_id).require_active_scan()  → 同上
+④ if tool_name not in _known_tools() …
+```
+
+三条设计判断，都写进了代码注释与 `docs/CODEBASE_MAP.md`：
+
+1. **顺序不能换**：越界的 target 连「有没有开开关」都不该被回答；而已经删掉 Scope 的
+   任务，报出的必须是「越界 / 范围不存在」，不能被一句「开关没开」盖过去 ——
+   后者会让人以为是环境配置问题，而真正的变化是授权范围没了。
+   （既有用例 `test_real_step_rechecks_scope_before_calling_runner` 断言错误消息含
+   「复检」，顺序反了它会先拿到开关的文案。）
+2. **错误码用 `scope_violation`**（不是 `permission_denied`）：与 `core/safety.py:59-63`
+   创建期的口径一致，复用前端 `app.js:52` 已有的「目标超出授权范围」文案，
+   **前端零改动**；且 `permission_denied` 在 `modules/base.py:855-868` 已被退出码 126
+   占用，混用会让两类问题看起来是同一件事。
+3. **步骤级 `scope_violation` ≠ 任务级 `scope_violation`**：全部步骤都因复检失败时，
+   `aggregate_status()` 给的是 `unknown_error` 而不是 `scope_violation`。这是既有聚合
+   语义，本轮**没有**顺手改它（改了会影响所有既有任务的终态判定）。
+
+**新增 2 条用例 + 修复 1 条**（`tests/unit/test_jobs_executor.py`，全部注入假 runner，
+零外部流量）：`test_real_step_rechecks_env_switch_at_execution_time`、
+`test_real_step_rechecks_active_scan_at_execution_time`；并修好
+`test_real_step_rechecks_target_still_in_scope` —— 它此前**依赖「执行期不看开关」这个缺陷**：
+只把 scope 建好、没有 `monkeypatch.setenv`，所以修好之后反而红了。现在它自己开开关，
+断言仍然是 `STATUS_SUCCEEDED`。
+
+**变异验证**（证伪「恰好通过」）：把新增的开关检查与 `require_active_scan()` 两处
+改成 `if False:` → 两条新用例**同时 FAILED**；还原 → **PASSED**，
+`git status --short` 确认工作树里没有残留变异。
+
+#### 3.11.2 Phase 1 审计缺口 ①：提交的是「上一次试算的快照」而不是当前输入（**已修**）
+
+`scan_center.js:1294` 的 `bindJobForm` 原来写的是
+`lastTargets.length ? lastTargets : splitList($("job-target").value)`。
+于是「**检查授权 → 改输入框 → 直接创建任务**」提交的是**改前**的目标，
+而页面上的绿灯/摘要说的是**改后**的那个站：服务端按改前的判定，
+用户看到的是另一个结论 —— 两边都不报错，只是说的不是同一件事。
+
+**收口方式**（`scan_center.js`，+59）：引入唯一事实来源 `currentTargets()`
+（`:139`，永远读输入框），三处一起改：
+
+| 位置 | 改动 |
+|---|---|
+| `bindJobForm` 提交路径 `:1302` | `var targets = currentTargets();`，不再优先用快照 |
+| 摘要「目标」一行 `:1042` | `var shown = currentTargets();`（否则摘要还在说旧目标） |
+| 输入框 `input` 监听 `:1131` | 改了就让旧结论失效：`invalidateCheckResult()`（`:158`）清掉 `lastCheckPayload` / `lastTargets`、清空结果区、把摘要改回「目标已改动，请重新点「检查授权」再创建任务。」 |
+| `bindScopeForm` 自动重算 `:1257` | 判据从 `lastTargets.length` 改成 `currentTargets().length` —— 旧快照正好会被上一条清空，用快照判会在这时**静默跳过**重算 |
+| 兜底 `:1309` | `if (lastCheckPayload && !checkIsFresh())` → 拒绝提交并提示重新检查 |
+
+`checkIsFresh()` 用 `"\u0000"` 连接后比对（目标里不可能出现 NUL），
+比「长度相等」更严：改一个字符也算不新鲜。
+**新增 1 条用例**：`test_scan_center_js_submits_the_current_target_input_not_a_stale_snapshot`
+（四条口径的源码守卫；项目没有浏览器测试，这条是源码级守卫，如实写在用例 docstring 里）。
+
+#### 3.11.3 Phase 1 审计缺口 ②：没写协议的 URL 被当成坏网段（**已修**）
+
+第 6 节写「用户输入：域名、IP、URL」。带协议的 URL 一直支持，但**没写协议**的
+（从浏览器地址栏直接复制的那种，`www.example.test/a/b`）此前会掉进 CIDR 分支，
+报出「非法的 CIDR: www.example.test/a/b」—— 把一条完全正常的输入说成网段写错。
+
+**收口方式**（`core/scope.py:68-87`）：在 `_strip_scheme_and_path` 里加一个 `elif "/" in text:`
+分支，看 `/` **两边**再决定，而不是只看一边（只看后缀是不是数字会把
+`example.test/24` 悄悄变成域名，等于把用户的网段笔误吞掉）：
+
+| 输入 | 判定 | 结果 |
+|---|---|---|
+| `192.0.2.5/24` | 左边是 IP 字面量 | 仍是网段 → `192.0.2.0` |
+| `192.0.2.0/99` | 左边是 IP、掩码非法 | 仍如实报「非法的 CIDR」 |
+| `example.test/24` | 右边是纯数字、左边不是 IP | 仍按网段形状保留 → 报「非法的 CIDR」（**不**静默当域名） |
+| `www.example.test/a/b` | 两边都不像网段 | 取 `www.example.test` |
+
+**新增 2 条用例**：`test_normalize_target_accepts_schemeless_url`（参数化 3 种写法）
+与 `test_normalize_target_still_reports_a_broken_cidr_as_cidr`（守住「别把坏网段修成域名」），
+外加一条入口级用例 `test_public_url_target_is_normalized_to_its_host`
+（带协议 / 不带协议 / 带路径三种写法 → 落库的都是同一个主机）。
+
+#### 3.11.4 Phase 1 审计缺口 ③ + ⑤⑥⑦：死代码与内部 ID 漏进文案（**已修**）
+
+| 缺口 | 现象 | 收口 |
+|---|---|---|
+| ③ | `assets.js` 的「所属范围」直接写 `asset.scope_id \|\| "（未限定）"` —— 详情面板上出现 `scope_9f3c…`，违反第 4 节原则 2 | 新增 `scopeLabelById()`（`assets.js:72`），读本页已渲染的 `#filter-scope` / `#diff-scope` 选项翻成名称；找不到时给「（该授权资产已不在列表中）」而**不是**把 ID 漏出去 |
+| ⑤ | `web/templates/index.html` 有一段 `{% if scan_report %}` 的「模拟扫描：范围 `{{ scan_report.scope_id }}`」提示块，**永远渲染不出来**（调用点一直传 `scan_report=None`），且是全仓唯一一处把 `scope_id` 写进可见文案的地方 | 删掉模板分支 + 删掉 `app.py:build_page_context` 的 `scan_report` 参数与实参（−3 行） |
+| ⑥ | `scan_center.html` 的 `<div id="scope-list"></div>` 没有任何 JS 引用 | 删除 |
+| ⑦ | `app.css` 的 `.sc-scope-title` 规则没有任何元素使用 | 删除 |
+
+**新增 3 条用例**：`test_assets_js_never_renders_a_raw_scope_id_as_text`、
+`test_page_has_no_dead_scan_report_block`、`test_scan_center_target_label_mentions_url`
+（第 6 节写的是「域名 / IP / URL」，页面标签此前只写「域名 / IP / 网段」，
+用户会以为贴 URL 会被拒 —— 标签改成「域名 / IP / 网段 / URL」）。
+
+#### 3.11.5 本轮「本次未授权项」（需要你拍板）
+
+1. **老入口 `POST /api/jobs` 的 real 模式不装公网工具白名单 —— 请定口径。**
+   实测（2026-10-03，`tests/integration/` 一次性探针，跑完即删）：
+
+   ```text
+   POST /api/jobs（老入口） tools=["nmap"] mode="real" + 开关开 + active_scan=True
+     → HTTP 202，落库 tools=['nmap'] mode=real status=queued
+   POST /api/public-jobs（公网入口） 同样参数
+     → HTTP 400 bad_request，details.blocked_tools=[nmap]，internet_allowed_tools=[httpx, subfinder]
+   ```
+
+   原因：`assert_tools_internet_allowed()` 在全仓**只有一个生产调用点** ——
+   `core/application.py:573`（公网编排 `create_authorized_public_job`）。
+   老入口 `api/jobs.py` 与 legacy `api/scan.py` 只做「工具是否已登记」，不做「是否允许打公网」。
+   本 Agent **本轮没有改它**，理由：
+   * 这条闸门是**公网授权测试模式**（`/api/public-jobs` + `/api/scan-center`）的边界，
+     不是 `jobs` 表或 Policy 层的边界；给老入口加上它会**改变既有 API 的可用行为**
+     （`test_legacy_job_api_still_works` 这条既有契约要跟着动），属破坏性变更而非收口。
+   * 「老入口该不该一并收口」是产品口径问题：老入口是给本机/内网联调用的，
+     它的 `mode="real"` 一直要求三道闸门齐全；要不要在它上面再叠一层公网白名单，
+     等价于「要不要让老入口也变成公网入口」。
+   * 三种可选口径，请你选一个（**不选就保持现状**，现状已在
+     `docs/API.md` §6 与 `docs/CODEBASE_MAP.md` §9.11.1 如实写明）：
+     **(a) 保持现状**：老入口是内网联调入口，白名单只在公网入口生效（文档已写明）；
+     **(b) 老入口也装白名单**：`api/jobs.py` / `api/scan.py` 加
+     `assert_tools_internet_allowed()`，代价是既有契约测试要改、老入口的重工具在
+     real 模式下不可用；
+     **(c) 老入口的 real 模式直接停用**：只允许 `mock`，重工具全部走公网入口那套授权流程。
+   *回滚方式*：本轮无需回滚（未改任何一行相关实现）。选 (b)/(c) 才是新工作，
+   要单独一轮。
+
+2. §3.9 的两条（**Agent 边界口径**、**自动匹配「唯一才选」**）**仍然待你拍板**，本轮未动。
+
+#### 3.11.6 本轮未动 / 未推送
+
+**未动**：`agent/`（见上）、全部数据库表结构与数据（**零 DDL**）、
+Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` 只改输入归一化，
+不改匹配语义）、认证授权、审计字段集合、公网工具白名单
+（**仍是 `subfinder` + `httpx`**，`nuclei` 仍为 `internet_allowed=false` 且只作受限展示）、
+路由总数（**48 规则 / 50 绑定 / 42 个 `/api/*`，未新增未删除**）。
+
+**未对任何真实外部目标发起扫描**：本轮所有用例走 mock / 注入假 runner，
+目标是 `example.test` 与 RFC 5737 保留段；`www.peizheng.edu.cn` 只在文档里作例子出现。
+你给的「**不能对它进行大量的扫描**」这条约束没有变化，白名单与限速档位都未被放宽。
+
+**未推送**：口径同 §3.9 / §3.10 —— 等你确认后先跑七项推送前安全审计，
+再显式 `git push origin main`（**不加 `--tags` / `--follow-tags`**：
+本地 tag `backup-before-secret-purge` 指向重写前的历史，内含明文 Token）。
+
 ---
 
 ## 4. 永不预授权的红线

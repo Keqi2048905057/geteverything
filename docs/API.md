@@ -473,6 +473,22 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 >
 > **老入口 `POST /api/jobs` 也接受 `operator` / `rate_limit` / `timeout_seconds`**，
 > 口径完全相同；它的响应形状**未变**（不出现 `project_id` 等公网专属字段）。
+>
+> ⚠️ **老入口不做公网白名单判定**（实测，2026-10-03）：`assert_tools_internet_allowed()`
+> 在本仓**只有一个生产调用点** —— `core/application.py:573`（公网编排
+> `create_authorized_public_job`）。因此 `POST /api/jobs` 用 `tools=["nmap"]` +
+> `mode="real"`（环境开关开 + `active_scan=True`）会返回 **202 并落库**，
+> 而同样参数打 `POST /api/public-jobs` 是 **400 + `blocked_tools`**。
+> 这是**当前的有意现状**（老入口定位为内网联调入口，白名单只在公网入口生效），
+> 不是漏洞修复遗漏；要不要一并收口属产品口径问题，已登记在
+> `docs/DECISIONS.md` §3.11.5 第 1 条等你拍板。
+>
+> **执行期会再复检一次**（`jobs/executor.py`）：每个 real 步骤在调用 Runner **之前**，
+> 除 Scope 成员资格外还会重读 `GEF_ALLOW_REAL_SCAN` 与 `Scope.active_scan`。
+> 任一不满足时该步骤以 `error_code=scope_violation` 失败、Runner **不会被调用**
+> （顺序、错误码与「步骤级 `scope_violation` 不等于任务级」三条判断见
+> `docs/CODEBASE_MAP.md` §9.29）。也就是说：任务排队期间开关被关掉或范围被收紧，
+> 那些步骤不会真的发出去。
 
 > **公网白名单恰好是 `{httpx, subfinder}`**（方案第 8 节），是代码常量而非运行期配置。
 > 核心不变量是「**没登记 = 禁止公网**」：`assert_tools_internet_allowed()` 对未登记工具

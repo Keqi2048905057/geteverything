@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）**（2026-10-03）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）**（2026-10-03）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -985,6 +985,11 @@ core/runner_result.py
 加固前，Scope 判断散落在三处：`api/scan.py` 自己解析 mode + 查 scope_store，
 `api/jobs.py` 又写一遍，`jobs/executor.py` 执行期**完全不查**。
 结果是「任务创建时合法，执行时 Scope 已被删/被改」这条缝没人管。
+
+> ⚠️ **这一行在 §9.29 之后需要打补丁**：`jobs/executor.py` 现在**查两件事** ——
+> Scope 成员资格（`validate_step_target`）与环境开关 / `active_scan`
+> （`core/safety.py`）。本节描述的是 P0-2 当时的状态（环境开关仍未复检），
+> 最新口径见 **§9.29**。
 
 现在只有一个入口模块：
 
@@ -2900,6 +2905,10 @@ operator / target / tools / mode = audit_events.detail 的 operator / targets / 
 刻意**不**写成「detail 里有哪些键」的白名单断言：那样每加一个 Phase 3 字段都要改测试，
 反而会诱导后人把这条边界顺手删掉。只查第 13 节点名的那六项。
 
+**变异验证**（本轮实测，证伪「恰好通过」）：把 `core/application.py` 的 detail 里
+`"tools": selected_tools` 一行删掉 → 该用例 **FAILED**；加回 → **PASSED**；
+`git status --short get_everything_framework/core/application.py` 无输出（实现零改动）。
+
 **为什么这条有真实价值**：`tools` 与 `mode` 在 `jobs` 表里也各有一份，很容易被后人
 当成「审计表里重复了」删掉。一旦删掉，事后就再也分不清「这次开的是哪些工具、
 是真扫还是 mock 演练」—— 而那正是审计表存在的理由。
@@ -2978,4 +2987,119 @@ app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
 `/api/tools`（两者不等价，见 §9.25.4，已在 docstring / `docs/API.md` 写明）；
 ③ `risk` 拆成 `risk_level` + `risk_label`（语义没丢）；④ `name` 只在本接口有别名
 （已写进 §9.25.4 的对照表）。
+
+### 9.29 执行期双开关复检 + Phase 1 四处审计缺口收口（一轮跨三层）
+
+> 这一节是**第一次真正跨层**（`core/` + `jobs/` + `web/`）的一轮，也是第一次
+> **改动执行期闸门顺序**的一轮。改之前先读了三处代码与全套既有守卫，
+> 逐条列在这里 —— 动 `jobs/executor.py` 的闸门之前必须读完 §9.29.1～§9.29.3。
+
+#### 9.29.1 一句话：创建期的三道闸门此前只在创建期有效
+
+方案第 13 节要求保留「Real Mode 控制」。创建期确实是三道（§9.22.3 的图）：
+
+```text
+core/application.py:327  validate_job_targets()      target ∈ scope
+core/application.py:329  resolve_mode()              GEF_ALLOW_REAL_SCAN
+core/application.py:332  scope.require_active_scan() Scope.active_scan
+```
+
+但 `jobs/executor.py:_execute_real_step` 此前**只复检了第 1 道**（`validate_step_target`），
+既不 import `core/safety.py`，也不看 `active_scan`。所以存在这条缝：
+
+```text
+任务 A 以 real 模式入队（三道闸门全过）
+  → 排队 / 失败重试 / worker 重启补做期间，运维把 GEF_ALLOW_REAL_SCAN 关掉
+  → 或者把该 Scope 的 active_scan 收紧为 false
+  → worker 取到任务 A，仍然把真实外网请求发出去（因为执行期没看这两件事）
+```
+
+§9.11.1 那句「`jobs/executor.py` 执行期**完全不查**」只对「Scope 也不查」的
+P0-2 当时成立；到 §9.28 时它已经**查 Scope、不查开关** —— 两处描述都已按最新口径修正。
+
+#### 9.29.2 复检的插入点与顺序（**顺序是有意的，别调**）
+
+`jobs/executor.py:148-172`，位于 `validate_step_target()` 之后、
+`if tool_name not in _known_tools()`（`:174`）之前：
+
+```text
+① validate_step_target(scope_id, target)        ← 原有，本轮未动
+② real_scan_enabled()      False → scope_violation，Runner 不会被调用
+③ require_scope(scope_id).require_active_scan() ← 同上
+④ 工具是否已登记
+```
+
+顺序必须与创建期（`:327` 目标 → `:329` 开关 → `:332` `active_scan`）一致，理由两条：
+
+| 顺序反了会怎样 | 为什么这是真问题 |
+|---|---|
+| 先查开关，Scope 已被删的任务会拿到「开关没开」 | 让人以为是**环境配置**问题，而真正的变化是**授权范围没了** —— 排查方向整个跑偏 |
+| 越界 target 也会先被告知「开关状态」 | 越界目标连「有没有开开关」都不该被回答 |
+
+既有用例 `test_real_step_rechecks_scope_before_calling_runner`（`tests/unit/test_jobs_executor.py:204`）
+断言错误消息含「复检」，顺序换了它会先拿到开关的文案而变红 —— 这条**不是巧合**，
+它是这个顺序的守卫。
+
+#### 9.29.3 三条设计判断（改这里的代码之前必读）
+
+1. **错误码用 `scope_violation`，不用 `permission_denied`。**
+   与 `core/safety.py:59-63` 创建期的口径一致；前端 `app.js:52` 已有
+   `scope_violation → 「目标超出授权范围」`，**前端零改动**。
+   `permission_denied` 在 `modules/base.py:855-868` 已被退出码 126 占用，
+   混用会让「越界」与「工具退出码」看起来是同一类问题。
+2. **步骤级 `scope_violation` ≠ 任务级 `scope_violation`。**
+   所有步骤都因复检失败时，`aggregate_status()` 给的是 `unknown_error`。
+   这是既有聚合语义，本轮**没有**顺手改 —— 改了会影响所有既有任务的终态判定。
+3. **不在这里复写匹配逻辑。** `require_scope()` 内部那次读只为拿 `active_scan`
+   对象（`validate_step_target` 不返回 Scope 对象）；判定仍只有 `core/policy` 一套。
+
+#### 9.29.4 Phase 1 审计缺口 ①②③⑤⑥⑦（前端与归一化，跨 `web/` + `core/scope.py`）
+
+| # | 缺口 | 收口 |
+|---|---|---|
+| ① | 提交用上一次试算的快照：`lastTargets.length ? lastTargets : splitList(...)`，于是「检查授权 → 改输入框 → 创建任务」提交**改前**的目标 | `currentTargets()`（`scan_center.js:139`）成为唯一事实来源；提交 `:1302`、摘要 `:1042`、自动重算 `:1257` 三处都改读它；新增 `checkIsFresh()` `:152` / `invalidateCheckResult()` `:158` + 输入监听 `:1131` |
+| ② | 没写协议的 URL 掉进 CIDR 分支，报「非法的 CIDR: www.example.test/a/b」 | `core/scope.py:68-87` 新增 `elif "/" in text:` 分支，看 `/` **两边**（`head` 是 IP 字面量？`suffix` 是纯数字？）再决定 |
+| ③ | 资产详情「所属范围」直接渲染 `scope_9f3c…`，违反第 4 节原则 2 | `assets.js:72 scopeLabelById()` 读本页已渲染的下拉选项翻成名称；查不到给「（该授权资产已不在列表中）」，**不漏 ID** |
+| ⑤ | `index.html` 的 `{% if scan_report %}` 块永远渲染不出来，且是全仓唯一一处把 `scope_id` 写进可见文案的地方 | 删模板分支 + `app.py` 的 `scan_report` 参数与实参 |
+| ⑥⑦ | `#scope-list` 与 `.sc-scope-title` 无任何引用 | 删除 |
+
+**缺口 ② 的判定表**（只看一边会静默吞掉用户的笔误）：
+
+| 输入 | `head` 是 IP？ | `suffix` 纯数字？ | 结果 |
+|---|---|---|---|
+| `192.0.2.5/24` | 是 | 是 | 网段 → `192.0.2.0` |
+| `192.0.2.0/99` | 是 | 是 | 报「非法的 CIDR」（掩码非法） |
+| `example.test/24` | 否 | 是 | **仍按网段形状保留** → 报「非法的 CIDR」 |
+| `www.example.test/a/b` | 否 | 否 | 取 `www.example.test` |
+
+> 只看 `suffix.isdigit()` 会把 `example.test/24` 悄悄变成域名 —— 把用户的网段笔误
+> 当成域名放行，比报错更糟（他会以为「网段写错了系统会告诉我」，其实不会）。
+
+#### 9.29.5 本轮实测（口径快照）
+
+```text
+用例总数          1307 collected / 1305 passed / 2 skipped / 0 failures
+ruff              All checks passed!
+mypy              72 source files, no issues（本轮未新增源文件）
+node --check      scan_center.js / assets.js / app.js 三个都通过（本轮改了前两个）
+app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
+被用例命中        49 / 50 —— 唯一没被走到的是 GET /api/tool/<tool_name>/results
+零 DDL            未动任何表结构；core/policy.py 一行未改
+```
+
+> 路由覆盖探针与 §3.1 / §6.4 / §9.2 / §9.26.7 / §9.27.5 / §9.28.6 **同一份**
+> （包装 `flask.Flask.full_dispatch_request` 跑全量用例再与 `url_map` 求差）。
+> 「唯一没被任何用例走到的是 `GET /api/tool/<tool_name>/results`」这句
+> 在第七轮之后依然成立。
+
+#### 9.29.6 本节**没有**收口的一条（老入口不装公网白名单）
+
+实测：老入口 `POST /api/jobs` 用 `tools=["nmap"]` + `mode="real"`（开关开 +
+`active_scan=True`）返回 **202** 并落库，而同样的参数打 `/api/public-jobs` 是
+**400 + `blocked_tools`**。原因是 `assert_tools_internet_allowed()` 在全仓
+**只有一个生产调用点**：`core/application.py:573`（公网编排 `create_authorized_public_job`）。
+
+**本轮刻意没改**：这是「老入口要不要也变成公网入口」的产品口径问题，
+加白名单会改变既有 API 可用行为（`test_legacy_job_api_still_works` 契约要跟着动），
+属破坏性变更。三种可选口径已登记在 `docs/DECISIONS.md` §3.11.5 第 1 条等你拍板。
 
