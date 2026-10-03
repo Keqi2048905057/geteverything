@@ -1214,6 +1214,35 @@ grep 只命中本文件自己的两处引用。也就是说**此前每一轮的�
   **「属于项目资产，不忽略」**，改它等于推翻你此前 `DECISIONS.md:144` 的答复。
 > **不选就保持现状**（即 (a)）。**我没有改 `.gitignore`。**
 
+#### 3.13.7 本轮推送前安全审计（七项，只读；口径同 §3.4 / §3.6.1，2026-10-04）
+
+审计对象：`origin/main..HEAD` 的 **22 个提交**（`ef33ab6..b308a0b`）。
+脚本是一次性只读探针（读 `git` 与 `.env`，**不打印任何密钥值**，不改仓库任何状态）。
+**这是为你决定「要不要推送」准备的**，不代表已经推送。
+
+| # | 检查项 | 实测 |
+|---|---|---|
+| 1 | 运行期产物是否入库 | 变更文件 **37 个**，按 `results/ uploads/ exports/ backups/ SecLists/ *.db *.sqlite *.exe *.pem *.key .env heartbeat` 匹配 → ✅ **命中 0 条** |
+| 2 | 全仓已跟踪文件是否含数据库/密钥/样本 | 已跟踪 **182 个**，同上模式 → ✅ 命中 **1 条，但经核对是模板**：`get_everything_framework/.env.example`。逐行看过：`LLM_API_KEY=sk-xxxx` 是占位符、`SECRET_KEY=dev-secret-key` 是开发默认值（注释明确写「禁止使用」）、`LOCAL_ADMIN_TOKEN=` **留空**、其余 API KEY 全为空值。**不含任何真实凭证** |
+| 3 | 新增行是否含硬编码密钥 | 22 个提交共 **8555 行**新增，匹配 `(secret_key\|api_key\|password\|passwd\|token)\s*[:=]\s*["'][^"']{8,}["']` → ✅ **命中 0 条** |
+| 4 | 新增行是否含高强度密钥形状 | 同 8555 行，匹配 `sk-…` / `ghp_…` / `AKIA…` / `eyJ….` → ✅ **命中 0 条** |
+| 5 | 历史明文可达性（**复核项**） | `git grep -F <本轮 Token> $(git rev-list --all)` → 历史里仍有 **4 个提交**（`e934c30`/`6f75d66`/`15f7271`/`469be5d`）可检出。**逐条验过：4 条全部 `merge-base --is-ancestor <sha> HEAD` 退出码 1（从 main 不可达），且只被标签 `backup-before-secret-purge` 包含**；`git grep … HEAD` → **不命中**。`git ls-remote --tags origin` → **空**（远端无任何标签）→ ✅ **推送这些提交不会带走明文** |
+| 6 | 是否与远端分叉 | `git rev-list --left-right --count origin/main...HEAD` = `0 22`；`git merge-base --is-ancestor origin/main HEAD` → 退出码 **0** → ✅ **纯快进，无需 force** |
+| 7 | 最大文件 / 二进制 | 变更 **37 个文件**，`git diff --numstat` 里二进制 **0 个**。最大三处：`docs/CODEBASE_MAP.md` +1206/−47、`tests/integration/test_public_scan_mode.py` +1034/−4、`docs/TEST_REPORT.md` +896/−10 |
+
+**结论：七项全部通过。** 推送命令仍必须是显式
+```powershell
+git push origin main          # 刻意不带 --tags / --follow-tags
+```
+★ **第 5 项是唯一「有东西」的一项**，也是为什么「不带 `--tags`」这句话要反复写：
+那 4 个提交里的明文 Token 之所以还「在」，纯粹因为本地标签指着它们；
+**一旦用 `--tags` / `--follow-tags` 推送，它们就会重新变得远端可达**，等于这次清理白做。
+若你想彻底了断：`git tag -d backup-before-secret-purge`（删除后等 `git gc` 回收），
+并顺手轮换 `.env` 里的 `LOCAL_ADMIN_TOKEN`。**两者都仍等你点头，本 Agent 未做。**
+
+> **本轮只跑到「审计通过」为止，没有推送。** 推送属需确认项 ——
+> 你原话是「有需要我确认的等我起床找你的时候再让我确认」。
+
 ---
 
 ## 4. 永不预授权的红线
