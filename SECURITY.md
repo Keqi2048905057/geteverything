@@ -50,7 +50,8 @@
 | 待修复 | `storage.py` 旧结果库**仍无 WAL**（已加连接级 `busy_timeout=5000`，但 WAL 需重建库文件，属迁移范畴，未在无人值守期间执行） |
 | 待修复 | `scripts/*.exe` 等工具二进制不进仓库，需自行按 `README.md` 准备，缺失时报 `tool_not_found` |
 | 已缓解（P0-6 阶段一） | 创建扫描任务的编排已收拢到**唯一入口** `core/application.py:create_scan_job()`（`POST /api/jobs` 与首页表单共用），视图函数不再内联 Policy/落库/审计，也不再有第二份 Scope 判定；三条源码守卫（`tests/unit/test_application_service.py`）阻止其退化 |
-| 未完成（P0-6 阶段二，用户已授权） | Agent 层已禁止任意 `file_path`（只能引用受控 `upload_id`），但**仍直接调用 `run_tools` / runner，未改走 Job Service**——即 Agent 提议与执行尚未彻底分离。授权见 `docs/DECISIONS.md` §3.2；开工前需先确认「Agent 执行异步化」的影响（详见 `docs/CODEBASE_MAP.md` §9.19.5） |
+| 已修复（2026-10-04） | **匿名 `POST /` 的 `action=chat` 曾可达真实执行**：`app.py:index()` 的认证守卫原在 `if action in _SCAN_ACTIONS:` **内部**，`action=chat` 分支无认证，而 Agent 会直接调 `run_tools` / `HttpxRunner.run_scan`（绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope）。已把守卫提到 `action` 分支之前，**所有 POST 动作一律需登录**；同一轮修掉**匿名首页下发整份授权资产清单**（范围名 + `allowed_domains` + `allowed_cidrs` + 状态）。实测证据与回归用例见 `docs/CODEBASE_MAP.md` §9.33 与 `docs/TEST_REPORT.md` §15 |
+| 未完成（P0-6 阶段二，用户已授权 · 已明确「先不开工」） | Agent 层已禁止任意 `file_path`（只能引用受控 `upload_id`），但**仍直接调用 `run_tools` / runner，未改走 Job Service**——即 Agent 提议与执行尚未彻底分离。**注意：2026-10-04 只堵住了「匿名」这个入口，Agent 内部的绕过行为原样保留。** 授权见 `docs/DECISIONS.md` §3.2；开工前需先确认「Agent 执行异步化」的影响（详见 `docs/CODEBASE_MAP.md` §9.19.5） |
 
 > 已修复（曾登记在本表）：`GET /api/export?format=<非 csv/json>` 原返回 **500 `unknown_error`**，
 > 现为 **400 `bad_request`** + `details.supported`（校验清单与 `exporter.SUPPORTED_FORMATS` 同源）。

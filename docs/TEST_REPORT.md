@@ -195,10 +195,16 @@ Linux CI runner 上会真跑。**它们不是「跑不了」，是「这条机�
   **解析后回环与私网地址默认拒绝**、重定向出界与危险 scheme。
 * `test_m2_security.py`（23）：上传大小/扩展名/空文件、失败时回收目录、
   **上传目录按 UUID 隔离且两次上传绝不碰撞**、任意 `file_path` 被拒、设置写入有审计。
-* `test_api_auth_contract.py`（24）：**逐条钉住匿名只读现状** —— 参数化覆盖
+* `test_api_auth_contract.py`（28）：**逐条钉住匿名只读现状** —— 参数化覆盖
   5 个匿名只读绑定（`ANONYMOUS_READABLE`）与 15 个写/执行绑定的匿名拒绝（`ADMIN_ONLY`）。
   **注意**：`SECURITY.md` 说匿名只读接口共 7 个，而这份清单只列了 5 个；
   差额的 2 条目前只有间接覆盖，见 §3.1。
+  **2026-10-04 新增 2 条**（`test_page_chat_action_requires_login`、
+  `test_anonymous_homepage_does_not_leak_authorized_assets`）：把两条**页面级**的
+  匿名缺口钉死 —— `POST /` 的 `action=chat` 必须与 `action=scan` 同级登录
+  （它能经 Agent 直达真实扫描，见 `docs/AGENT_ASYNC_IMPACT.md` I-5），
+  且匿名首页不得渲染授权资产卡片与下拉框。**这是补既有边界，不是改契约**：
+  两条在修复前都是红的（实测）。
 * `test_export_contract.py`（30）：导出不返回服务器路径、`../` 穿越被拒、
   非法 `format` 返回 400 且校验清单与 `exporter.SUPPORTED_FORMATS` **同源**。
 * `test_security_baseline.py`（22）：弱 `SECRET_KEY` 检测、进程内密钥稳定、
@@ -1738,3 +1744,77 @@ python app.py                          # waitress 127.0.0.1:5000
 | 真实外部目标 | 同 §14.3：硬约束，全部 mock / `example.test` / RFC 5737 |
 | 浏览器 DOM | 同 §14.3：本轮**连临时实例都没起**（只跑本地测试与只读核对），「真起实例」那一层属上一轮 §14.4，不因本轮而改变 |
 
+---
+
+## 15. 页面级认证缺口收口：匿名 `action=chat` 与匿名首页资产泄漏（1315）
+
+> 本轮**不是**按规划方案加功能，而是把上一轮只读审计里挖出的两处**既有**缺陷修掉。
+> 依据：`docs/AGENT_ASYNC_IMPACT.md` I-5 补记（越权通道）与之末尾的「顺带修掉的第二条」。
+
+### 15.1 实测结果
+
+```text
+python -m pytest -o addopts="" -q
+  → 1315 passed, 2 skipped, 10 warnings in 154.80s
+python -m pytest -o addopts="" -q --collect-only | tail
+  → 1317 tests collected
+ruff check .                       → All checks passed!
+mypy app.py core api jobs storage.py modules scripts
+                                   → Success: no issues found in 72 source files
+node --check web/static/{scan_center,assets,app}.js → 均 exit 0
+路由计数：48 规则 / 50 绑定 / 42 个 /api/*（**未新增、未删除路由**）
+```
+
+| 项 | 上一轮 | 本轮 |
+|---|---|---|
+| 用例总数 | 1315 | **1317**（+2） |
+| 通过 / 跳过 | 1313 / 2 | **1315 / 2** |
+| mypy 源文件 | 72 | 72（本轮未新增模块） |
+| `app.url_map` 规则 / 绑定 | 48 / 50 | **48 / 50** |
+| `test_api_auth_contract.py` | 26 | **28** |
+
+### 15.2 两条新用例在修复前都是**红的**（不是「恰好也绿」）
+
+先写用例、先看它红，再动实现。红的时候的真实输出：
+
+```text
+FAILED tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login
+  E  assert 200 == 401     ← 匿名 POST / action=chat 竟然是 200，且已写入 session
+FAILED tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does_not_leak_authorized_assets
+  E  AssertionError: 匿名首页泄露了授权资产信息: 培正学院公网资产
+  E  assert '培正学院公网资产' not in '...<strong>培正学院公网资产</strong>...'
+2 failed, 26 passed
+```
+
+修复后同两条转绿，**其余 26 条一条未改**。
+
+### 15.3 修复内容（两处，都是「补边界」而非「改契约」）
+
+| 文件 | 改动 | 为什么这么改 |
+|---|---|---|
+| `app.py:227` | `_require_admin_for_page()` 从 `if action in _SCAN_ACTIONS:` **内部**提到 `action` 分支**之前** | 原来是「按动作名白名单护」，漏一个动作就漏一个洞。改成「所有 POST 一律先认证」，新增动作时**默认是安全的**，要开匿名反而得显式写 |
+| `app.py:304` | `context["scopes"] = _load_scope_options() if is_authenticated else []` | 与 `/assets`（`app.py:364`）**同一口径**；同时把 `local_auth.is_authenticated()` 提出为局部变量，避免重复比较 Token |
+| `web/templates/index.html:94-110` | 未登录时不再说「还没有任何授权范围」（那是**另一回事**），改说「登录后可见」 | 原文案会让匿名访客以为「系统里没有授权资产」，与「有但不给你看」是两码事 |
+
+### 15.4 修复后的**两次独立复核**（不止测试通过）
+
+| 复核方式 | 命令 / 探针 | 结果 |
+|---|---|---|
+| `test_client` + 桩住 `BaseRunner._run_subprocess` | 匿名两步 chat | 子进程入口触达 **0 次**（修复前 1 次） |
+| **真起 waitress**（`127.0.0.1:5089`）+ 桩住 `agent.action.run_tools` | 匿名两步 chat | `run_tools` **0 次**，`PROBE: stub installed ok` 先于结论打印 |
+| 匿名路由全扫 | 逐个 POST | 未返回 401 的只剩 2 条，且都是设计如此：`POST /login`（登录本身）、`POST /api/auth/logout`（登出无副作用）。**`POST /` 已从名单里消失** |
+| 匿名首页内容 | 建一条真 Scope 再匿名 `GET /` | 范围名与目标**都不出现**；资产卡片类名与下拉框 id 也不出现；已登录时全部照常 |
+
+> **为什么必须真起实例**：上一轮踩过一次「sitecustomize 桩没装载却打印 0 次」的**假阴性**
+> （见 §13.5 与 `docs/DECISIONS.md` §3.13.4）。本轮两个探针都在结论前先打印
+> 「桩已确认装载」，driver 校验过这一行才采信数字。
+
+### 15.5 本轮**没做**的（如实列出）
+
+| 没做的 | 为什么 |
+|---|---|
+| 把 Agent 改走 Job Service（P0-6 阶段二） | 用户明确「**先不开工**」（`docs/DECISIONS.md` §3.9）。本轮只是**堵住匿名入口**，Agent 内部**仍然**绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope —— 这条缺口原样保留，且已在 I-5 里写明 |
+| 给 Agent 补 Scope 下拉 / 聊天框 UI | 同上；且 `web/` 里至今**没有任何 chat 入口**，补 UI 属功能扩张 |
+| 收紧 `GET /` 本身（改为必须登录） | **不做**。匿名可打开首页是 `SECURITY.md` / `docs/API.md` 里**有意保持**的只读契约，本轮只让它**不再下发数据** |
+| 动 7 个匿名只读 API | 属 `docs/DECISIONS.md` D 项已定契约，改动需用户明确授权 |
+| `.env` / 真实扫描开关 | 一行未动（复核 `LastWriteTime` 未变）。所有探针的目标都是 `example.test`，桩拦在子进程入口之前 |

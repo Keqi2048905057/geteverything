@@ -279,9 +279,17 @@ Diff 只看 `DIFFABLE_ATTRIBUTES`，且比较的是**归一化后的 canonical k
 * 只有**一个**本地管理员身份：`LOCAL_ADMIN_TOKEN`。三种携带方式（详见 [`API.md`](API.md) §2）：
   登录页换 HttpOnly Session、`X-Local-Token` 请求头、POST 表单 / JSON 体的 `token` 字段。
 * **没有 RBAC、没有用户表、没有多账号**。「已认证」是唯一的权限档位。
-* `core/auth.py:require_admin()` 是所有写/执行类接口的唯一守卫；**25 处调用点全部显式写出**
-  （24 个 `api/*` 路由 + 页面 `app.py:_require_admin_for_page`），
+* `core/auth.py:require_admin()` 是所有写/执行类接口的唯一守卫；调用点**全部显式写出**，
   没有装饰器、没有集中白名单——因此**新增接口必须自己记得加**。
+  2026-10-04 实测口径（LF 行号）：`api/*` 里 **32 个**视图函数各调一次（恰好一一对应
+  32 个需登录的方法绑定），页面侧是 `app.py:_require_admin_for_page()`（定义在 `:174`，
+  调用点在 `index()` 的 `:227`，**位于 `action` 分支之前**，因此 `POST /` 的两个动作
+  `scan` 与 `chat` 一并被护住）。
+  > 这条曾写成「25 处（24 个 `api/*` 路由 + 页面）」—— **它自 M3 起就偏小**，
+  > 因为后续阶段陆续新增了需登录的路由（`/api/jobs/<id>/results`、`/api/assets/*`、
+  > `/api/projects/*`、`/api/scan-center` …）。**按数字验收的做法本身就是错的**：
+  > 这个数会随每次新增接口变化，而它要守的契约是「**每个写/执行入口都有守卫**」。
+  > 权威清单是 `tests/integration/test_api_auth_contract.py` 的 `ADMIN_ONLY`（实测响应码）。
 * 真实扫描是**双开关**：环境变量 `GEF_ALLOW_REAL_SCAN=true` **且** 目标所属 Scope 的
   `active_scan=true`，缺一即 403 `scope_violation`。
 * **没有 Scope 就拒绝扫描**：`scope_id` 缺失 → 400，Scope 不存在或任一目标越界 → 403（整体拒绝，

@@ -89,3 +89,63 @@ def test_page_scan_still_requires_login(client):
     """首页表单扫描也必须登录（P0 验收：无匿名扫描）。"""
     resp = client.post("/", data={"action": "scan", "domain": "example.test"})
     assert resp.status_code == 401
+
+
+def test_page_chat_action_requires_login(client):
+    """``action=chat`` 也必须登录 —— 它**不是**只读浏览。
+
+    ``app.py`` 的 docstring 一直把 ``action=chat`` 归为「只读浏览」，
+    ``docs/API.md`` 也写着「``action=chat`` 可匿名」。但这与事实不符：
+
+    * chat 分支（``app.py`` 的 ``elif action == "chat"``）**没有**任何认证调用；
+    * 它把消息交给 ``agent/service.handle_agent_message()``；
+    * 而 Agent 的 ``_tool_subdomain`` / ``_tool_httpx`` 直接调
+      ``tool_runner.run_tools()`` 与 ``HttpxRunner().run_scan()``，
+      **两者都不查 ``GEF_ALLOW_REAL_SCAN``，也不查 Scope**
+      （``docs/AGENT_ASYNC_IMPACT.md`` I-5 的实测证据）。
+
+    也就是说：**一个未登录的 HTTP 请求可以走通「意图 → 确认执行 → 真实扫描」**，
+    且不产生任何 ``job.created`` 审计。这与 ``core/auth.py`` 自己写下的
+    「不能匿名扫描」直接冲突，因此这里钉住它。
+
+    这不是新增边界，而是把既有边界补上 —— 与 ``action=scan`` 同级。
+    """
+    resp = client.post("/", data={"action": "chat", "agent_message": "你好"})
+    assert resp.status_code == 401, "action=chat 竟然允许匿名访问（它能经 Agent 发起真实扫描）"
+    assert resp.get_json()["error_code"] == "unauthenticated"
+
+
+def test_anonymous_homepage_does_not_leak_authorized_assets(admin_client, client):
+    """匿名首页**不得**下发授权资产（名称 / 目标 / 状态）。
+
+    首页曾无条件执行 ``context["scopes"] = _load_scope_options()``，而
+    Phase 1 又把 ``allowed_domains`` / ``allowed_cidrs`` 渲染进了资产卡片 ——
+    等于把「这份授权叫什么、覆盖哪些目标」整份摊给匿名访客。
+
+    资产页（``/assets``）一开始就是**按登录态过滤**的（``app.py`` 的
+    ``scopes=_load_scope_options() if is_authenticated else []``），并有
+    ``test_assets_api.py`` 的守卫。首页那条路漏了同一个判断，这里补齐并钉住。
+    """
+    resp = admin_client.post(
+        "/api/scopes",
+        json={
+            "name": "培正学院公网资产",
+            "allowed_domains": ["www.example.test"],
+            "active_scan": False,
+        },
+    )
+    assert resp.status_code == 201, resp.get_json()
+
+    anon_home = client.get("/").get_data(as_text=True)
+    for leaked in ("培正学院公网资产", "www.example.test"):
+        assert leaked not in anon_home, f"匿名首页泄露了授权资产信息: {leaked}"
+    # 「授权资产」这四个字本身可以出现在**提示文案**里（告诉用户登录后可见），
+    # 但卡片与下拉框这两个**数据载体**必须一个都不渲染 —— 它们是数据泄漏的形状。
+    assert 'class="scope-asset' not in anon_home, "匿名首页仍渲染授权资产卡片"
+    assert 'id="scope_id"' not in anon_home, "匿名首页仍渲染授权资产下拉框"
+
+    # 已登录时照常下发 —— 这条修的是「谁看得见」，不是「还显不显示」。
+    admin_home = admin_client.get("/").get_data(as_text=True)
+    assert "培正学院公网资产" in admin_home
+    assert "www.example.test" in admin_home
+    assert 'class="scope-asset' in admin_home

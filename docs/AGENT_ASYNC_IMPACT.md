@@ -171,6 +171,47 @@ job_steps.results_json / artifacts / observations / assets
 > 而且按硬约束，本项目**从未**用 Agent 打过真实外部目标，所以这是「修潜在缺口」，
 > 不是「事故复盘」。
 
+#### I-5 补记（2026-10-04）：这条通道**曾经是匿名的** —— 已修
+
+上面写的「绕过真实扫描开关」当时只说到「Agent 能绕」，**漏掉了更严重的一半**：
+`app.py:index()` 的认证守卫原本**只护 `action=scan`**（`if action in _SCAN_ACTIONS:`
+里才调 `_require_admin_for_page()`），而 `elif action == "chat":` 分支**没有任何认证调用**。
+两者叠加的后果是：**未登录的 HTTP 请求也能走通这条路**。
+
+实测证据（2026-10-04，全部只读、`GEF_ALLOW_REAL_SCAN=false`、目标为保留域
+`example.test`、`BaseRunner._run_subprocess` 被断言装载过的桩替换）：
+
+| 探针 | 场景 | 结果 |
+|---|---|---|
+| `test_client` 两步（带 cookie） | 匿名 `action=chat` 两步后 | `agent.action.run_tools` 被调用 **1 次** |
+| 真起 waitress（`127.0.0.1:5089`） | 同上 | 同上，**1 次** |
+| `test_client` 桩住 `_run_subprocess` | 同上 | 子进程入口被触达 **1 次**，命令为 `subfinder -d example.test …` |
+| 同上，**单请求不带 cookie** | 只发第一步 | 触达 **0 次** —— 必须带 cookie 走完「意图 → 确认执行」两步 |
+| 对照：匿名 `POST /api/run`、`/api/tool/subfinder/run`、`/api/jobs` | — | 全部 **401** |
+
+三点必须写清楚：
+
+1. **它是两步、不是一步**：`_handle_pending_plan` 要读到上一步存进 Flask session 的
+   `pending_plan`，所以必须带 cookie 连续请求（浏览器里就是「先问一句、再回『确认执行』」）。
+   **跨站表单直发打不通**（无 cookie 时 0 次触达）——这一点降低了「被动挨打」的风险，
+   但没有降低「本机任何能发 HTTP 的程序」的风险。
+2. **`GEF_ALLOW_REAL_SCAN=false` 拦不住它**，Scope 也拦不住，且**不产生 `job.created` 审计**。
+   `.env` 里本机 `GEF_ALLOW_REAL_SCAN=true`、Token 已配非空，所以这不是「测试环境特例」。
+3. **零测试覆盖**：`tests/` 里 `action=chat` 的命中数是 **0**；
+   `test_api_auth_contract.py` 的 `ADMIN_ONLY` **从未列出 `("POST", "/")`**。
+   同一条分支自初始提交 `61b0f9b` 起就是这个形状（`git log -S` 复核），不是近期回归。
+
+**已修**（2026-10-04，独立提交）：把守卫**提到 `action` 分支之前**，使 `POST /` 的两个动作
+一并需登录；补两条回归用例（匿名 chat → 401、匿名首页不渲染授权资产）。
+详见 `docs/DECISIONS.md` §3.14。**注意这不是「新增边界」，是补上 `core/auth.py` 自己
+docstring 里早就写明的边界** —— 所以它不触碰「不放宽 / 不绕过认证边界」那条红线，方向相反。
+
+> **顺带修掉的第二条**：同一轮实测发现匿名 `GET /` 会下发**整份授权资产清单**
+> （范围名称 + `allowed_domains` + `allowed_cidrs` + 状态）—— `app.py` 当时无条件执行
+> `context["scopes"] = _load_scope_options()`，而 Phase 1 又把目标渲染进了资产卡片。
+> 资产页 `/assets` 一直是按登录态过滤的（`scopes=_load_scope_options() if is_authenticated else []`），
+> 首页漏了同一个判断。现已统一。
+
 ### I-6 【新接线】`scope_id` 必须贯穿三层（唯一破坏性接口变更）
 
 `create_scan_job()` 的第一道是 `validate_job_targets(scope_id, targets)`
@@ -188,10 +229,15 @@ app.py:index() 的 action=chat 分支        ← 从表单/会话取 scope_id
 建议 **`scope_id` 必填、不给默认值**：给了默认值 `None` 会把「忘记传」推迟到
 运行期变成 400，而必填能让 mypy 与测试**立刻**报出来。
 
-另需注意首页 UI：`app.py:246-276` 的 `action=chat` 分支**目前前端没有任何入口**
+另需注意首页 UI：改后 `app.py:257-289` 的 `action=chat` 分支**前端没有任何入口**
 （实测 `web/templates/index.html` 与 `web/static/*.js` 里 grep `chat` / `agent` 零命中，
 没有任何 `action=chat` 的表单）。**这是一段只有手搓 POST 才能触发的死代码**——
 它该不该连带补一个带 Scope 下拉的聊天框，属可选项，建议**不同轮做**。
+
+> **2026-10-04 行号与认证口径更新**：chat 分支现在是 `app.py:257-289`（守卫在 `:227`，
+> 即 `POST /` 的两个动作**都要登录**，见 I-5 补记）。
+> 「前端无入口」这一条**仍然成立**（`web/` 里 grep `chat` 依旧零命中）——
+> 也正因如此，它此前是**零测试覆盖 + 无 UI 入口 + 无认证**三者叠加的盲区。
 
 ### I-7 【双白名单】Agent 自己的域名策略与 Scope 会互相打脸
 
@@ -240,7 +286,7 @@ Agent 的「执行」从此一律是「**提交**」。
 | `agent/action.py` | 删 `:14` / `:16` 两行 import；`_tool_subdomain`（`:401-445`）与 `_tool_httpx`（`:490-528`）改调 `create_scan_job()`；`_format_single_tool_result`（`:714-738`）的 subdomain/httpx 分支改文案；`_attach_storage_info`（`:542-549`）的 storage 指向；`_build_response` 加 `job_ids` | ~90 行 |
 | `agent/action.py:__init__` | 新增 `scope_id` 参数 | ~5 行 |
 | `agent/service.py` | `handle_agent_message()` 透传 `scope_id` | ~3 行 |
-| `app.py:246-276` | `action=chat` 分支传 `scope_id` | ~5 行 |
+| `app.py:257-289` | `action=chat` 分支传 `scope_id` | ~5 行 |
 | `agent_cli.py` | 加 `--scope-id`（或环境变量），否则 CLI 无法提交任何任务 | ~10 行 |
 | `tests/unit/test_agent_boundary.py` | 见 §4.2 | ~120 行 |
 

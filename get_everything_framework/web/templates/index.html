@@ -89,14 +89,23 @@
           执行前请确认 worker 已启动：<code>python -m jobs.worker</code>。
         </p>
       {% else %}
-        <p class="hint">
-          还没有任何授权范围。本机联调版要求「没有授权范围不允许创建扫描任务」，
-          请先用管理员 Token 创建：
-        </p>
-        <pre class="code-block">curl -X POST http://127.0.0.1:5000/api/scopes ^
+        {# 未登录时不说「还没有授权范围」——那是另一回事（授权清单本身不下发给匿名访客，
+           见 app.py:index() 的 `context["scopes"]`）。 #}
+        {% if is_authenticated %}
+          <p class="hint">
+            还没有任何授权范围。本机联调版要求「没有授权范围不允许创建扫描任务」，
+            请先用管理员 Token 创建：
+          </p>
+          <pre class="code-block">curl -X POST http://127.0.0.1:5000/api/scopes ^
   -H "Content-Type: application/json" ^
   -H "X-Local-Token: &lt;你的 Token&gt;" ^
   -d "{\"name\":\"本地测试范围\",\"allowed_domains\":[\"example.test\"],\"allowed_cidrs\":[\"127.0.0.1/32\"],\"active_scan\":false}"</pre>
+        {% else %}
+          <p class="hint">
+            授权资产（名称、覆盖目标、是否开启真实扫描）与任务列表仅本地管理员可见，
+            登录后显示。
+          </p>
+        {% endif %}
       {% endif %}
     </section>
 

@@ -186,8 +186,11 @@ def index():
 
     认证策略：
 
-    * 修改/执行类动作（``action=scan``）必须已通过本地管理员认证；
-    * 只读浏览（GET、``action=chat``）不强制登录，避免连首页都打不开。
+    * **所有 POST 动作**（``action=scan`` 与 ``action=chat``）都必须已通过本地
+      管理员认证 —— chat 会进 Agent，而 Agent 当前能绕过 ``GEF_ALLOW_REAL_SCAN``
+      与 Scope 直接执行（``docs/AGENT_ASYNC_IMPACT.md`` I-5），因此它不是只读动作；
+    * 只读浏览（GET）不强制登录，避免连首页都打不开；但未登录时**不下发**
+      授权资产与任务列表，页面只显示登录提示。
 
     Scope 策略（M2 起）：
 
@@ -211,9 +214,19 @@ def index():
     if request.method == "POST":
         action = request.form.get("action", "scan")
 
+        # 页面级认证守卫：**所有** POST 动作统一前置，而不是只护 action=scan。
+        #
+        # 历史上这里只对 `_SCAN_ACTIONS` 调认证，`action=chat` 被当成「只读浏览」
+        # 放行；但 chat 会进 Agent，而 Agent 的 `_tool_subdomain` / `_tool_httpx`
+        # 直接调 `tool_runner.run_tools()` 与 `HttpxRunner().run_scan()` ——
+        # 两者都不查 `GEF_ALLOW_REAL_SCAN`、也不查 Scope（实测证据见
+        # `docs/AGENT_ASYNC_IMPACT.md` I-5）。于是「未登录 → 一条 POST → 真实扫描」
+        # 是可达的，且不产生任何 `job.created` 审计，与 `core/auth.py` 写的
+        # 「不能匿名扫描」冲突。把守卫提到这里，等于把既有边界补齐到 chat 上。
+        # 匿名浏览（GET）不变：首页仍然打得开，只是看不到任何授权资产与任务。
+        _require_admin_for_page()
+
         if action in _SCAN_ACTIONS:
-            # 未登录时直接 401，不进入创建任务分支。
-            _require_admin_for_page()
             if not domain:
                 job_error = "请输入要扫描的域名。"
             else:
@@ -282,11 +295,16 @@ def index():
         scan_error=job_error,
         chat_error=chat_error,
     )
-    context["is_authenticated"] = local_auth.is_authenticated()
-    context["scopes"] = _load_scope_options()
+    # 认证状态只取一次：下面两处都要用它，重复调用会再走一遍 Token 比较。
+    is_authenticated = local_auth.is_authenticated()
+    context["is_authenticated"] = is_authenticated
+    # 授权资产（名称 / 覆盖目标 / 状态）只在已登录时下发，与 `/assets` 同一口径。
+    # 首页曾无条件下发；Phase 1 又把 `allowed_domains` / `allowed_cidrs` 渲染进
+    # 资产卡片，等于把整份授权清单摊给匿名访客（`docs/DECISIONS.md` §3 已登记）。
+    context["scopes"] = _load_scope_options() if is_authenticated else []
     context["current_scope_id"] = scope_id or ""
     context["focus_job_id"] = job_id or ""
-    context["recent_jobs"] = _load_recent_jobs(limit=10 if local_auth.is_authenticated() else 0)
+    context["recent_jobs"] = _load_recent_jobs(limit=10 if is_authenticated else 0)
     return render_template("index.html", **context)
 
 

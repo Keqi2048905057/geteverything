@@ -1245,6 +1245,82 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 
 ---
 
+### 3.14 页面级认证缺口收口：匿名 `action=chat` 可达真实执行 + 匿名首页泄漏授权资产（2026-10-04，无人值守）
+
+> **这是本轮唯一改了生产代码的地方。** 它不是规划方案里的功能项，而是上一轮只读审计
+> 挖出的两处**既有**缺陷。按第 2 节白名单，**Bug 修复属可直接执行**；
+> 且它**收紧**认证边界（红线禁的是「放宽 / 绕过」），方向相反，故本轮自行修掉并登记。
+
+#### 3.14.1 缺陷一：未登录也能经 Agent 打到真实子进程
+
+`app.py:index()` 原本只在 `if action in _SCAN_ACTIONS:`（`_SCAN_ACTIONS = {"scan"}`）
+**内部**才调 `_require_admin_for_page()`；`elif action == "chat":` **没有任何认证调用**。
+而 chat 进 Agent 后，`_tool_subdomain` / `_tool_httpx` 直接调 `tool_runner.run_tools()`
+与 `HttpxRunner().run_scan()` —— **两者都不查 `GEF_ALLOW_REAL_SCAN`、也不查 Scope**
+（`docs/AGENT_ASYNC_IMPACT.md` I-5）。两者叠加 = **匿名可达真实扫描**。
+
+**实测（五个只读探针，全部 `GEF_ALLOW_REAL_SCAN=false`、目标 `example.test`）**：
+匿名两步 chat（带 cookie）→ `run_tools` 调用 **1 次**；桩住 `BaseRunner._run_subprocess`
+→ 子进程入口触达 **1 次**（`subfinder -d example.test …`）；**真起 waitress 复核同样 1 次**；
+不带 cookie 的单请求 → **0 次**；对照 `POST /api/run`、`/api/tool/subfinder/run`、
+`/api/jobs` 匿名全部 **401**。**不产生任何 `job.created` 审计。**
+
+**三点如实说明**：
+1. 它是**两步**（`_handle_pending_plan` 要读 session 里的 `pending_plan`），
+   所以浏览器里的跨站表单直发打不通；但本机任何能发 HTTP 的程序都打得通。
+   本机 `E:\GoWorkspace\bin\subfinder.EXE` 确实存在 —— **这不是理论风险**。
+2. `tests/` 里 `action=chat` 命中 **0**，`test_api_auth_contract.py` 的 `ADMIN_ONLY`
+   **从未列出 `("POST", "/")`**。`git log -S` 复核：这条分支自初始提交 `61b0f9b`
+   起就是这个形状，**不是近期回归，是一直没人测**。
+3. `.env` 里本机 `GEF_ALLOW_REAL_SCAN=true`、Token 已配非空且非临时 ——
+   所以**「测试环境才这样」的自我安慰不成立**。
+
+#### 3.14.2 缺陷二：匿名首页下发整份授权资产清单
+
+`app.py` 原先无条件 `context["scopes"] = _load_scope_options()`，而 Phase 1 又把
+`allowed_domains` / `allowed_cidrs` 渲染进首页资产卡片 → 匿名访客能看到
+**范围名称 + 覆盖目标 + 是否开启真实扫描**。资产页（`app.py:382`）一直带
+`if is_authenticated else []`，**首页漏了同一个判断**，属不一致。已统一。
+
+#### 3.14.3 改了什么（三处，均不新增/删除路由）
+
+| 文件 | 改动 |
+|---|---|
+| `app.py:227` | `_require_admin_for_page()` 从 `if action in _SCAN_ACTIONS:` **内部**提到 `action` 分支**之前** —— 原写法是「按动作名白名单护」，漏一个动作就漏一个洞；改后新增动作**默认安全** |
+| `app.py:304` | `context["scopes"] = _load_scope_options() if is_authenticated else []`，并把 `local_auth.is_authenticated()` 提为局部变量避免重复比较 Token |
+| `web/templates/index.html:94-110` | 未登录时不再说「还没有任何授权范围」（那是另一回事），改说「登录后可见」 |
+
+**未做（有意）**：不改 `GET /` 的匿名可读性（那是有意保持的只读契约）；
+不动 7 个已定的匿名只读 API（属 D 项）；不启动 P0-6 阶段二（你已说「**先不开工**」）——
+**Agent 内部仍然绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope，这条缺口原样保留**，
+本轮只是**堵住匿名入口**。
+
+#### 3.14.4 验证
+
+- **测试先红后绿**：两条新用例在修复前的真实输出是
+  `assert 200 == 401`（匿名 chat 竟然返回 200）与
+  `AssertionError: 匿名首页泄露了授权资产信息: 培正学院公网资产`；
+  同一次运行 `2 failed, 26 passed`。修复后 28 条全绿，**其余 26 条一条未改**。
+- `pytest -o addopts="" -q` → **1315 passed / 2 skipped**（`--collect-only` **1317**）；
+  `ruff` 全过；`mypy` **72 文件 0 error**；三个 JS `node --check` 通过。
+- **路由未变**：48 规则 / 50 绑定 / 42 个 `/api/*`（实测）。
+- 两次**独立于测试**的复核（`test_client` 桩 + **真起 waitress** 桩），
+  两次都先打印「桩已确认装载」再采信数字 —— 防上一轮那种「桩没装上却打印 0 次」的假阴性。
+
+#### 3.14.5 需要你确认的（**不阻塞**，本轮已按安全方向自决）
+
+1. **口径确认**：把 `action=chat` 从「只读浏览」改成「需登录」，你认不认？
+   我判断的依据是「**chat 当前不是只读的**」（它能绕开关直连真实执行）；
+   若你认为应保留匿名 chat，那**前提是先把 P0-6 阶段二做完**（Agent 改走 Job Service），
+   否则等于把一条执行通道挂在公网上。**我的建议：保持本轮的修法。**
+2. **要不要顺手收 `GET /`**：现在匿名仍能打开首页（只是看不到任何数据）。
+   这属 `SECURITY.md` 有意保持的契约，本轮**没动**；若你要连骨架都要求登录，说一声即可。
+3. **`ADMIN_ONLY` 是否补 `("POST", "/")`**：现在两条页面用例单独钉它，
+   参数化清单里**没有** `POST /`（因为它接受表单而非 JSON，且需要先建 Scope 才能断言成功路径）。
+   我认为「单独用例 + 参数化清单」两条腿已经够，**若你要并进 `ADMIN_ONLY` 可以并**。
+
+---
+
 ## 4. 永不预授权的红线
 
 无论本文件如何填写，以下操作在无人值守期间**一律不执行**：

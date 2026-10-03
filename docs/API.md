@@ -97,8 +97,8 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 
 | 方法 | 路径 | 认证 | 说明 |
 |---|---|---|---|
-| GET | `/` | 无 | 首页：任务列表 + 扫描表单 + Agent 对话 + 登录入口 |
-| POST | `/` | **执行类动作需登录** | 表单 `action=scan` 创建 mock 任务（未登录 401）；`action=chat` 可匿名 |
+| GET | `/` | 无 | 首页骨架：扫描表单 + Agent 对话 + 登录入口 + 任务列表。匿名可打开，但**不下发授权资产与任务列表**（只显示登录提示） |
+| POST | `/` | **所有动作都需登录** | 表单 `action=scan` 创建 mock 任务、`action=chat` 进 Agent；**两者未登录都 401**。chat 曾按「只读浏览」匿名放行，但 Agent 当前能绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope 直接执行（`docs/AGENT_ASYNC_IMPACT.md` I-5），故 2026-10-04 起与 scan 同级 |
 | GET | `/assets` | 无 | 资产页骨架。匿名可打开但只显示提示，**不下发 Scope 名称**；数据由 `static/assets.js` 调 `/api/assets` |
 | GET | `/scan-center` | 无 | 扫描中心页骨架（公网授权测试模式）。匿名可打开但只显示提示；数据由 `static/scan_center.js` 调 `/api/scan-center`。**页面上的一切提交都只是转发到 `/api/…`**，闸门全在服务端 |
 | GET | `/login` | 无 | 登录页；已登录时重定向到 `/` |
@@ -555,6 +555,11 @@ python -c "import app; [print(sorted(r.methods - {'HEAD','OPTIONS'}), r.rule) fo
 匿名/需认证的划分以**实测响应码**为准（用 `app.test_client()` 逐个匿名请求），
 并与 `tests/integration/test_api_auth_contract.py` 的
 `ANONYMOUS_READABLE` / `ADMIN_ONLY` 两份清单交叉验证。
+
+**页面路由的两种方法分开计**（2026-10-04 实测）：`GET /`、`GET /login` 匿名可开，
+`POST /`、`POST /login` 是**公开的写入口**但语义不同 ——
+`POST /login` 就是登录本身（失败即 200 重渲染，属预期）；
+`POST /` 的两个动作（`scan` / `chat`）**都必须登录**，未登录返回 401。
 
 ## 8. 文档与代码不一致（API 相关）
 
