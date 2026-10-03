@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）**（2026-10-03）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）**（2026-10-03）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -2744,4 +2744,96 @@ hit:      49
 > 差额是用 `git worktree add --detach <tmp> ce0ef22` 检出规划方案 Phase 2 后
 > **两个工作树各跑一遍 `--collect-only -q` 求差**得到的，不是推算；
 > 且**没有任何一条既有断言被放松**。
+
+### 9.27 下一阶段规划方案第 6 节：目标自动匹配授权资产（隐藏 Scope，不删 Scope）
+
+依据：同一份工作单第 6 节（`6GetEverything-下一阶段规划方案.md:241`）
+与第 16 节①（`:466-468`）。提交 `9224bc3`。
+
+#### 9.27.1 一句话：把「隐藏 Scope」做实，一步都没删 Scope
+
+方案第 4 节原则 2 是「**Scope 隐藏实现化**」，第 6 节把它的动作写成
+「系统后台：调用 `resolve_scope(target)`，自动判断」，第 16 节① 把链路写成
+「输入目标 → **自动匹配 scope** → 选择工具 → 创建 job」。
+
+Phase 1～3 已经做完四步流程、只读试算、工具选择中心，但**这一格是空的**：
+试算出结论之后，没有任何代码把那份结论变成下拉框里的选中项，用户仍要自己再挑一次。
+本轮补的就是它，落点单一：`web/static/scan_center.js:applyMatchedScope()`。
+
+**为什么这不违反「禁止为了体验删除 Scope 校验」**：
+
+| 维度 | 本轮有没有动 |
+|---|---|
+| 目标集合 | ❌ 一字未改（自动匹配**不**新增/改写任何目标） |
+| Scope 模型（`core/scope.py`） | ❌ 一字未改 |
+| Policy（`core/policy.py:validate_job_targets`） | ❌ 一字未改，真正的判定仍只在这里做一次 |
+| 被选中的资产来自哪 | ✅ **用户自己已经建好的**、且**服务端**已判定覆盖目标的那一份 |
+
+#### 9.27.2 四条口径（改 `applyMatchedScope` 之前必读）
+
+| 口径 | 实现 | 理由 |
+|---|---|---|
+| **只认服务端结论** | 候选取试算响应的 `eligible_scope_ids`（`core/authorization.py:TargetCheck.eligible`，即 `verdict == allowed` 的集合） | 前端自己比对 `verdict` / `allowed_domains` / `active_scan` 就是**第二条授权判定** |
+| **取交集，唯一才选** | 所有 `valid` 目标的候选求交集，`length === 1` 才自动选中 | 多目标落在多个资产上时随便挑一个，用户会在提交时撞服务端「项目→范围」校验（403），页面上却看不出原因 |
+| **有歧义就不猜** | 交集为空/多于一个 → 返回 `ambiguous`，保持用户当前选择并如实说明 | 猜错比不猜更糟：用户会以为系统已经判好了 |
+| **不覆盖用户的显式选择** | 当前 `<select>` 就是那个答案时返回 `kept`，不重写、不重建 | 自动匹配是省一步，不是把用户刚改的选择顶回去 |
+
+自动选中时若归属项目不是当前项目，会先把 `#job-project` 切过去再 `syncJobScopes()`
+重建范围下拉框 —— 因为服务端要求 `scope ∈ project.scope_ids`（`create_authorized_public_job`），
+不切项目就会提交一个必然 400 的组合。
+
+**顺序不变量**：`renderCheckResults()` 里必须**先** `applyMatchedScope(payload)`、
+**后** `renderConsentSummary()`。反过来的话摘要里显示的还是上一个选中项
+（有一条断言直接比对这两行的相对顺序）。
+
+#### 9.27.3 顺带收敛掉三处「第二条授权判定」
+
+这是本轮**实测发现**的，不是设计出来的：`scan_center.js` 里同一个判断写了三份，
+判法还不一样 ——
+
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| `renderCheckResults()` | `item.verdict === "allowed"` | `isEligibleMatch(check, item)` |
+| `renderConsentSummary()` | `item.status === "ready" \|\| item.status === "scope_inactive"` | 同上 |
+| `refreshConsentScopeLine()` | 同上 | 同上 |
+
+现在三处都走 `eligibleScopeIds(check)` / `isEligibleMatch(check, match)`，
+判据只有服务端那一个 ID 集合。源码守卫把上述写法列入禁止清单
+（`item.verdict ===`、`item.status === "ready"`、`scope.allowed_domains.indexOf`、
+`scope.active_scan &&`）—— **注释里出现不算**，代码里出现就红。
+
+#### 9.27.4 本节的已知边界（一条**没做到**的，明写在这里）
+
+- ⛔ **方案第 16 节③「Agent 只能 `create_scan_job()`」当前不成立。**
+  `agent/action.py` 仍直接调 `tool_runner.run_tools`（`:419` / `:437`）与
+  `HttpxRunner().run_scan`（`:503` / `:507` / `:511`），**没有**走 Job Service；
+  方案第 12 节那条「Agent → 创建 Job → 返回 job_id」目前只对 Web 入口成立。
+  这与用户上一轮对 P0-6 阶段二「先不开工」的答复一致。
+  **本轮没有写 `xfail`、也没有写「断言 Agent 确实绕过」的用例**去把缺口粉饰成预期 ——
+  那会让下一个人以为「这是设计如此」。缺口登记在 `docs/DECISIONS.md` §3.9 第 1 条。
+  要收口就是 P0-6 阶段二开工，影响面见 `docs/AGENT_ASYNC_IMPACT.md`（含 I-5：
+  Agent 当前**绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope** 的实测证据）。
+- **仍无浏览器测试**：源码守卫 + 一次性 DOM 桩（第五次）。桩加载**真实的**
+  `scan_center.js` 并喂服务端真实形状的响应，走真实渲染路径核对四件事
+  （唯一命中→选中、歧义→不猜、命中排除→不选、目标一字未改）。
+- **「唯一才选」是判断而非推导**：另一种做法（选第一个）会得到一个页面上看不出原因的
+  403。登记在 `docs/DECISIONS.md` §3.9 第 2 条等确认。
+- **零 DDL / 零新路由 / 零闸门放松**：`app.url_map` 仍 48 规则 / 50 绑定 / 42 个 `/api/*`；
+  未动任何表结构；公网白名单仍是 `subfinder` + `httpx`。
+
+#### 9.27.5 本轮实测（口径快照）
+
+```text
+用例总数          1293 collected / 1291 passed / 2 skipped / 0 failures
+mypy              72 source files（本轮未新增源文件）
+node --check      web/static/scan_center.js 通过（本轮改的就是它）
+app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
+被用例命中        49 / 50 —— 唯一没被走到的是 GET /api/tool/<tool_name>/results
+本轮 +3           test_public_scan_mode.py 113 → 116（未新增文件）
+```
+
+> 路由覆盖探针算法与 §3.1 / §6.4 / §9.2 / §9.26.7 **同一份**（包装
+> `flask.Flask.full_dispatch_request` 跑全量后与 `app.url_map` 求差）：
+> **「唯一没被任何用例走到的是 `GET /api/tool/<tool_name>/results`」这句
+> 在第五轮之后依然成立。**
 

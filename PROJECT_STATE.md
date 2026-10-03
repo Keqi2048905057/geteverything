@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · 下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅ · **下一阶段规划方案：Phase 1 前端体验重构 ✅（`548d196`）/ Phase 2 Tool Registry ✅（本轮）** · M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · 下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅ · **下一阶段规划方案：Phase 1 前端体验重构 ✅（`548d196`）/ Phase 2 Tool Registry ✅（`ce0ef22`）/ Phase 3 公网授权测试完善 ✅（`8e94662`）/ 第 6 节目标自动匹配授权资产 ✅（本轮 `9224bc3`）** · M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → 下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（`59047ee` / `5960bc0`）→ Phase 4 结果体验 ✅（`f88dd57` / `547d827`）→ 下一阶段规划方案 Phase 1 前端体验重构 ✅（`548d196`）→ Phase 2 Tool Registry ✅（本轮）** → P0-6 阶段二 + M5 剩余 ⬜**
-- 更新日期：2026-10-03（下一阶段规划方案 Phase 1～2；上一批 23 个提交已推送并复核；M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → 下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（`59047ee` / `5960bc0`）→ Phase 4 结果体验 ✅（`f88dd57` / `547d827`）→ 下一阶段规划方案 Phase 1 前端体验重构 ✅（`548d196`）→ Phase 2 Tool Registry ✅（`ce0ef22`）→ Phase 3 公网授权测试完善 ✅（`8e94662`）→ 第 6 节目标自动匹配授权资产 ✅（本轮 `9224bc3`）** → P0-6 阶段二 + M5 剩余 ⬜**
+- 更新日期：2026-10-03（下一阶段规划方案 Phase 1～3 + 第 6 节自动匹配；上一批 23 个提交已推送并复核；M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
 
 ---
 
@@ -685,29 +685,27 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-03（下一阶段规划方案 Phase 3：公网授权测试完善）
+验证时间：2026-10-03（下一阶段规划方案第 6 节：目标自动匹配授权资产）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1290 collected / 1288 passed / 2 skipped / 0 failures / 0 errors
-        （逐文件 --collect-only -q 汇总复核一致）
-mypy:   Success: no issues found in 72 source files        ← 新增 core/job_limits.py（71 → 72）
-node --check web/static/scan_center.js / app.js: 两个前端脚本语法检查通过（本轮改的就是它们）
-路由计数：48 规则 / 50 绑定 / 42 个 /api/*（本轮只给既有接口加字段，未新增/删除路由）
-本轮新增 101 项：
-        tests/unit/test_job_limits.py（新文件）59
-        tests/unit/test_jobs_store.py 72 → 90（+18）
-        tests/integration/test_public_scan_mode.py 89 → 113（+24）
-        逐文件差额用 git worktree 检出规划方案 Phase 2（ce0ef22）后两树对跑
-        --collect-only 求差（1189 → 1290，差额恰好只有这三行）
-零 DDL 复核：本轮新增的六个字段（operator / project_id / strategy /
-        authorization_note / authorization_confirmed / rate_limit /
-        timeout_seconds）**都不是** jobs 表的列，全部写在 job.created 事件 detail 里；
-        有一条反向守卫用例锁着这件事（jobs 表里出现这些列名就红）
-业务 .py 93 个被测试提及 83 个（新增 core/job_limits.py，已直接覆盖 59 条用例）
+pytest: 1293 collected / 1291 passed / 2 skipped / 0 failures / 0 errors
+mypy:   Success: no issues found in 72 source files        ← 本轮未新增源文件
+node --check web/static/scan_center.js: 通过（本轮改的就是它）
+路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
+路由覆盖：declared 50 / hit 49 —— 唯一没被走到的仍是 GET /api/tool/<tool_name>/results
+        （第五轮重跑，算法同 §3.1 / §6.4 / §9.2 / §9.26.7）
+本轮新增 3 项：tests/integration/test_public_scan_mode.py 113 → 116
+        test_check_endpoint_exposes_the_auto_match_contract
+        test_scan_center_js_auto_selects_the_scope_from_server_verdict
+        test_target_to_job_flow_uses_the_auto_matched_scope（§16 ① 整条链路）
+零 DDL 复核：本轮**没有**任何 schema 变更；Scope 模型 / Policy / 目标集合一字未改
+两层验证：除源码守卫外，另用一次性 DOM 桩（不入库）加载**真实的** scan_center.js
+        走真实渲染路径核对四件事（唯一命中→选中 / 歧义→不猜 / 命中排除→不选 /
+        目标输入框一字未改），结论见 docs/TEST_REPORT.md §11.4
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → **Phase 3 公网授权测试完善 `1290`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → **第 6 节目标自动匹配授权资产 `1293`**
 
 > 本轮 +101 = 一个新文件（59）+ 两处既有测试文件补用例（+18、+24）。
 > 逐文件差额**实测**得出：`git worktree add --detach <tmp> ce0ef22` 检出规划方案 Phase 2 后，
@@ -731,12 +729,12 @@ node --check web/static/scan_center.js / app.js: 两个前端脚本语法检查�
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-8e94662   ← 最近一次不含本文件改动的提交（规划方案 Phase 3：公网授权测试完善）
+9224bc3   ← 最近一次不含本文件改动的提交（规划方案第 6 节：目标自动匹配授权资产）
+9224bc3  feat(scan-center): 规划方案第 6 节 —— 目标自动匹配授权资产（隐藏 Scope，不删 Scope）
 8e94662  feat(public-scan): 规划方案 Phase 3 —— 公网授权测试完善，五项全走事件 detail（零 DDL）
 ce0ef22  feat(tool-registry): 规划方案 Phase 2 —— 工具能力平台化，空选择不再回落到默认工具
 548d196  feat(scan-center): Phase 1 前端体验重构 —— 授权资产可见、Scope 退到后台、四步流程
 ef33ab6  docs(decisions): 记录本轮五项答复与推送结果，并补记 fork 已删除的复核
-b47fb1d  docs(state): Phase 4 落地后回填状态板（旧覆盖率快照加口径说明 + 三条基线命令）
 ```
 
 自检：
@@ -753,17 +751,18 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 > **判断待推送量一律用 `git rev-list --count origin/main..HEAD`，不要抄本节数字。**
 > 下面表格只列**不含**本文件改动的那些提交（即 `docs: 状态板…` / `docs(state):…` 之外的全部）。
 
-与 `origin/main` 的关系：**本轮三个提交尚未推送**（用户原话「有需要我确认的等我起床找你
+与 `origin/main` 的关系：**本轮四个提交尚未推送**（用户原话「有需要我确认的等我起床找你
 的时候再让我确认」，推送属需确认项，本轮不推）。`git log -1 origin/main` 当前为 `ef33ab6`，
-`git status -sb` 为 `## main...origin/main [ahead 3]`，
-`git rev-list --count origin/main..HEAD` = **3**（`548d196` / `ce0ef22` / `8e94662`，
-按「规划方案 Phase 1 → Phase 2 → Phase 3」顺序，每个都可独立回滚）。
+`git rev-list --count origin/main..HEAD` = **4**（`548d196` / `ce0ef22` / `8e94662` / `9224bc3`，
+按「规划方案 Phase 1 → Phase 2 → Phase 3 → 第 6 节自动匹配」顺序，每个都可独立回滚）。
 **推送前必须先跑七项安全审计**（口径见 `docs/DECISIONS.md` §3.4 / §3.6.1），
 且推送命令必须显式 `git push origin main`（**刻意不带 `--tags` / `--follow-tags`** ——
 本地标签 `backup-before-secret-purge` 仍指向重写前的旧提交，带上就会泄露明文 Token）。
+> 上面那行 `[ahead N]` 与 `rev-list --count` 的**实际数字**以命令输出为准：
+> 本文件自己也要提交，写死的数字在提交那一刻就已经比实际少 1。
 >
 > 上一批 23 个提交已于 2026-10-02 经你确认后推送完毕（`a2389e8..b47fb1d`，无 force），
-> 下表是**那一批**的分类记录，不含本轮规划的 Phase 1～3：
+> 下表是**那一批**的分类记录，不含本轮规划的 Phase 1～3 与第 6 节：
 
 | 类别 | 提交 |
 |---|---|
@@ -776,15 +775,16 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 **纯快进，无需 force** —— 已实测 `git merge-base --is-ancestor origin/main HEAD` 退出码 0。
 **本批 23 个提交已于 2026-10-02 经你确认后推送完毕**（`a2389e8..b47fb1d`，无 force）。
 
-**本轮待推送的三个提交**（规划方案 Phase 1～3，各自独立可回滚）：
+**本轮待推送的四个提交**（规划方案 Phase 1～3 + 第 6 节自动匹配，各自独立可回滚）：
 
 | 提交 | 说明 | 变更规模 |
 |---|---|---|
 | `548d196` | `feat(scan-center)`: 规划方案 Phase 1 —— 前端体验重构（授权资产可见 / Scope 退到后台 / 四步流程） | 8 文件 +538/−59 |
 | `ce0ef22` | `feat(tool-registry)`: 规划方案 Phase 2 —— 工具能力平台化，空选择不再回落到默认工具 | 18 文件 +1560/−149 |
 | `8e94662` | `feat(public-scan)`: 规划方案 Phase 3 —— 公网授权测试完善，五项全走事件 detail（**零 DDL**） | 20 文件 +2473/−107 |
+| `9224bc3` | `feat(scan-center)`: 规划方案第 6 节 —— 目标自动匹配授权资产（隐藏 Scope，不删 Scope） | 2 文件 +250/−5 |
 
-> 三个提交**都不改数据库结构**、不新增/删除路由、不放宽 Scope / Policy /
+> 四个提交**都不改数据库结构**、不新增/删除路由、不放宽 Scope / Policy /
 > 认证 / 审计 / 公网白名单中的任何一条。推送前请先跑七项安全审计。
 
 > **推送前安全审计已跑（2026-10-02，只读，完整表格见 `docs/DECISIONS.md` §3.4 与本轮 §3.6.1）**：

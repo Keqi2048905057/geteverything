@@ -568,6 +568,78 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 推送属需你确认项。你点头后我会先跑七项推送前安全审计（口径见 §3.4 / §3.6.1），
 再显式执行 `git push origin main`（**刻意不带 `--tags`**，理由见 §3.4 末尾）。
 
+### 3.9 下一阶段规划方案第 6 节「自动匹配授权资产」+ 第 16 节① 端到端链路（2026-10-03，无人值守）
+
+> 依据：同一份工作单第 6 节 —— 「**系统后台：** 调用 `resolve_scope(target)`，自动判断」
+> （`6GetEverything-下一阶段规划方案.md:241`），与第 16 节①
+> 「验证完整链路：**输入目标 → 自动匹配 scope → 选择工具 → 创建 job**」（`:466-468`）。
+> 沿用 §3.7 / §3.8 的无人值守口径：需要你拍板的写在下面，工作继续。
+
+**本轮补的是 Phase 1～3 之间漏掉的那一格**：四步流程、只读试算、工具选择中心都已落地，
+但「试算出结论之后，**谁**把那份结论变成下拉框里的选中项」一直没做 —— 用户仍然要
+自己在步骤 2 再挑一次。第 6 节要求的正是这一步。
+
+**落地方式**：`web/static/scan_center.js:applyMatchedScope()`。四条口径：
+
+| 口径 | 做法 | 为什么 |
+|---|---|---|
+| **只认服务端结论** | 候选直接取试算响应的 `eligible_scope_ids`（服务端 `Scope.match_target` 的 `verdict=allowed` 集合） | 前端自己比对 `verdict` / `allowed_domains` / `active_scan` 就是**第二条授权判定**，改一处漏一处 |
+| **取交集，唯一才选** | 所有有效目标的候选求交集，恰好一个才自动选中 | 三个目标落在两个资产上时随便挑一个，用户会在提交时撞 403 却看不出原因 |
+| **有歧义就不猜** | 交集为空/多于一个 → 保持用户当前选择，并如实说明「请自行选择」 | 猜错比不猜更糟：用户以为系统已经判好了 |
+| **不覆盖用户的显式选择** | 当前选中的资产就是那个答案时返回 `kept`，不重写 | 自动匹配是省一步，不是把用户刚改的选择顶回去 |
+
+**这不是扩大授权范围**（方案第 11 节 ⛔ 列表第一条「扩大目标范围」）：
+目标集合一字未改、Scope 模型一字未改、Policy 一字未改，被选中的资产是**用户自己已经建好的**、
+且服务端已经判定覆盖该目标的那一个。方案第 6 节「**禁止**为了体验删除 Scope 校验」
+一字未动 —— 真正的判定仍然只在 `core/policy.py:validate_job_targets()` 里做一次。
+
+**顺带收敛掉三处「第二条授权判定」**：`renderCheckResults()`、`renderConsentSummary()`、
+`refreshConsentScopeLine()` 原先各自比较 `item.verdict === "allowed"` 与
+`item.status === "ready"`；现在统一走 `isEligibleMatch()`（读服务端 ID 集合）。
+三处判同一件事、判法还不一样，正是「改一处漏一处」的典型形态。
+
+**新增测试 3 条**（`tests/integration/test_public_scan_mode.py`）：
+
+| 用例 | 守什么 |
+|---|---|
+| `test_check_endpoint_exposes_the_auto_match_contract` | `eligible_scope_ids` 只含**真正放行**的范围：命中排除列表的资产仍在 `matches`（诊断价值）但**不在**里面 |
+| `test_scan_center_js_auto_selects_the_scope_from_server_verdict` | 四条口径的源码守卫 + 「先匹配、后渲染摘要」的顺序 |
+| `test_target_to_job_flow_uses_the_auto_matched_scope` | 第 16 节① 整条链路：试算 → 取 `eligible_scope_ids[0]` → 创建 job，断言 `scope_id` / `tools` / 目标数正确 |
+
+**本轮「本次未授权项」（等你醒来拍板，均不阻塞）**
+
+1. **方案第 16 节③ 与第 12 节（Agent 边界）当前**不成立**，且与你上一轮的答复冲突 ——
+   请你定口径。**
+   第 16 节③ 要求「验证 Agent：❌ 不能直接调用 Runner；✅ 只能 `create_scan_job()`」，
+   第 12 节要求 Agent 走「Agent → 创建 Job → 返回 job_id」。
+   但 `agent/action.py` **至今**直接调 `tool_runner.run_tools`（`:419` / `:437`）与
+   `HttpxRunner().run_scan`（`:503` / `:507` / `:511`），**没有**走 Job Service。
+   本 Agent 本轮**没有动它**，理由有两条，都写在这里让你复核：
+   * 你上一轮对 P0-6 阶段二（Agent 异步化）的明确答复是 **「先不开工」**；
+     把 Agent 接到 `create_scan_job()` 就是那件事本身（回复要从「结果」改成「`job_id`」，
+     属破坏性接口变更，见 `docs/AGENT_ASYNC_IMPACT.md` §1）。
+   * 因此第 16 节③ 这条测试**现在写不出「通过」的版本**。本 Agent 没有写一条
+     `xfail` 或一条断言「Agent 确实绕过了」的测试去把缺口粉饰成预期 ——
+     那比缺口本身更糟。缺口如实登记在这里与
+     `docs/CODEBASE_MAP.md` §9.27.4。
+   *回滚方式*：无需回滚（本轮未改 `agent/`）。**若你要按方案第 12 节收口**，
+   那就是 P0-6 阶段二开工，需要你明确授权；影响面与迁移方案已经写在
+   `docs/AGENT_ASYNC_IMPACT.md`（含它当前**绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope**
+   的实测证据，见该文件 I-5）。
+2. **自动匹配「唯一才选」这条口径 —— 请确认。**
+   另一种做法是「命中多个就选第一个」或「命中多个就全列出来让用户点」。
+   本轮选「唯一才选、否则不猜」，理由是提交时服务端按**项目 → 范围**校验，
+   猜错会得到一个页面上看不出原因的 403。
+   *回滚方式*：改 `scan_center.js:commonEligibleScope()` 末尾的
+   `common.length === 1` 一个条件 + 一条用例。
+
+**未动**：`agent/`（见上）、`scopes` / `jobs` / `assets` / `observations` / `projects`
+表结构与数据（**零 DDL**）、Scope / Policy 判定逻辑、认证授权、公网工具白名单
+（**仍是 `subfinder` + `httpx`**）、既有 API 的响应形状与路由总数
+（48 规则 / 50 绑定 / 42 个 `/api/*`，**未新增、未删除**）。
+**未对任何真实外部目标发起扫描**：本轮新增用例全部走 mock 或注入假 runner，
+目标是 `example.test` 与 RFC 5737 保留段。
+
 ---
 
 ## 4. 永不预授权的红线

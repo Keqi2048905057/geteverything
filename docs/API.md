@@ -52,7 +52,8 @@
 **需要认证的 32 条**：`/api/settings*`（4）、`/api/scopes*`（3）、`/api/jobs*`（10，
 含 Phase 4 新增的 `GET /api/jobs/<job_id>/results`）、`/api/artifacts/<id>`（1）、
 `/api/assets*` 与 `/api/observations`（4）、`/api/run` 与 `/api/tool/<n>/run`（2）、
-`/api/upload`（1）、**`/api/projects*`（4）与 `/api/public-jobs`、`/api/scan-center`（2）**。
+`/api/upload`（1）、**`/api/projects*`（4）、`/api/public-jobs`、`/api/public-jobs/check`
+与 `/api/scan-center`（3）**。
 
 **匿名可读的 7 条**（有意保持的现状，由 `tests/integration/test_api_auth_contract.py` 与
 `tests/integration/test_export_contract.py` 锁定）：`/api/tools`、`/api/databases`、`/api/results`、
@@ -366,7 +367,7 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > `GET /api/settings/enscan` 的 `config_path` 是**唯一**会回显服务端路径的字段，
 > 且它需要管理员身份——这是既有的有意设计，不是路径泄露。
 
-### 6.10 授权测试项目与公网任务（6 条，需认证）
+### 6.10 授权测试项目与公网任务（7 条，需认证）
 
 公网授权测试模式的入口。设计要点：**项目是授权证据的组织单位，不是权限开关** ——
 关联项目**不会**放宽任何限制，能不能真实扫描仍由 Scope 的 `active_scan` 与环境开关决定。
@@ -377,11 +378,27 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 | GET | `/api/projects` | — | `{"ok":true,"projects":[{...,"scope_ids","scope_count"}]}` | — |
 | GET | `/api/projects/<project_id>` | — | `{"ok":true,"project":{...}}` | 404 `not_found` |
 | POST | `/api/projects/<project_id>/scopes` | JSON `{scope_id}` | **201** `{"ok":true,"project":{...}}`（幂等） | 400 缺 `scope_id` 或 Scope 不存在；404 项目不存在 |
+| POST | `/api/public-jobs/check` | JSON `{targets, project_id?}` | **200** `{"ok":true,"checks":[{raw,normalized,kind,valid,error_message,matches,eligible_scope_ids,candidates,real_scan_enabled,resolved_check_deferred,ready,blocker}],"summary":{"total","ready","blocked"},"suggested_mode","project_id"}` | 400 缺 `targets` / 请求体不是 JSON 对象 |
 | POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, pace?, mode?, operator?, authorization_confirmed?, rate_limit?, timeout_seconds?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","pace","pace_label","operator","authorization_confirmed","limits","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限 / `pace` 非法 / `operator` 非法 / `rate_limit` / `timeout_seconds` 越界；403 越界或真实扫描开关未开；404 项目不存在 |
 | GET | `/api/scan-center` | — | `{"ok":true,"projects","strategies","paces","tools","tool_groups","restricted_tools","limits","internet_allowed_tools"}` | 401 |
 
 `strategy` 合法值 = `core/tool_registry.py:STRATEGIES`：`asset_discovery`（默认，= `subfinder` + `httpx`）、
 `web_fingerprint`（= `httpx`，`nuclei` 只作「受限未开放」展示）、`custom`（**必须**显式给 `tools`）。
+
+**`POST /api/public-jobs/check` 是只读试算**（规划方案第 6 节「自动判断」的服务端半边）：
+
+* **不创建任务、不写库、不发网络请求、不写审计** —— 它是查询，有用例断言连调后
+  任务数 / 审计事件数一字不变；
+* `eligible_scope_ids` 是**唯一**的放行结论，只含 `verdict == allowed` 的范围。
+  `matches` 还会带上「命中排除列表」的范围（`verdict = "excluded"`）—— 那是**诊断信息**，
+  用户需要知道「是你自己的排除列表挡住了」，但它**不构成授权**，所以**不进** `eligible_scope_ids`；
+* 前端的「自动匹配授权资产」（`scan_center.js:applyMatchedScope`）**直接吃这个字段**，
+  绝不自己比对 `allowed_domains` / `active_scan`。多个目标命中不同资产时它会**保持
+  用户当前选择并如实说明**，不替他猜一个；
+* `blocker` 五档：`no_scope`（一个范围都没建）/ `not_authorized`（没覆盖）/
+  `scope_inactive`（覆盖但没开真实扫描）/ `env_disabled`（环境开关没开）/
+  `invalid_target`（格式非法）；空串表示可以扫。`resolved_check_deferred` 恒为 `true`：
+  执行期还会做一次真实 DNS 解析校验，本接口**如实声明**它没做。
 
 **Scan Profile = 工具组合 + 节奏**（`core/pace.py`）。`pace` 合法值恰好两个：
 

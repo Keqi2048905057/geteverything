@@ -1,9 +1,9 @@
 # TEST_REPORT.md — 测试报告（M7 交付项）
 
 > ⚠️ **基线已前移：本文件 §0–§5 描述的是 M7 那一轮（901 条用例）的历史快照，
-> 未逐处改写以免抹掉当时的实测记录。当前基线是 1290 条，本轮增量见文末
-> [§10 下一阶段规划方案 Phase 3：公网授权测试完善](#10-下一阶段规划方案-phase-3公网授权测试完善1290)。**
-> 两处数字不一致时，以 §10 与 `PROJECT_STATE.md` 的「最近一次验证」为准。
+> 未逐处改写以免抹掉当时的实测记录。当前基线是 1293 条，本轮增量见文末
+> [§11 下一阶段规划方案第 6 节：目标自动匹配授权资产](#11-下一阶段规划方案第-6-节目标自动匹配授权资产1293)。**
+> 两处数字不一致时，以 §11 与 `PROJECT_STATE.md` 的「最近一次验证」为准。
 
 > **这份报告回答三件事**：**测了什么**、**没测什么**、**为什么没测**。
 > §0 是方案第 23 节规定的里程碑输出；§1–§2 是可复现的事实；
@@ -99,9 +99,10 @@ mypy 0 error（63 source files），`check_env.py` 退出码 1（= warn，fail 0
 
 > ⚠️ **口径提醒**：上面第一条（901）与第二条（41/40）是 **M7 当时的快照**。
 > 后续里程碑只在本文件末尾**增量追加**（§6 Phase 2、§7 Phase 3、§8 Phase 4、
-> §9 规划方案 Phase 2），刻意不改写前面的实测记录 —— 所以本节的数字**以对应的增量小节为准**。
-> 截至规划方案 Phase 2：用例 **1189**（1187 passed / 2 skipped）、方法绑定 **50 / 49 被命中**，
-> 未走到的仍只有 `GET /api/tool/<tool_name>/results` 一条
+> §9 规划方案 Phase 2、§10 规划方案 Phase 3、§11 规划方案第 6 节），刻意不改写前面的实测记录
+> —— 所以本节的数字**以对应的增量小节为准**。
+> 截至规划方案第 6 节（自动匹配授权资产）：用例 **1293**（1291 passed / 2 skipped）、
+> 方法绑定 **50 / 49 被命中**，未走到的仍只有 `GET /api/tool/<tool_name>/results` 一条
 > （§3.1 的这条结论在各轮中一直成立，见 §8.2 与 §9.2 的重跑记录）。
 
 **仅代码审查、尚未实测**
@@ -1176,3 +1177,101 @@ PRAGMA table_info(jobs)
 记录类字段只记录，限速类字段只收紧，授权确认**刻意**不成为安全边界。
 新增的 101 条用例里有 6 条是**反向**守卫（结构没变、缺省路径没碰 config、
 不用授权确认也能建任务、越界不被静默夹边界）。
+
+---
+
+## 11. 下一阶段规划方案第 6 节：目标自动匹配授权资产（1293）
+
+> 本轮依据同一份工作单第 6 节（「**系统后台：** 调用 `resolve_scope(target)`，自动判断」，
+> `6GetEverything-下一阶段规划方案.md:241`）与第 16 节①
+> （「验证完整链路：**输入目标 → 自动匹配 scope → 选择工具 → 创建 job**」，`:466-468`）。
+> §1～§10 的实测记录不改写。
+
+### 11.1 实测结果
+
+```powershell
+cd get_everything_framework
+$env:PYTHONIOENCODING="utf-8"; python -m pytest -o addopts="" -q
+                                    # 1293 collected / 1291 passed, 2 skipped, 0 failures / 0 errors
+ruff check .                        # All checks passed!
+mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
+node --check web/static/scan_center.js                # 通过（本轮改的就是它）
+# 路由覆盖探针（算法同 §3.1 / §6.4 / §8.2 / §9.2）：
+#   declared: 50 / hit: 49 / never hit: GET /api/tool/<tool_name>/results
+```
+
+| 项 | Phase 3（`8e94662`） | 本轮 |
+|---|---|---|
+| 用例总数（`--collect-only -q` 汇总） | 1290 | **1293**（+3） |
+| `test_*.py` 文件 | 40 | 40（未新增文件） |
+| mypy 源文件 | 72 | **72**（未新增源文件） |
+| `app.url_map` 规则 / 方法绑定 / `/api/*` | 48 / 50 / 42 | **48 / 50 / 42**（**未新增路由**） |
+| 被用例真实命中的方法绑定 | 49 / 50 | **49 / 50**（探针重跑，第五轮结论不变） |
+
+**+3 的构成（单文件）**：`tests/integration/test_public_scan_mode.py` 113 → **116**。
+
+### 11.2 为什么这一格必须补，而且必须由**服务端结论**驱动
+
+四步流程（Phase 1）、只读试算（Phase 2）、工具选择中心（Phase 2）都已落地，
+但「试算出结论之后**谁**把那份结论变成下拉框里的选中项」一直没做 ——
+用户仍要自己在步骤 2 再挑一次。方案第 6 节要的正是这一步。
+
+驱动它的数据必须是服务端的 `eligible_scope_ids`（`core/authorization.py:TargetCheck.eligible`
+的 `verdict == allowed` 集合），理由与「Play Profile 文案只能有一份」同源：
+**前端自己比对 `verdict` / `allowed_domains` / `active_scan` 就是第二条授权判定。**
+本轮实测发现这种「第二条判定」在 `scan_center.js` 里已经有三处：
+
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| `renderCheckResults()` | `item.verdict === "allowed"` | `isEligibleMatch(check, item)` |
+| `renderConsentSummary()` | `item.status === "ready" \|\| item.status === "scope_inactive"` | 同上 |
+| `refreshConsentScopeLine()` | 同上 | 同上 |
+
+三处判同一件事、判法还不一样 —— 这正是「改一处漏一处」的形态。现在判法只有一份。
+源码守卫 `test_scan_center_js_auto_selects_the_scope_from_server_verdict`
+把这些写法列进禁止清单（`item.verdict ===`、`item.status === "ready"`、
+`scope.allowed_domains.indexOf`、`scope.active_scan &&`），**注释里出现不算**。
+
+### 11.3 §16 ① 的整条链路是**端到端**测的，不是靠源码守卫
+
+`test_target_to_job_flow_uses_the_auto_matched_scope` 把链路跑完并断言终局：
+
+```text
+建两份授权资产（各挂一个项目，其中一份覆盖目标、另一份不覆盖）
+  → POST /api/public-jobs/check          断言 eligible_scope_ids == [覆盖的那一份]
+  → 用 eligible_scope_ids[0] 当 scope_id  POST /api/public-jobs（strategy=asset_discovery）
+  → 断言 202 + status=queued + mode=real + strategy 正确 + scope_id == 被选中的那一份
+  → 断言 jobs 表里 scope_id / tools(subfinder+httpx) / targets 正确，且只落一条任务
+```
+
+把「自动匹配的输出」直接当「创建任务的输入」，是为了让前端改口径时**这条会红** ——
+而不是像纯源码守卫那样「字符串还在就算过」。
+
+### 11.4 一次性 DOM 桩（不入库）：四条口径逐条核对
+
+项目没有浏览器测试（不引入前端框架 / 构建链）。本轮除源码守卫外，另用最小
+`document` / `fetch` 桩加载**真实的** `scan_center.js`，喂服务端真实形状的响应，
+走真实渲染路径核对四件事（与 §6.5 / §7.5 / §8.6 / §9.7 / §10.7 同一口径）：
+
+| 场景 | 期望 | 实测 |
+|---|---|---|
+| 唯一命中 `scope_x` | 自动选中并切项目 | `job-project=proj_a` / `job-scope=scope_x`，摘要带「已自动选中…可在步骤 2 改选」 |
+| 两目标命中不同资产 | 不猜，保持原选择 | `job-scope` 保持 `scope_x`，摘要带「多个目标命中的授权资产不一致…」 |
+| 目标命中排除列表 | 不选中（`eligible_scope_ids == []`） | 保持原选择，摘要「0 / 1 可以真实扫描」，状态「这个目标不在任何已授权范围内」 |
+| 自动匹配是否改目标 | 一字不改 | 目标输入框仍是 `secret.blocked.test` |
+
+### 11.5 本轮新增的缺口
+
+| 未测项 | 现状 | 风险 |
+|---|---|---|
+| **方案第 16 节③「Agent 只能 `create_scan_job()`」当前不成立** | `agent/action.py` 仍直接调 `tool_runner.run_tools`（`:419`/`:437`）与 `HttpxRunner().run_scan`（`:503`/`:507`/`:511`），**没有**走 Job Service；本轮**未动** `agent/` | 中：与你上一轮对 P0-6 阶段二「先不开工」的答复一致。**没有**写 `xfail`、也**没有**写「断言 Agent 确实绕过」的测试去把缺口粉饰成预期 —— 缺口如实登记在 `docs/DECISIONS.md` §3.9 第 1 条 |
+| 自动匹配的**浏览器**验证 | 第五次 DOM 桩核对；仍无浏览器测试（与 §6.5 / §7.5 / §8.6 / §9.7 / §10.7 同一缺口） | 低：桩跑的是真实代码路径，且四件事逐条核对过 |
+| 「唯一才选」这条口径本身 | 是判断而非推导 | 低：另一种做法（选第一个）会在提交时撞服务端的项目→范围校验，得到一个页面上看不出原因的 403；已登记 §3.9 第 2 条等确认 |
+
+### 11.6 一句话结论
+
+本轮的价值不在 +3，而在**把「隐藏 Scope」这件事真正做实，同时一步都没删 Scope**：
+目标集合、Scope 模型、Policy 一字未改，被选中的是用户自己建好、且**服务端**已判定
+覆盖目标的那一份资产；判定仍然只在 `core/policy.py:validate_job_targets()` 里做一次。
+顺带把散落三处的「第二条授权判定」收敛成一份。
+唯一没做到的（Agent 边界，方案第 12/16 节③）**明写在这里**，不粉饰。

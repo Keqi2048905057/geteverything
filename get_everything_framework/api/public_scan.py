@@ -125,10 +125,19 @@ def check_public_job_targets():
             {
               "ok": true,
               "checks": [ {raw, normalized, kind, valid, matches: [...],
-                           candidates, real_scan_enabled, ready, blocker} ],
+                           eligible_scope_ids, candidates, real_scan_enabled,
+                           resolved_check_deferred, ready, blocker} ],
               "summary": {"total": N, "ready": N, "blocked": N},
-              "suggested_mode": "real" | "mock"
+              "suggested_mode": "real" | "mock",
+              "project_id": "proj_xxx" | null
             }
+
+    ``eligible_scope_ids`` 是**唯一**的「放行」结论 —— 只含 ``verdict == allowed``
+    的 Scope ID。``matches`` 还会带上命中排除列表的范围（``verdict = "excluded"``，
+    有诊断价值：让用户看出是自己写的排除列表挡住了），但它**不构成授权**，
+    因此不进 ``eligible_scope_ids``。前端的「自动匹配授权资产」直接消费这个字段
+    （``web/static/scan_center.js:applyMatchedScope``），**不自己重算 verdict** ——
+    重算就是第二条授权判定，改一处漏一处。
 
     ``blocker`` 的取值与含义：
 

@@ -1259,11 +1259,39 @@ Scan Profile **不能只等于「换个工具组合」** —— 同一组工具�
 本轮用例全部走 mock，或把 `build_runner` 换成假 runner，目标是保留域 `example.test`
 与 RFC 5737 保留段。
 
+#### 第 6 节 — 目标自动匹配授权资产（`9224bc3`）
+
+方案第 6 节写着「**系统后台：** 调用 `resolve_scope(target)`，自动判断」，
+第 16 节① 把完整链路写成「输入目标 → **自动匹配 scope** → 选择工具 → 创建 job」。
+四步流程、只读试算、工具选择中心都已落地，但「试算出结论之后**谁**把那份结论变成
+下拉框里的选中项」一直没做 —— 用户仍要自己在步骤 2 再挑一次。本轮补上这一格。
+
+- `web/static/scan_center.js:applyMatchedScope()`：四条口径 ——
+  **只认服务端结论**（候选直接取试算响应的 `eligible_scope_ids`）、
+  **取交集且唯一才选**、**有歧义就不猜**（保持原选择 + 如实说明）、
+  **不覆盖用户的显式选择**。
+- **不是扩大授权范围**（方案第 11 节 ⛔ 列表第一条）：目标集合、Scope 模型、
+  Policy 全部一字未改；被选中的资产是用户自己已建好、且**服务端**已判定覆盖目标的
+  那一个。方案第 6 节「**禁止**为了体验删除 Scope 校验」一字未动 ——
+  真正的判定仍只在 `core/policy.py:validate_job_targets()` 里做一次。
+- 顺带收敛掉**三处「第二条授权判定」**：`renderCheckResults()` /
+  `renderConsentSummary()` / `refreshConsentScopeLine()` 原先各自比较
+  `item.verdict === "allowed"` 与 `item.status === "ready"`；现在统一走
+  `isEligibleMatch()`（读服务端 ID 集合）。三处判同一件事、判法还不一样，
+  正是「改一处漏一处」的典型形态。
+- 新增 3 条用例（含 §16 ① 的整条链路端到端）。
+
+**未动**：`agent/`。方案第 16 节③ 与第 12 节要求 Agent 只能 `create_scan_job()`，
+但 `agent/action.py` 仍直接调 `tool_runner.run_tools` 与 `HttpxRunner.run_scan`；
+这与你上一轮对 P0-6 阶段二「先不开工」的答复一致，缺口**如实登记**在
+`docs/DECISIONS.md` §3.9 第 1 条 —— 没有用 `xfail` 或「断言 Agent 确实绕过」
+的测试去把缺口粉饰成预期。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1288 passed, 2 skipped, 0 failures
+$ python -m pytest           # 1291 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
@@ -1274,10 +1302,15 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 
 基线演进：公网体验版 `1004` → Phase 1 UI 清理 `1009` → Phase 2 `1036` → Phase 3 `1091`
 → Phase 4 `1149` → 规划方案 Phase 1 `1159` → 规划方案 Phase 2 `1189`
-→ **本轮（规划方案 Phase 3）`1290`**。
+→ 规划方案 Phase 3 `1290` → **本轮（规划方案第 6 节：自动匹配授权资产）`1293`**。
 
-本轮 +101 的构成（用 `git worktree add --detach <tmp> ce0ef22` 把规划方案 Phase 2
-单独检出后**两个工作树各跑一遍 `--collect-only -q` 求差**得到，不是推算）：
+本轮 +3 全部落在 `tests/integration/test_public_scan_mode.py`（113 → 116）：
+`test_check_endpoint_exposes_the_auto_match_contract`、
+`test_scan_center_js_auto_selects_the_scope_from_server_verdict`、
+`test_target_to_job_flow_uses_the_auto_matched_scope`。
+
+本轮 +101 的构成（规划方案 Phase 3；用 `git worktree add --detach <tmp> ce0ef22`
+把规划方案 Phase 2 单独检出后**两个工作树各跑一遍 `--collect-only -q` 求差**得到，不是推算）：
 
 | 文件 | 基线 `ce0ef22` | 本轮 | 差额 |
 |---|---|---|---|

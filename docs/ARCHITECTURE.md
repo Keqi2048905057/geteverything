@@ -366,7 +366,7 @@ Diff 只看 `DIFFABLE_ATTRIBUTES`，且比较的是**归一化后的 canonical k
 3. `README.md` 的常见问题 Q6 仍在说「`/` 报 `TemplateNotFound`，index.html 是占位文件」——
    该问题已在 M1 修复，模板与静态资源都在，`GET /` 返回 200。
 4. ~~`README.md` 的测试基线写 `759 passed`~~ ▶ **已修**：当时基线为 826，
-   现为 **1288 passed / 2 skipped**（[`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.26.7 同源；
+   现为 **1291 passed / 2 skipped**（[`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.27.5 同源；
    仍以 `PROJECT_STATE.md` 的「最近一次验证」为准）。**这一行本身就是「基线容易过期」的
    例证**：它是 P1 §14 那轮写下的 `1149`，之后每一轮都前移，而文档里的数字不会自己更新。
 5. `docs/SECURITY.md` **不存在**——方案建议的四份文档里，安全文档实际位于仓库根
