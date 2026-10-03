@@ -1080,7 +1080,8 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
   `git log --format=%B` 的自检脚本**，后续每次提交前跑一遍，把「九字段在不在」
   变成可执行检查而不是靠自觉。
 
-> 这两条是本轮唯一新增的待拍板项，其余全部是既有登记项的复核确认。
+> 这两条是本轮 2026-10-03 那一批唯一新增的待拍板项，其余全部是既有登记项的复核确认。
+> **2026-10-04 又追加了第 3 条**（`.gitignore` 要不要改），见 §3.13.6 末尾。
 
 #### 3.13.2 BUG 索引表 29 条行号全量刷新（**已执行**，纯文档 + 两处 docstring）
 
@@ -1151,6 +1152,51 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
 
 **仍未推送**：口径同 §3.9～§3.12 —— 等你确认后先跑七项推送前安全审计，
 再显式 `git push origin main`（**不加 `--tags` / `--follow-tags`**）。
+
+#### 3.13.6 补交 `Nightly Execution Report` + 两处「靠纪律不靠规则」的查证（2026-10-04）
+
+**① 补交了一份本该每轮都有的报告。** `.dsh/skills/geteverythingskill/SKILL.md`
+§9（`:182-201`）规定无人值守每轮结束生成十二节的 `Nightly Execution Report`；
+`docs/DECISIONS.md:17` 要求「命中预授权项必须在报告里逐条列出」；`:1174` 的早晨验收
+清单第 1 条就是「打开 Nightly Execution Report」。**但全仓此前并不存在这个文件** ——
+grep 只命中本文件自己的两处引用。也就是说**此前每一轮的「早晨验收入口」都是断的**。
+
+已补：`docs/milestones/Nightly_Execution_Report_2026-10-04.md`（十二节齐全，
+含「我替你拍了哪个板」一节）。放 `docs/milestones/` 是因为它与
+`DSH_本轮交付报告_2026-10-01.md` 同属本机过程材料，该目录**确实**被
+`.gitignore:67` 忽略（实测 `git status --ignored` 里是 `!!`）。
+
+**② 「不入库」的七个未跟踪项里，只有一类真的被忽略。** 用权威判据
+`git status --ignored --porcelain`（`??` = 未被忽略，`!!` = 被忽略）逐项核对：
+
+| 未跟踪项 | 真被忽略？ | 靠什么不进仓库 |
+|---|---|---|
+| `docs/milestones/` | ✅ 是（`!!`） | `.gitignore:67` |
+| `1本机联调版实施方案_DSH.md` | ❌ 否（`??`） | **纪律**：`.gitignore:66` 写的是不带编号的老名字，**模式与文件名不匹配** |
+| `2DSH_执行提示词.md` | ❌ 否（`??`） | **纪律**：同上，`.gitignore:65` 也不匹配 |
+| 其余 3 份方案 + `.archify/` + `.dsh/skills/geteverythingskill/` | ❌ 否（`??`） | **纪律**：从来不在忽略规则里 |
+
+★ **这条要专门记下来，因为它改变了「有多危险」的判断**：`AGENTS.md` 与
+`CODEBASE_MAP.md` §7.7 第 31 条那条「不许 `git add -A`」**比想象中更重要** ——
+一旦有人图省事 `git add -A`，被带上去的会是 2.05 MB 的 `.archify/` 与本机工作单，
+而**不会**被 `.gitignore` 拦住。
+
+**③ 一个实测出来的假阳性陷阱。** 我第一遍用 `git check-ignore .archify/`（**带尾斜杠**）
+判断，它返回退出码 0 并报出一条规则 → 我据此写出了**完全相反**的结论（以为 7 项都被忽略）。
+**实测对任意目录名都会如此**（`git check-ignore foo/` 也「命中」`.gitignore:68`）。
+正确做法：`git check-ignore -v <真实文件路径>`（**不带尾斜杠**）或直接看
+`git status --ignored --porcelain`。已写进 `docs/CODEBASE_MAP.md` §9.31.7。
+
+**需要你选（本轮第 3 条新增项）**：`.gitignore` 要不要改？
+- **(a) 不改（推荐）**：维持「靠纪律不提交」。理由：这 7 项至今确实没进过仓库，
+  且真实文件名带编号前缀是**你的命名习惯**，把编号写进 `.gitignore` 等于把
+  一次性的文件名固化成规则，下次改名又失效。
+- **(b) 放宽**：把 `1本机联调版实施方案_DSH.md` / `2DSH_执行提示词.md`
+  一并写进 `.gitignore`，让规则与文件名对上。
+- **(c) 收紧**：把 `3`/`4`/`6` 三份方案、`.archify/`、`.dsh/skills/geteverythingskill/`
+  也加进去 —— 但注意 `.dsh/skills/` 在 `.gitignore:69-70` 的注释里被明确写为
+  **「属于项目资产，不忽略」**，改它等于推翻你此前 `DECISIONS.md:144` 的答复。
+> **不选就保持现状**（即 (a)）。**我没有改 `.gitignore`。**
 
 ---
 

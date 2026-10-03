@@ -3501,3 +3501,56 @@ SHA，且属「大范围 history rewrite」方向）。选项见 `docs/DECISIONS
 > 上一节 §9.30.7 末尾那句「仍然没做：没点浏览器」**在本轮依然成立**，
 > 不重复声明；本节的「没做」清单只列本轮**新**未做的事项。
 
+#### 9.31.7 顺带查证：「不入库」的七个未跟踪项里，只有一类真的被忽略
+
+本轮补交 `Nightly Execution Report` 时（该文件按约定放 `docs/milestones/`），
+顺手核了一遍「哪些未跟踪项是真的被 `.gitignore` 忽略、哪些只是靠纪律不提交」。
+**权威判据是 `git status --ignored --porcelain`**：`??` = 未跟踪且**未**被忽略，
+`!!` = 被忽略。实测：
+
+| 未跟踪项 | `status --ignored` | 真被忽略？ | 说明 |
+|---|---|---|---|
+| `docs/milestones/` | `!!` | ✅ 是 | `.gitignore:67` 生效，`Nightly Execution Report` 放这里不会被误提交 |
+| `1本机联调版实施方案_DSH.md` | `??` | ❌ **否** | `.gitignore:66` 写的是 `本机联调版实施方案_DSH.md`（**不带编号**），与实际文件名不匹配 |
+| `2DSH_执行提示词.md` | `??` | ❌ **否** | `.gitignore:65` 写的是 `DSH_执行提示词.md`（**不带编号**），同样不匹配 |
+| `3GetEverything_长期产品化总方案_Flask版.md` | `??` | ❌ 否 | 从来不在忽略规则里（`DECISIONS.md:144` 登记为「用户决定不跟踪」） |
+| `4GetEverything_DSH执行方案_Flask版.md` | `??` | ❌ 否 | 同上 |
+| `6GetEverything-下一阶段规划方案.md` | `??` | ❌ 否 | 本轮的工作单，从未入库 |
+| `.archify/` | `??` | ❌ 否 | 本机产物（16 文件 / 2.05 MB） |
+| `.dsh/skills/geteverythingskill/` | `??` | ❌ 否 | `DECISIONS.md:144` 登记为「用户决定不跟踪」 |
+
+**两条给后来者的提醒**：
+
+1. **`git check-ignore <路径>/`（带尾斜杠）在 Windows 上不可信** —— 它对任意目录名
+   都会返回退出码 0 并**瞎报一条规则**（实测 `foo/` 也「命中」`.gitignore:68`）。
+   要判断「某个真实文件会不会被忽略」，正确做法是
+   `git check-ignore -v <真实文件路径>`（**不带尾斜杠、指向真实存在的文件**），
+   或者直接看 `git status --ignored --porcelain` 的 `??` / `!!`。
+   —— 补报告时我先用前者得出了**相反的错误结论**（以为那 7 项都被忽略），
+   改用后者才对上。这和 §9.31.4 记的「不实测就写文档」是同一类错法。
+2. **`??` 不等于「安全」。** 这 7 项之所以没进仓库，靠的是**纪律**（从不 `git add -A`）
+   而不是忽略规则。所以 `AGENTS.md` 与 §7.7 第 31 条那条「不许 `git add -A`」
+   在这里**仍然成立、且比想象中更重要** —— 一旦有人图省事 `git add -A`，
+   被带上去的会是 2 MB 的 `.archify/` 与本机工作单，而**不是**被忽略。
+
+**没有动 `.gitignore`**：放宽（把编号前缀补上）与收紧（把 `??` 那几项真正忽略）
+都是独立决策，会改变提交纪律的边界，等用户拍板。
+
+---
+
+### 9.32 补交 `Nightly Execution Report`（流程缺口，非代码缺口）
+
+`.dsh/skills/geteverythingskill/SKILL.md` §9（`:182-201`）规定无人值守每轮结束
+要生成十二节的 `Nightly Execution Report`；`docs/DECISIONS.md:17` 也要求
+「命中预授权项必须在 Nightly Execution Report 里逐条列出」，`:1174` 的早晨验收
+清单第 1 条就是「打开 Nightly Execution Report」。**但全仓此前并不存在这个文件** ——
+`grep` 只命中 `docs/DECISIONS.md` 自己的两处引用。
+
+本轮补上：`docs/milestones/Nightly_Execution_Report_2026-10-04.md`（十二节齐全，
+含「我替你拍了哪个板」一节）。放在 `docs/milestones/` 是因为它与
+`DSH_本轮交付报告_2026-10-01.md` 同属「本机过程材料」，该目录已被
+`.gitignore:67` 忽略（§9.31.7 实测确认）。
+
+**这是流程缺口，不是代码缺口** —— 它不影响任何功能，但它意味着**此前每一轮的
+「早晨验收入口」都是断的**：验收清单让你打开一份不存在的报告。如实记下。
+
