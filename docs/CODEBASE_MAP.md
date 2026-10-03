@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）**（2026-10-03）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）**（2026-10-03）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -2573,6 +2573,26 @@ WHERE o.job_id = ?
 `group_tool_policies()` 遇到未登记的分组**直接抛 `ValueError`**，不静默丢进兜底栏：
 那只会在「加了分组字段却忘了登记分组表」时发生，静默兜底会让新工具悄悄消失。
 
+**「唯一来源」与「唯一读出点」是两件事**（口径校正）：唯一来源是
+`core/tool_registry.py`，读出点有**两个**且**不等价** ——
+`/api/tools` 匿名可读、只给工具清单 + 分组 + 数据库表信息；
+`/api/scan-center` 需登录、除工具清单外还带 `restricted_tools` / `projects` /
+`strategies` / `paces` / `limits`。方案第 9 节写「前端动态读取 `GET /api/tools`」，
+实现走 `/api/scan-center`，理由就写在 `api/tools.py` 的模块 docstring 里。
+
+**方案第 9 节的字段名与本仓的逐字段对照**（照方案字面读会拿到错值而非缺失）：
+
+| 方案第 9 节 | 本仓 | 陷阱 |
+|---|---|---|
+| `name` | `tool_name`（`/api/tools` 另给 `name` 别名，两者恒等） | `/api/scan-center` 的 `tools[]` **没有** `name`，取它会 `undefined` |
+| `category` | **`tool_group`**（能力分组） | 本仓的 `category` 是**观测类别**（`subdomain`/`url`/…）—— 键存在、不报错、**值是错的**；`test_public_scan_mode.py` 的 `entry["category"] != entry["tool_group"]` 只锁住「两者不同」 |
+| `risk` | `risk_level` + `risk_label` | 拆成「机器值 + 中文展示值」，语义没丢 |
+
+还有一处**未加守卫的漂移**（已知、未收口）：`/api/tools` 的 `groups` 用
+`group_tool_policies(list_tool_policies())`，因此 `vuln` 组恒为空、不含 `nuclei`；
+`/api/scan-center` 把 `nuclei` 放进 `restricted_tools` 单独下发。两个接口的
+**扁平清单**逐字段比对过，**`groups` 集合没有** —— 见 §9.28.7。
+
 #### 9.25.5 前端：分组栏位名一个都不许写死
 
 `web/static/scan_center.js` 的 `renderToolList(tools, restrictedTools, strategy, groups)`
@@ -2836,4 +2856,126 @@ app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
 > `flask.Flask.full_dispatch_request` 跑全量后与 `app.url_map` 求差）：
 > **「唯一没被任何用例走到的是 `GET /api/tool/<tool_name>/results`」这句
 > 在第五轮之后依然成立。**
+
+---
+
+### 9.28 方案第 13 节「后端安全边界」缺口回填 + 注册表读出点漂移收口（实现零改动）
+
+> 依据：`6GetEverything-下一阶段规划方案.md:390-399` 的四行表，与第 16 节②（`:470-475`）。
+> **本轮不新增任何源文件、不改任何实现代码**，只补一个测试文件里的用例
+> （外加 `api/tools.py` 一处 docstring 与 `docs/API.md` 的口径校正）。
+
+#### 9.28.1 一句话：四行边界从「三行有用例」补成「四行都有入口级用例」
+
+第 13 节把「前端可以开放工具选择」的前提写成四行必须保留的边界。§9.23～§9.27
+三轮把 Phase 1～3 与第 6 节都落了地，但**两行实现是真的、却没有入口级用例**。
+「没测试」不等于「没实现」—— 本轮先实测确认实现，再补上能证明它真的的用例；
+每条用例写下的当次就通过，**实现一行未改**。
+
+同轮另有一个**独立审计**（对工作单 Phase 1～3 逐条对照）发现了一处
+「字段同名异义、会静默给错值」与一处「两个读出点的分组视图没有守卫」，
+一并收口在 §9.28.4 / §9.28.7。
+
+#### 9.28.2 逐行核对（哪两行当时是空的）
+
+| 第 13 节边界 | 实现位置 | 补测前 | 补测后 |
+|---|---|---|---|
+| Scope 校验 `target ∈ scope` | `core/policy.py:validate_job_targets()`（经 `core/application.py` 调用） | ✅ `test_out_of_scope_target_is_403`（403 + `scope_violation` + 零 jobs） | 不变 |
+| Real Mode 控制 | `core/safety.py:REAL_SCAN_ENV`（`GEF_ALLOW_REAL_SCAN`），缺省 `real` 不静默降级 | ✅ `test_real_mode_without_env_switch_is_403_and_does_not_fall_back_to_mock` | 不变 |
+| **Job 审计六项** | `core/application.py:365-389` 的 `detail` + `audit.record` | ⚠️ 只钉住 `operator` / `targets` / `scope_id` / `created_at` | ✅ 新增用例 |
+| **工具白名单（任意字符串）** | `core/tool_registry.py:assert_tools_internet_allowed()` 的 `unknown` 分支（`:465-468` / `:478-482`） | ⚠️ 只覆盖**已登记但被禁**的 `nmap` / `dirsearch` / `naabu` / `feroxbuster` / `katana` | ✅ 新增用例 |
+
+#### 9.28.3 六项审计字段逐项可查，且两个来源必须一致
+
+`test_job_audit_records_the_six_required_fields`（`tests/integration/test_public_scan_mode.py`）
+按第 13 节的**原话**逐项查，映射关系写死在用例里：
+
+```text
+job_id  = audit_events.target_id
+time    = audit_events.created_at
+operator / target / tools / mode = audit_events.detail 的 operator / targets / tools / mode
+  → 再断言 job.created 事件（core/jobs.py:_created_detail）与审计记录对 tools / mode 一致
+```
+
+刻意**不**写成「detail 里有哪些键」的白名单断言：那样每加一个 Phase 3 字段都要改测试，
+反而会诱导后人把这条边界顺手删掉。只查第 13 节点名的那六项。
+
+**为什么这条有真实价值**：`tools` 与 `mode` 在 `jobs` 表里也各有一份，很容易被后人
+当成「审计表里重复了」删掉。一旦删掉，事后就再也分不清「这次开的是哪些工具、
+是真扫还是 mock 演练」—— 而那正是审计表存在的理由。
+
+#### 9.28.4 「禁止任意字符串调用工具」的唯一直接证法
+
+`test_unregistered_tool_name_is_rejected_by_the_registry` 用 `strategy="custom"` +
+`tools=["definitely-not-a-tool"]` 打公网入口，断言：
+
+```text
+400 + error_code=bad_request + details.field=tools + details.unknown_tools=["definitely-not-a-tool"]
+  → 且 jobs_store.list_jobs() == []（闸门在创建任务**之前**）
+```
+
+它与 `test_blocked_tool_cannot_be_submitted` 是两件事：那条验「**已登记但被禁**」，
+这条验「**从未登记**」。后者才是「任意字符串」的字面场景 ——
+`tests/unit/test_tool_registry.py:test_assert_rejects_unknown_tool` 证明了闸门函数本身，
+但**只有入口级用例**能证明公网入口真的走到了那个闸门（而不是在别处被 `404` /
+`KeyError` 之类的偶然路径挡住）。闸门顺序见 `core/application.py:569-573`：
+`resolve_strategy_tools()` → `assert_tools_internet_allowed()`，两步都在
+`create_scan_job()`（`:586`）**之前**。
+
+#### 9.28.5 本轮**没有**新增的缺口
+
+§9.27.4 的三条（Agent 边界不成立 / 无浏览器测试 / 「唯一才选」是判断而非推导）
+**一条都没变**，本轮未触碰与之相关的任何文件。处置口径完全相同：
+**不写 `xfail`、不写「断言 Agent 确实绕过」的用例**去把缺口粉饰成预期。
+
+#### 9.28.6 本轮实测（口径快照）
+
+```text
+用例总数          1296 collected / 1294 passed / 2 skipped / 0 failures
+mypy              72 source files（本轮未新增源文件）
+node --check      web/static/scan_center.js 与 app.js 均通过（本轮未改前端）
+app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
+被用例命中        49 / 50 —— 唯一没被走到的是 GET /api/tool/<tool_name>/results
+本轮 +3           test_public_scan_mode.py 116 → 119（未新增文件）
+零 DDL            未动任何表结构；Scope / Policy / 目标集合一字未改
+```
+
+> 路由覆盖探针算法与 §3.1 / §6.4 / §9.2 / §9.26.7 / §9.27.5 **同一份**：
+> **「唯一没被任何用例走到的是 `GET /api/tool/<tool_name>/results`」这句
+> 在第六轮之后依然成立。**
+
+#### 9.28.7 独立审计发现的两处口径问题（已收口，均未改行为）
+
+对工作单 Phase 1～3 的逐条对照审计（只读，未改文件）报了六条，其中四条是
+「看法」、两条是**真实缺陷**，收口方式如下：
+
+**① 方案第 9 节的 `category` 与本仓的 `category` 同名异义 —— 会静默给错值。**
+方案的示例是 `{"name":"httpx","category":"service"}`，`category` 指**能力分组**；
+本仓的分组字段叫 `tool_group`，而 `category` 是运行器自报的**观测类别**
+（`core/tool_registry.py:173-186` 的 `ToolPolicy.to_dict()` **没有** `category` 键，
+`api/tools.py` 才补上 `"category": getattr(runner, "category", "subdomain")`）。
+按方案字面读 `entry["category"]` 会拿到 `"subdomain"` 而不是 `"service"`：
+**键存在、不报错、值是错的**，比字段缺失更危险。
+`test_tools_api_keeps_the_historical_name_key` 里的 `entry["category"] != entry["tool_group"]`
+只锁住「两者不同」，锁不住「谁对应方案的 `category`」。
+**收口方式**：不改行为（改键名会破坏历史契约），在
+`api/tools.py` 模块 docstring 与 `docs/API.md` 里写出**逐字段对照表**
+（`方案 name → tool_name`、`方案 category → tool_group`、`方案 risk → risk_level` + `risk_label`），
+并在 §9.25.4 复述 —— 让按方案实现的人第一步就能看到映射，而不是踩进同名异义。
+
+**② 两个读出点的 `groups` 视图此前没有守卫。**
+`/api/tools` 与 `/api/scan-center` 各写一次 `group_tool_policies(list_tool_policies())`
+（`api/tools.py:155` / `api/public_scan.py:227`），是**两个独立调用点**；
+已有的比对用例只比**扁平清单**的 8 个字段，`groups` 集合没比。一旦有人把其中一处
+改成默认值 `list_all_tool_policies()`，`vuln` 栏会一个接口空、另一个接口冒出 `nuclei`，
+而扁平清单比对**不会红**（`nuclei` 本来就不在扁平清单里）。
+**收口方式**：新增 `test_both_registry_readouts_agree_on_the_groups_view`，
+逐分组 `==` 比对，并断言两边的 `vuln` 栏都为空、`nuclei` 只从 `restricted_tools` 走。
+
+**未收口的四条（判定为设计取舍或文档已说明，不改）**：
+① 方案第 8 节五个分组 vs 本仓 6 个（多一栏「内容发现」，技术识别/漏洞检测**故意留空**，
+理由在 `core/tool_registry.py:112-119`）；② 前端读 `/api/scan-center` 而非方案第 9 节写的
+`/api/tools`（两者不等价，见 §9.25.4，已在 docstring / `docs/API.md` 写明）；
+③ `risk` 拆成 `risk_level` + `risk_label`（语义没丢）；④ `name` 只在本接口有别名
+（已写进 §9.25.4 的对照表）。
 

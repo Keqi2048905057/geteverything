@@ -163,21 +163,40 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 | GET | `/api/tools` | 匿名 | — | `{"tools":[{"name","tool_name","category","description","tool_group","tool_group_label","risk_level","risk_label","internet_allowed","default_enabled","reason","database"}],"groups":[...]}` | — |
 | GET | `/api/databases` | 匿名 | — | `{"databases":[{"tool_name","table","result_column","category"}]}` | — |
 
-> **Tool Registry（下一阶段规划方案 §9）**：`/api/tools` 是本项目工具能力元数据的
-> 唯一读出点。`description` / `tool_group` / `tool_group_label` / `risk_*` /
+> **Tool Registry（下一阶段规划方案 §9）**：工具能力元数据的**唯一来源**是
+> `core/tool_registry.py`；`/api/tools` 与 `/api/scan-center` 是它的**两个读出点**。
+> `description` / `tool_group` / `tool_group_label` / `risk_*` /
 > `internet_allowed` / `default_enabled` / `reason` 全部来自
 > `core/tool_registry.py:ToolPolicy.to_dict()`，与 `/api/scan-center` 的
 > `tools[]` 是**同一次调用的结果**（`test_tools_api_and_scan_center_agree_on_registry_fields`
 > 逐字段比对）。
 >
+> **两个读出点不等价，不要互换**：方案第 9 节写的是「前端动态读取 `GET /api/tools`」，
+> 实现走的是 `/api/scan-center`。原因是两者覆盖范围不同：
+> `/api/tools` **匿名可读**，只给「工具清单 + 分组 + 数据库表信息」，
+> 不含 `restricted_tools` / `projects` / `strategies` / `paces` / `limits`；
+> `/api/scan-center` **需登录**，除工具清单外还带四步流程所需的全部元数据，
+> 并把未接入的 `nuclei` 放进 `restricted_tools` 单独说明。
+> 让前端改读 `/api/tools` 会同时丢掉受限工具说明与整个流程的元数据。
+>
 > * `name` 与 `tool_name` **恒等**：前者是历史键名（脚本在用），后者是注册表与
 >   全仓统一键名；保留两个是不改历史契约、也不引入第二套命名。
+>   **注意 `name` 只在本接口存在**，`/api/scan-center` 的 `tools[]` 只有 `tool_name`。
 > * `category` 是**观测类别**（`subdomain` / `url` / `alive` / `web` / `port`，
 >   由运行器自报、决定结果落哪张表），**不是**能力分组 —— 分组字段叫
 >   `tool_group`。两者同名异义会在接口层面永远说不清，故字段名不共用。
+>   ⚠️ **方案第 9 节示例里的 `category` 指的是能力分组**（`"category":"service"`），
+>   对应本仓的 `tool_group`（`"service"`）；照方案字面读 `entry["category"]`
+>   会拿到 `"subdomain"` 这类观测类别 —— **键存在、不报错、值是错的**，
+>   而 `test_public_scan_mode.py` 里那条 `entry["category"] != entry["tool_group"]`
+>   只锁住了「两者不同」，锁不住「谁对应方案的 `category`」。逐字段对照：
+>   `方案 name → 本仓 tool_name`（`/api/tools` 另给 `name` 别名）、
+>   `方案 category → 本仓 tool_group`、`方案 risk → 本仓 risk_level` + `risk_label`。
 > * `groups` 供界面按能力分组渲染（`资产发现` / `服务识别` / …）；
 >   它**只含已接入 runner 的工具**，`nuclei` 不在此接口出现 ——
 >   本接口匿名可读，没必要把「还差哪些工具」一并公开。
+>   因此从本接口渲染 `vuln` 栏只会看到空栏位；要如实显示「nuclei 存在但受限」，
+>   必须用 `/api/scan-center` 的 `restricted_tools`。
 > * 未登记的工具不抛异常，而是保守降级（`risk_level="high"`、
 >   `internet_allowed=False`）：匿名只读列表接口为缺一个字段整页 500 更糟。
 >

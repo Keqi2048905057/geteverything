@@ -1287,11 +1287,46 @@ Scan Profile **不能只等于「换个工具组合」** —— 同一组工具�
 `docs/DECISIONS.md` §3.9 第 1 条 —— 没有用 `xfail` 或「断言 Agent 确实绕过」
 的测试去把缺口粉饰成预期。
 
+#### 第 13 节 — 后端安全边界的测试缺口回填
+
+方案第 13 节把「前端可以开放工具选择」的前提写成四行必须保留的边界
+（`6GetEverything-下一阶段规划方案.md:390-399`）。§3.7～§3.9 三轮落地后，
+这四行里有**两行实现是真的、却没有入口级用例**。本轮先实测确认实现，再补上
+能证明它真的的用例 —— **实现一行未改**，两条新用例写下的当次就通过。
+
+- **Job 审计六项**：`test_job_audit_records_the_six_required_fields` 按第 13 节
+  原话逐项查 —— `job_id` = `audit_events.target_id`，`time` = `created_at`，
+  `operator` / `target` / `tools` / `mode` 在 `detail`；并额外断言 `job.created`
+  事件与审计记录对 `tools` / `mode` 的说法一致（两处同源，不能漂移）。
+  补测前只钉住了 `operator` / `targets` / `scope_id` / `created_at`。
+- **禁止任意字符串调用工具**：`test_unregistered_tool_name_is_rejected_by_the_registry`
+  用 `strategy="custom"` + `tools=["definitely-not-a-tool"]` 打公网入口，断言
+  400 + `unknown_tools`，且 `jobs_store.list_jobs() == []`（闸门在创建任务**之前**）。
+  补测前只覆盖**已登记但被禁**的工具（`nmap` / `dirsearch` / `naabu` /
+  `feroxbuster` / `katana`），「从未登记」这条字面场景没有入口级用例。
+- **注册表两个读出点的分组视图**：`test_both_registry_readouts_agree_on_the_groups_view`
+  逐分组 `==` 比对 `/api/tools.groups` 与 `/api/scan-center.tool_groups`，并断言两边
+  `vuln` 栏都为空、`nuclei` 只从 `restricted_tools` 走。此前只比对过扁平清单的
+  8 个字段，**分组集合没有守卫** —— 一旦有人把其中一个调用点改成默认值
+  `list_all_tool_policies()`，`vuln` 栏会一个接口空、另一个接口冒出 `nuclei`，
+  而扁平清单比对不会红（`nuclei` 本来就不在扁平清单里）。
+
+为什么这两条值得单独一轮：`tools` 与 `mode` 在 `jobs` 表里也有一份，很容易被
+当成「审计表里重复了」删掉，一旦删掉就再也分不清「这次开的是哪些工具、是真扫
+还是 mock 演练」；未登记工具名则是「禁止任意字符串调用工具」的唯一直接证法 ——
+`assert_tools_internet_allowed` 的单元测试证明了闸门函数本身，但只有入口级用例
+能证明公网入口真的走到了它，而不是被别的偶然路径挡住。
+
+**未动**：实现代码、`agent/`、全部数据库表结构与数据（零 DDL）、Scope / Policy
+判定逻辑、认证授权、公网工具白名单（仍是 `subfinder` + `httpx`，`nuclei` 仍为
+`internet_allowed=false` 且只作受限展示）、路由总数（48 规则 / 50 绑定 /
+42 个 `/api/*`，未新增未删除）。本轮只改一个测试文件。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1291 passed, 2 skipped, 0 failures
+$ python -m pytest           # 1293 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
@@ -1302,9 +1337,15 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 
 基线演进：公网体验版 `1004` → Phase 1 UI 清理 `1009` → Phase 2 `1036` → Phase 3 `1091`
 → Phase 4 `1149` → 规划方案 Phase 1 `1159` → 规划方案 Phase 2 `1189`
-→ 规划方案 Phase 3 `1290` → **本轮（规划方案第 6 节：自动匹配授权资产）`1293`**。
+→ 规划方案 Phase 3 `1290` → 第 6 节自动匹配授权资产 `1293`
+→ **本轮（规划方案第 13 节：后端安全边界缺口回填）`1296`**。
 
-本轮 +3 全部落在 `tests/integration/test_public_scan_mode.py`（113 → 116）：
+本轮 +3 全部落在 `tests/integration/test_public_scan_mode.py`（116 → 119）：
+`test_job_audit_records_the_six_required_fields`、
+`test_unregistered_tool_name_is_rejected_by_the_registry`、
+`test_both_registry_readouts_agree_on_the_groups_view`。
+
+上一轮 +3 也落在同一个文件（113 → 116）：
 `test_check_endpoint_exposes_the_auto_match_contract`、
 `test_scan_center_js_auto_selects_the_scope_from_server_verdict`、
 `test_target_to_job_flow_uses_the_auto_matched_scope`。

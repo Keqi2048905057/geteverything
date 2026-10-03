@@ -640,6 +640,63 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 **未对任何真实外部目标发起扫描**：本轮新增用例全部走 mock 或注入假 runner，
 目标是 `example.test` 与 RFC 5737 保留段。
 
+### 3.10 方案第 13 节「后端安全边界」缺口回填 + 注册表读出点漂移收口（2026-10-03，无人值守）
+
+> 依据：同一份工作单第 13 节四行表（`6GetEverything-下一阶段规划方案.md:390-399`）
+> 与第 16 节②（`:470-475`）。沿用 §3.7～§3.9 的无人值守口径。
+
+**起因**：§3.7～§3.9 三轮把 Phase 1～3 与第 6 节都落了地，但**第 13 节的四行边界里有两行当时没有入口级用例**。
+「没有测试」不等于「没有实现」——本轮先实测确认实现是真的（见下），再把**能证明它真的**的用例补上。
+
+**实测确认（先测后写，不是照着方案补文档）**：
+
+| 第 13 节边界 | 实现位置 | 当时是否有入口级用例 |
+|---|---|---|
+| Scope 校验 `target ∈ scope` | `core/policy.py:validate_job_targets()`（经 `core/application.py` 调用） | ✅ `test_out_of_scope_target_is_403`（403 + `scope_violation` + 零 jobs） |
+| Real Mode 控制 | `core/safety.py` 的 `GEF_ALLOW_REAL_SCAN`，缺省 `real` 不静默降级 | ✅ `test_real_mode_without_env_switch_is_403_and_does_not_fall_back_to_mock` |
+| **Job 审计六项** | `core/application.py:365-389` 的 `detail`（`tools` / `mode` 在其中） | ⚠️ 只有 `operator` / `targets` / `scope_id` / `created_at` 被钉住 |
+| **工具白名单（任意字符串）** | `core/tool_registry.py:assert_tools_internet_allowed()` 的 `unknown` 分支 | ⚠️ 只有**已登记但被禁**的工具（`nmap` 等）有用例 |
+
+**新增测试 3 条**（`tests/integration/test_public_scan_mode.py`，均走假 runner，零外部流量）：
+
+| 用例 | 守什么 |
+|---|---|
+| `test_job_audit_records_the_six_required_fields` | 第 13 节六项**逐项**可查：`job_id`=`target_id`、`time`=`created_at`、`operator` / `targets` / `tools` / `mode` 在 detail；并额外钉住 `job.created` 事件与审计记录对 `tools` / `mode` 的说法一致 |
+| `test_unregistered_tool_name_is_rejected_by_the_registry` | 未登记的字符串（`definitely-not-a-tool`）→ 400 + `unknown_tools`，且**创建任务之前**就被拒（零 jobs） |
+| `test_both_registry_readouts_agree_on_the_groups_view` | 两个读出点的**分组视图**逐字段相同（此前只比对过扁平清单），且两边的 `vuln` 栏都为空、`nuclei` 只从 `restricted_tools` 走 |
+
+**为什么这两条值得单独一轮**：`tools` 与 `mode` 在 `jobs` 表里也有，很容易被后人当成「审计表里重复了」删掉；
+一旦删掉，事后就再也分不清「这次开的是哪些工具、是真扫还是 mock 演练」。
+未登记工具名则是「禁止任意字符串调用工具」这条边界的**唯一**直接证法 ——
+单元测试证明了闸门函数本身，但只有入口级用例能证明公网入口真的走到了它。
+
+**同轮另有一次对工作单 Phase 1～3 的独立只读审计**（未改任何文件），报出六条，其中两条是真实缺陷，一并收口：
+
+1. **`category` 同名异义 —— 会静默给错值**：方案第 9 节示例的 `category` 指**能力分组**，
+   本仓的分组字段叫 `tool_group`，而 `/api/tools` 里**确实有一个 `category`**，装的是运行器自报的
+   **观测类别**（`subdomain` / `url` / `web` …）。按方案字面读会拿到 `"subdomain"` 而不是 `"service"`：
+   键存在、不报错、值是错的。既有断言 `entry["category"] != entry["tool_group"]` 只锁住「两者不同」，
+   锁不住「谁对应方案的 `category`」。
+   *收口方式*：**不改行为**（改键名会破坏历史契约），在 `api/tools.py` 模块 docstring 与 `docs/API.md`
+   写出逐字段对照（`方案 name → tool_name`、`方案 category → tool_group`、`方案 risk → risk_level` + `risk_label`），
+   并在 `docs/CODEBASE_MAP.md` §9.25.4 / §9.28.7 复述。回滚 = 撤掉这几处文档段落。
+2. **两个读出点的 `groups` 视图此前没有守卫**：`/api/tools` 与 `/api/scan-center` 各写一次
+   `group_tool_policies(list_tool_policies())`，是两个独立调用点；已有比对只覆盖扁平清单的 8 个字段。
+   一旦有人把其中一处改成默认值 `list_all_tool_policies()`，`vuln` 栏会一个接口空、另一个冒出 `nuclei`，
+   而扁平清单比对**不会红**。*收口方式*：新增上面第 3 条用例。回滚 = 删掉那一条用例。
+
+另外四条审计意见判定为**设计取舍或文档已说明，不改行为**：方案第 8 节五分组 vs 本仓 6 个
+（多一栏「内容发现」，技术识别/漏洞检测故意留空并如实显示）、前端读 `/api/scan-center` 而非
+方案第 9 节写的 `/api/tools`（两者**不等价**，已在 docstring 与 `docs/API.md` 写明）、
+`risk` 拆成 `risk_level` + `risk_label`（语义没丢）、`name` 只在 `/api/tools` 有别名（已补进对照表）。
+
+**本轮「本次未授权项」**：无新增。§3.9 的两条（Agent 边界口径、自动匹配「唯一才选」）**仍然待你拍板**，本轮未改动与之相关的任何文件。
+
+**未动**：`agent/`、全部数据库表结构与数据（**零 DDL**）、Scope / Policy 判定逻辑、
+认证授权、公网工具白名单（**仍是 `subfinder` + `httpx`**，`nuclei` 仍为 `internet_allowed=false` 且只作受限展示）、
+路由总数（48 规则 / 50 绑定 / 42 个 `/api/*`，**未新增、未删除**；本轮只改一个测试文件）。
+**未推送**：口径同 §3.9 —— 等你确认后先跑七项推送前安全审计，再显式 `git push origin main`。
+
 ---
 
 ## 4. 永不预授权的红线

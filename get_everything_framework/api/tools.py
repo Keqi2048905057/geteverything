@@ -7,12 +7,24 @@
   GET /api/databases  — 获取所有工具数据库表的元信息（表名、记录数等）
 
 **Tool Registry（下一阶段方案第 9 节）**
-    ``/api/tools`` 是本项目工具能力元数据的**唯一读出点**：工具的中文说明
+    工具能力元数据的**唯一来源**是 :mod:`core.tool_registry`；本接口与
+    ``/api/scan-center`` 只是它的**两个读出点**：工具的中文说明
     （``description``）、能力分组（``tool_group`` / ``tool_group_label``）、
     风险等级（``risk_level`` / ``risk_label``）、是否允许公网
-    （``internet_allowed``）全部来自 :mod:`core.tool_registry`，
-    与 ``/api/scan-center`` 是同一次 ``ToolPolicy.to_dict()`` 的结果 ——
+    （``internet_allowed``）全部来自 :meth:`core.tool_registry.ToolPolicy.to_dict`，
+    与 ``/api/scan-center`` 是同一次调用的结果 ——
     两个接口不可能对同一个工具给出不同的说明（有测试逐字段比对）。
+
+    **两个读出点不等价，不要互换**（方案第 9 节写「前端动态读取 ``GET /api/tools``」，
+    实现走的是 ``/api/scan-center``，理由如下）：
+
+    * 本接口**匿名可读**，只给「工具清单 + 分组」，不含
+      ``restricted_tools`` / ``projects`` / ``strategies`` / ``paces`` / ``limits``；
+    * ``/api/scan-center`` **需登录**，除工具清单外还带四步流程所需的全部元数据，
+      并把未接入的 ``nuclei`` 放进 ``restricted_tools`` 单独说明。
+
+    因此实现没有让前端读本接口：切过来会同时丢掉受限工具说明与整个流程的元数据。
+    判断依据与逐字段对照见 ``docs/API.md`` 的「Tool Registry」段。
 
     条目里同时保留 ``name`` 与 ``tool_name``：``name`` 是这套接口的历史键名
     （脚本在用），``tool_name`` 是注册表与本仓库其它地方的统一键名。
@@ -21,6 +33,8 @@
     ``category`` 仍然是**观测类别**（``subdomain`` / ``url`` / ``web`` …），
     由运行器自己声明，决定结果落哪张表；它与工具分组 ``tool_group``
     是两件不同的事，字段名刻意不共用（理由见 ``core/tool_registry.py``）。
+    **方案第 9 节示例里的 ``category`` 指的是能力分组，对应本仓的 ``tool_group``** ——
+    按方案字面读 ``category`` 会拿到观测类别，是错值而不是缺失。
 """
 
 from flask import jsonify

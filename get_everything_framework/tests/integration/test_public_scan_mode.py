@@ -1050,6 +1050,34 @@ def test_tools_api_groups_cover_only_registered_runners(client):
     assert "nuclei" not in names
 
 
+def test_both_registry_readouts_agree_on_the_groups_view(admin_client, client):
+    """两个读出点的**分组视图**必须逐字段相同（此前只比对过扁平清单）。
+
+    两处调用现在看起来一样（都传 ``list_tool_policies()``），但它是**两个独立的
+    调用点**（``api/tools.py`` 与 ``api/public_scan.py``）。只要有人把其中一处改成
+    ``list_all_tool_policies()``（默认值就是它），`vuln` 栏就会在一个接口里空、
+    在另一个接口里冒出 ``nuclei`` —— 而扁平清单的逐字段比对**不会红**，
+    因为 ``nuclei`` 本来就不在扁平清单里。这条用例防的就是这个静默漂移。
+
+    同时锁住「未接入的工具只能从 ``restricted_tools`` 走，不能混进分组」：
+    分组的 ``vuln`` 栏在两个接口里都必须是空栏位（如实呈现「本阶段做不到」）。
+    """
+    from_tools = client.get("/api/tools").get_json()["groups"]
+    from_center = admin_client.get("/api/scan-center").get_json()["tool_groups"]
+
+    assert [group["key"] for group in from_tools] == [group["key"] for group in from_center]
+    for left, right in zip(from_tools, from_center, strict=True):
+        assert left == right, f"分组 {left['key']} 在两个接口间不一致"
+
+    vuln = next(group for group in from_center if group["key"] == "vuln")
+    assert vuln["tools"] == [], "未接入的 nuclei 不得混进分组视图"
+    # 「存在但本阶段不可用」只能由 restricted_tools 承载，且两个接口都不得改写它。
+    assert [item["tool_name"] for item in admin_client.get("/api/scan-center").get_json()["restricted_tools"]] == [
+        "nuclei"
+    ]
+    assert "restricted_tools" not in client.get("/api/tools").get_json()
+
+
 def test_scan_center_page_renders_recent_jobs(admin_client, fake_real_runner):
     """创建过的公网任务要出现在扫描中心的任务列表里。"""
     scope_id = _make_scope(admin_client)
@@ -1897,3 +1925,85 @@ def test_target_to_job_flow_uses_the_auto_matched_scope(admin_client, fake_real_
     assert job["targets"] == ["www.example.test"]
     # 自动匹配不改授权范围：任务只落在被选中的那一份资产上。
     assert len(jobs_store.list_jobs()) == 1
+
+
+# ── 方案第 13 节：后端安全边界（Job 审计六项 + 拒绝任意字符串工具） ──
+#
+# 第 13 节把「前端可以开放工具选择」的前提写成了四行必须保留的边界。前三行
+# （Scope 校验 / Real Mode 控制 / 工具白名单）在本文件其它小节已有用例，这里
+# 补上两处**当时确实没有测试**的缺口：
+#
+#   ① 「Job 审计记录 job_id、operator、target、tools、time、mode」六项 —— 逐项
+#      钉住落库的键。原有用例只覆盖了 operator / targets / scope_id / created_at，
+#      一旦有人把 ``tools`` 或 ``mode`` 从 detail 里删掉（它们看着「任务快照里也有」），
+#      审计表就再也回答不了「这次到底开了哪些工具、是真扫还是演练」。
+#   ② 「禁止任意字符串调用工具」—— 原有用例只覆盖**已登记但被禁**的工具
+#      （nmap / dirsearch / …），未登记的工具名当时没有从公网入口验过。
+#      ``assert_tools_internet_allowed`` 的单元测试存在（test_tool_registry.py），
+#      但公网入口是否真的走到了那个闸门，只有入口级用例才能证明。
+
+
+def test_job_audit_records_the_six_required_fields(admin_client, fake_real_runner):
+    """方案第 13 节「Job 审计」六项必须**逐项**在审计记录里能查到。
+
+    ``job_id`` 是 ``target_id``，``time`` 是 ``created_at``，其余四项在 ``detail``；
+    这里刻意不写成「detail 里有哪些键」的白名单断言 —— 那样每加一个 Phase 3 字段
+    都要改测试，反而会让人把这条边界删掉。只查第 13 节点名的那六项。
+    """
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, operator="李四")
+    assert resp.status_code == 202, resp.get_json()
+    job_id = resp.get_json()["job_id"]
+
+    entry = next(
+        event
+        for event in audit.list_events(limit=50)
+        if event["event_type"] == audit.EVENT_JOB_CREATED and event["target_id"] == job_id
+    )
+    detail = entry["detail"]
+
+    # job_id / time
+    assert entry["target_id"] == job_id
+    assert entry["created_at"], "审计记录必须带时间戳（方案第 13 节的 time）"
+    # operator / target / tools / mode
+    assert detail["operator"] == "李四"
+    assert detail["targets"] == ["www.example.test"]
+    assert sorted(detail["tools"]) == ["httpx", "subfinder"]
+    assert detail["mode"] == "real"
+
+    # job.created 事件与审计记录同源：两处对 tools / mode 的说法不能不一致。
+    created = next(
+        event for event in jobs_store.list_events(job_id) if event["event_type"] == jobs_store.EVENT_JOB_CREATED
+    )
+    assert sorted(created["detail"]["tools"]) == sorted(detail["tools"])
+    assert created["detail"]["mode"] == detail["mode"]
+
+
+def test_unregistered_tool_name_is_rejected_by_the_registry(admin_client, fake_real_runner):
+    """方案第 13 节「禁止任意字符串调用工具」：未登记的名字不能变成一次真实执行。
+
+    与 ``test_blocked_tool_cannot_be_submitted`` 的区别：那条验的是**已登记但被禁**
+    的工具（``nmap`` 等），这条验的是**从未登记**的字符串 —— 它必须落在同一个闸门上，
+    而不是「没元数据所以没人管」。同时锁定拒绝理由里带出 ``unknown_tools``，
+    让调用方能看出「名字打错了」与「这个工具被禁」是两回事。
+    """
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(
+        admin_client,
+        project["id"],
+        scope_id,
+        strategy="custom",
+        tools=["definitely-not-a-tool"],
+    )
+
+    assert resp.status_code == 400, resp.get_json()
+    body = resp.get_json()
+    assert body["error_code"] == "bad_request"
+    assert body["details"]["field"] == "tools"
+    assert body["details"]["unknown_tools"] == ["definitely-not-a-tool"]
+    # 闸门必须在创建任务**之前**：库里一条都不能多。
+    assert jobs_store.list_jobs() == []
