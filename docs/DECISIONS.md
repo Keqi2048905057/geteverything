@@ -1020,6 +1020,32 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
 **仍未推送**：口径同 §3.9～§3.11 —— 等你确认后先跑七项推送前安全审计，
 再显式 `git push origin main`（**不加 `--tags` / `--follow-tags`**）。
 
+#### 3.12.7 本轮的证据分两层：源码守卫 + 真起实例（补 §3.12.4 的诚实边界）
+
+`§3.12.2` 与 `§3.12.4` 的收口都是**前端**改动，而本项目**没有浏览器测试**
+（无 `package.json`，`tests/` 下没有 `.js`）。那两条用例是**源码级守卫**：
+只能证明「代码里存在/不存在这些字串」，**不能**证明「浏览器里真的这么跑」。
+把这一点写进用例 docstring 之外，本轮最后**真起了一次实例**做第二次确认，
+核对的**不是源码而是服务端发出的字节**：
+
+| 核对项 | 结果 |
+|---|---|
+| `GET /health` | 200，`tools_summary` 17 / 17 可用 |
+| `scripts/verify_public_scan.py` 七步 | 201 / 201 / 201 / 403 / 400 / 400 / 202，**退出码 0** |
+| `POST /api/jobs` 三形态 | `{"tools":[]}` 400、`{"tools":[],"tool":"subfinder"}` **400**、`{"tool":"subfinder"}` 202 |
+| `GET /scan-center` 正文 | 含「正在加载策略说明」占位，**不含**任何 `list_strategies()` 的描述 |
+| `GET /static/assets.js` 正文 | 不含 `asset.canonical_key`，不含 `textContent = asset.id` |
+| `GET /scan-center` / `GET /assets` | 均 200（模板与静态资源没被本轮改动弄坏） |
+
+实例用**独立临时库**（`LOCAL_DB_PATH` / `GEF_OUTPUT_DIR` / `GEF_SCAN_DB_PATH`
+全指向 `%TEMP%`），Token 用临时值，**与 `.env` 无关**；目标只有 RFC 6761 的
+`example.test` 与 `www.example.test`，请求要么走 `mock`、要么在闸门处被拒，
+**全程无外部流量**。用完已停止（复核 `/health` 连接失败）、临时目录已删。
+明细与「仍然没做什么」写在 `docs/TEST_REPORT.md` §14.4。
+
+> 这次把 `GEF_ALLOW_REAL_SCAN` 置为 `true` 只为让 `/health` 如实报告开关状态，
+> 不是放宽任何闸门：`Scope.active_scan` 与白名单口径一个字都没改。
+
 ---
 
 ## 4. 永不预授权的红线

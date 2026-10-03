@@ -3259,3 +3259,28 @@ Phase 3 把这两个字段都写进 `Runner.config`（`core/job_limits.py:apply_
 认证授权、审计字段集合、公网工具白名单（仍是 `subfinder` + `httpx`，`nuclei` 仍
 `internet_allowed=false`）、路由总数（**48 规则 / 50 绑定 / 42 个 `/api/*`，未新增未删除**）。
 
+#### 9.30.7 验证分两层：源码守卫 + **真起实例**（读本节前必须知道）
+
+§9.30.2 与 §9.30.3 都是**前端**改动（前者：工具名守卫；后者：策略说明副本），
+其中 §9.30.4 还包含资产详情不再上屏 UUID / 数据库列值那一处。前端改动意味着——
+本项目**没有浏览器测试**（无 `package.json`，`tests/` 下无 `.js`）。那些用例是
+**源码级守卫**：它们证明的是「`scan_center.js` / `assets.js` 这些文件里
+存在/不存在这些字串」，**不能**证明「浏览器里真的这么跑」。
+所以本轮除了跑用例，最后还用**独立临时库**真起了一次 waitress，
+核对的**不是源码而是服务端发出的字节**：
+
+| 核对项 | 命令/方法 | 结果 |
+|---|---|---|
+| 服务能起来 | `GET /health` | 200，`tools_summary` 17 / 17 |
+| 验收七步 | `python scripts/verify_public_scan.py` | 201 / 201 / 201 / 403 / 400 / 400 / 202，退出码 0 |
+| `tools`/`tool` 折叠（§9.30.1） | `POST /api/jobs` 三形态 | `{"tools":[]}` 400、`{"tools":[],"tool":"subfinder"}` **400**、`{"tool":"subfinder"}` 202 |
+| 策略说明副本（§9.30.3） | `GET /scan-center` 正文 | 含中性占位，**不含**任何 `list_strategies()` 描述 |
+| 资产页 UUID / 列值 | `GET /static/assets.js` 正文 | 不含 `asset.canonical_key`、不含 `textContent = asset.id` |
+| 页面可渲染 | `GET /scan-center` / `GET /assets` | 均 200 |
+
+隔离方式：`LOCAL_DB_PATH` / `GEF_OUTPUT_DIR` / `GEF_SCAN_DB_PATH` 全指向 `%TEMP%`，
+`LOCAL_ADMIN_TOKEN` 用临时值（与 `.env` 无关）；目标只有 RFC 6761 的 `example.test`，
+请求要么 `mock`、要么在闸门处被拒 → **全程无外部流量**。用完已停止、临时目录已删。
+**仍然没做**：没点浏览器，DOM 上的表现仍未验证。详见 `docs/TEST_REPORT.md` §14.4、
+`docs/DECISIONS.md` §3.12.7。
+

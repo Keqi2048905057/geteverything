@@ -1680,9 +1680,38 @@ $ python -m pytest -o addopts="" -q tests/unit/test_tool_parameters.py -k "fold 
 
 | 没测的 | 为什么 |
 |---|---|
-| 浏览器里的真实交互 | 项目**没有浏览器测试**（无 `package.json`，`tests/` 下无 `.js`）。`test_scan_center_js_*` / `test_assets_js_*` 这 8 条全是**源码级守卫**：只能证明「代码里存在/不存在这些口径」，不能证明「浏览器里真的这么跑」。渲染路径另用一次性 DOM 桩人工核对过（§11.4），但那不是回归测试。 |
+| 浏览器里的真实交互 | 项目**没有浏览器测试**（无 `package.json`，`tests/` 下无 `.js`）。`test_scan_center_js_*` / `test_assets_js_*` 这 8 条全是**源码级守卫**：只能证明「代码里存在/不存在这些口径」，不能证明「浏览器里真的这么跑」。渲染路径另用一次性 DOM 桩人工核对过（§11.4），但那不是回归测试。**部分缓解**见 §14.4：本轮真起了一个实例，用 HTTP 客户端核对了**页面与静态资源里实际有没有那些字串**。 |
 | 真实外网目标 | 硬约束：不扫未授权目标。全部用例走 mock / 注入假 runner，目标是 `example.test` 与 RFC 5737 保留段。 |
 | `rate_limit` 对白名单外 15 个 runner 生效 | **未实现**，本轮只是**如实记录**了覆盖面（2/17）。给每个 runner 加限速参数是独立工作，且部分工具没有对应开关。见 §3.12.5 第 2 条与 `docs/API.md` §6.3。 |
 | Agent 边界（方案第 12/16 节③） | §3.9 已挂「先不开工」，本轮**未触碰** `agent/` 任何文件（`git diff HEAD --stat -- agent/` 为空）。 |
 | 老入口 `POST /api/jobs` 不装公网白名单 | 仍是**刻意不改**的产品口径问题，见 §13.4 与 §3.11.5 第 1 条。 |
+
+### 14.4 真起实例的复核（源码级守卫之外的第二次确认）
+
+源码级守卫只能证明「代码里没写死」，证明不了「跑起来之后页面上真的没有」。
+本轮最后一次真起了一个实例做交叉确认（**独立临时库，用完即删**）：
+
+```powershell
+$env:LOCAL_DB_PATH / GEF_OUTPUT_DIR / GEF_SCAN_DB_PATH  → 各自指向 %TEMP%\gef_verify_final\
+$env:GEF_ALLOW_REAL_SCAN = "true"      # 仅为让 /health 如实报告开关状态
+$env:LOCAL_ADMIN_TOKEN   = "<临时值>"   # 临时库的 Token，与 .env 无关
+python app.py                          # waitress 127.0.0.1:5000
+```
+
+| 核对项 | 方法 | 结果 |
+|---|---|---|
+| 服务能起来 | `GET /health` | 200，`tools_summary.total=17 / available=17` |
+| 验收探针七步 | `scripts/verify_public_scan.py`（凭据从环境变量读） | 201 / 201 / 201 / 403 / 400 / 400 / 202，退出码 0 |
+| `tools`/`tool` 折叠 | `POST /api/jobs` 三形态 | `{"tools": []}` 400、`{"tools": [], "tool": "subfinder"}` **400**、`{"tool": "subfinder"}` 202 |
+| 策略说明副本 | `GET /scan-center` 的 HTML 正文匹配 | 含「正在加载策略说明」占位；**不含**「资产发现：被动子域枚举」这句描述 |
+| 资产页 UUID / 列值 | `GET /static/assets.js` 正文匹配 | 不含 `asset.canonical_key`、不含 `textContent = asset.id` |
+| 页面本身可用 | `GET /scan-center` / `GET /assets` | 均 200（静态资源与模板没有因本轮改动而渲染失败） |
+
+**没做的事**：没有点开浏览器，所以「JS 在真实 DOM 上跑出来的样子」仍未验证
+（上表只核对了**服务端发出的字节**）。用完的实例已停止（复核 `GET /health` 连接失败）、
+临时目录已删除、`git status` 无新增未跟踪文件。
+
+> 开关说明：这次把 `GEF_ALLOW_REAL_SCAN` 打开**只是为了如实读取 `/health` 的
+> `real_scan_enabled`**；全部请求都是 `mock` 或**在闸门处被拒**，
+> 目标只有 RFC 6761 的 `example.test` 与 `www.example.test`，**没有任何外部流量**。
 

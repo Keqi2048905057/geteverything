@@ -710,6 +710,12 @@ node --check web/static/{scan_center.js,assets.js,app.js}: 均通过（本轮改
         两条同样失败、两条别名反向用例两侧都通过；用完的工作树已删除
 独立审计：三条独立子代理视角（Phase 1 / 2 / 3），四处真实缺口已收口；
         `rate_limit` 只覆盖 2/17 runner（timeout 17/17）如实登记，未改覆盖面
+真起实例：临时库起了一次 waitress，核对「服务端发出的字节」而不是只看源码 ——
+        /health 200（17/17 工具可用）、scripts/verify_public_scan.py 七步全过（退出码 0）、
+        /api/jobs 三形态 400 / 400 / 202、/scan-center HTML 无策略描述副本、
+        assets.js 无 asset.canonical_key 与 textContent = asset.id、/assets 200；
+        未开浏览器（DOM 上的表现仍未验证）；实例已停、临时目录已删。
+        明细见 docs/TEST_REPORT.md §14.4
 未动：agent/（一行未改）、数据库结构与数据、认证授权、审计字段集合、
         公网白名单（仍是 subfinder + httpx）、路由总数
 ```
