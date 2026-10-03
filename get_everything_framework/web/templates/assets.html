@@ -37,11 +37,11 @@
       {% endif %}
 
       <form class="form form-inline" id="assets-filter" autocomplete="off">
-        <label for="filter-scope">授权范围</label>
+        <label for="filter-scope">授权资产</label>
         <select id="filter-scope" name="scope_id">
-          <option value="">全部范围</option>
+          <option value="">全部授权资产</option>
           {% for scope in scopes %}
-            <option value="{{ scope.id }}">{{ scope.name }}（{{ scope.id }}）</option>
+            <option value="{{ scope.id }}">{{ scope.name }}{% if scope.targets %} · {{ scope.targets | join('、') }}{% endif %}</option>
           {% endfor %}
         </select>
 
@@ -121,11 +121,11 @@
           <option value="">（选一个）</option>
         </select>
 
-        <label for="diff-scope">限定范围</label>
+        <label for="diff-scope">限定授权资产</label>
         <select id="diff-scope" name="scope_id">
-          <option value="">不按范围过滤</option>
+          <option value="">不按授权资产过滤</option>
           {% for scope in scopes %}
-            <option value="{{ scope.id }}">{{ scope.name }}（{{ scope.id }}）</option>
+            <option value="{{ scope.id }}">{{ scope.name }}{% if scope.targets %} · {{ scope.targets | join('、') }}{% endif %}</option>
           {% endfor %}
         </select>
 

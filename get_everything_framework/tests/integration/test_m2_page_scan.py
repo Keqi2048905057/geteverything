@@ -85,3 +85,52 @@ def test_page_scan_requires_scope_selection(admin_client):
     body = resp.get_data(as_text=True)
     # 缺 scope_id 时给出与 API 一致的说明
     assert "scope_id" in body
+
+
+# ── 下一阶段规划方案 Phase 1：首页「授权资产」展示 ──────────
+
+
+def test_page_shows_authorized_assets_as_human_readable_cards(admin_client):
+    """方案第 4 节「原则 2」：首页显示的是**授权资产**，不是 ``scope_…``。
+
+    用户看到的三件事：这份授权叫什么、覆盖哪些目标、现在是什么状态。
+    这三条都得在页面上，否则「已授权」只是一个后端概念。
+    """
+    scope_id = _create_scope_via_api(
+        admin_client,
+        name="培正学院公网资产",
+        allowed_domains=["www.example.test"],
+        active_scan=True,
+    )
+    home = admin_client.get("/").get_data(as_text=True)
+
+    assert "授权资产" in home
+    assert "培正学院公网资产" in home
+    assert "www.example.test" in home
+    assert "已授权" in home
+    # 卡片区是服务端渲染的骨架，不依赖任何脚本；ID 只在表单 value 里。
+    assert 'class="scope-asset' in home
+    assert f'value="{scope_id}"' in home, "实体 ID 必须仍然作为表单 value 提交"
+
+
+def test_page_does_not_render_raw_scope_ids_as_labels(admin_client):
+    """「隐藏 Scope ID」的可执行口径：实体 ID 绝不进**可见文案**。
+
+    历史上首页把下拉框写成 ``培正学院公网资产（scope_9f3c…）`` —— 用户被迫
+    理解一个内部标识。这条断言钉住它不再复活（三种最容易漏回的写法）。
+    """
+    scope_id = _create_scope_via_api(admin_client, name="培正学院公网资产")
+    home = admin_client.get("/").get_data(as_text=True)
+
+    for leaked in (f"（{scope_id}）", f"({scope_id})", f"Scope：{scope_id}"):
+        assert leaked not in home, f"内部 ID 又进了可见文案: {leaked}"
+    # 后台术语也不该是首页的主概念。
+    assert "授权范围（Scope）" not in home
+
+
+def test_page_marks_scopes_without_active_scan(admin_client):
+    """没开 ``active_scan`` 的范围必须**如实**标成「仅被动」，不能也写「已授权」。"""
+    _create_scope_via_api(admin_client, name="只读范围", active_scan=False)
+    home = admin_client.get("/").get_data(as_text=True)
+    assert "仅被动" in home
+    assert "已授权" not in home

@@ -768,3 +768,74 @@ ul.result-evidence {
 }
 
 .sc-details-body { margin-top: 8px; }
+
+/* ── 首页「授权资产」区（下一阶段规划方案第 4 节） ───────────
+   用户看到的是「范围名 + 目标 + 已授权」，而不是 scope_9f3c…。
+   实体 ID 只留在 <option value> 里（不可见）。 */
+.scope-assets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 14px;
+}
+
+.scope-asset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.scope-asset.is-active { border-left-color: var(--ok, #22c55e); }
+
+.scope-asset-targets {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+.scope-asset .badge { margin-left: auto; }
+
+/* ── 扫描中心：步骤 2「确认授权状态」的授权勾选 ───────────── */
+.sc-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.08);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.sc-consent input { margin-top: 2px; }
+
+/* 授权确认摘要：目标 / 授权状态 / 授权资产，三行说清「要扫什么」。
+   用 grid 让 dt/dd 自动两列成行，不靠 ::after 造换行。 */
+.sc-consent-summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  align-items: baseline;
+  font-size: 12.5px;
+  line-height: 1.7;
+  margin: 8px 0 0;
+}
+
+.sc-consent-summary dt {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.sc-consent-summary dd {
+  margin: 0;
+  word-break: break-all;
+}

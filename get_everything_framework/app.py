@@ -310,13 +310,37 @@ def _load_recent_jobs(limit: int = 10) -> list[dict]:
         return []
 
 
+def _scope_targets(scope) -> list[str]:
+    """把范围里的授权目标合成一串人类可读的文案（域名 + 网段）。
+
+    这一串只用于**展示**（方案第 4 节「前端显示：授权资产 / 状态：已授权」）。
+    它是 Scope 模型里本来就有的字段，不需要新增任何数据结构。
+    """
+    targets = list(scope.allowed_domains or []) + list(scope.allowed_cidrs or [])
+    return targets
+
+
 def _load_scope_options() -> list[dict]:
-    """读取首页下拉框需要的 Scope 列表（失败时退化为空列表）。"""
+    """读取首页「授权资产」区需要的范围列表（失败时退化为空列表）。
+
+    除了 ``id`` 之外还带上域名 / 网段与状态：方案第 4 节要求前端显示的是
+    「授权资产 + 目标 + 状态」，而不是 ``scope_9f3c…`` 这一串内部 ID。
+    ``id`` 仍然保留 —— 它要作为表单 ``value`` 提交，只是不进任何可见文案。
+    """
     try:
         from core import scope_store
 
-        return [{"id": scope.id, "name": scope.name, "active_scan": scope.active_scan}
-                for scope in scope_store.list_all(limit=50)]
+        return [
+            {
+                "id": scope.id,
+                "name": scope.name,
+                "active_scan": scope.active_scan,
+                "allowed_domains": list(scope.allowed_domains or []),
+                "allowed_cidrs": list(scope.allowed_cidrs or []),
+                "targets": _scope_targets(scope),
+            }
+            for scope in scope_store.list_all(limit=50)
+        ]
     except Exception:
         # 首页不能因为 Scope 读取失败就 500；下拉框为空并给出提示即可。
         return []

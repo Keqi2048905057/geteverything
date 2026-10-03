@@ -659,22 +659,75 @@ def test_scan_center_page_renders_for_anonymous(client):
 
 
 def test_scan_center_page_renders_four_steps_for_admin(admin_client):
-    """Phase 2 的五步简化流程在页面上落成四段（第 5 步「创建任务」是提交按钮本身）。"""
+    """Phase 1 的四步流程必须字面落在页面上（下一阶段规划方案第 5.2 节）。
+
+    四步的措辞是**用户视角**的（输入目标 → 确认授权状态 → 选择工具 → 创建任务），
+    不再出现「选择授权项目 / 选择扫描范围」这类要求用户先理解内部模型的步骤。
+    """
     resp = admin_client.get("/scan-center")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
 
     for heading in (
         "步骤 1 · 输入目标",
-        "步骤 2 · 确认授权范围",
+        "步骤 2 · 确认授权状态",
         "步骤 3 · 选择工具",
-        "步骤 4 · 执行模式与提交",
+        "步骤 4 · 创建任务",
     ):
         assert heading in body, heading
     assert "创建任务" in body
     assert "任务" in body
     # 白名单要如实写进页面，用户才知道能选什么。
     assert "httpx" in body and "subfinder" in body
+    # 旧流程的两个步骤名不得复活 —— 它们正是「重复步骤」本身。
+    for removed in ("确认授权范围", "执行模式与提交"):
+        assert removed not in body, f"旧的步骤名又回来了: {removed}"
+
+
+def test_scan_center_page_exposes_authorization_consent(admin_client):
+    """步骤 2 必须有「我确认该目标属于授权范围」这一句显式确认（方案第 7 节）。
+
+    这条守的是两件事：
+    * 用户**看得见**自己确认了什么（而不是点一下按钮就默认被当成已确认）；
+    * 它必须写明自己是**使用者确认、不是安全边界** —— 否则下一个人很容易
+      以为「勾了就等于放行」，从而把它当成权限开关去改。
+    """
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    assert 'id="job-consent"' in body
+    assert 'name="authorization_confirmed"' in body
+    assert "我确认该目标属于授权范围" in body
+    assert "不是安全边界" in body
+
+
+def test_scan_center_page_offers_authorization_summary(admin_client):
+    """步骤 2 的摘要三行（目标 / 授权状态 / 授权资产）必须在页面上有落点。"""
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    for element_id in ("consent-target", "consent-status", "consent-scope"):
+        assert f'id="{element_id}"' in body, element_id
+    assert "授权资产" in body
+
+
+def test_scan_center_js_renders_the_consent_summary_from_server_data():
+    """摘要必须**回显服务端结论**，前端不得自己重写一份授权判定。
+
+    源码级守卫：``renderConsentSummary`` 必须读 ``BLOCKER_LABELS``（服务端下发的
+    ``blocker`` 的翻译表）与 ``matches[].status``，而不是自己比较
+    ``active_scan`` / 环境变量这类东西。
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    assert "function renderConsentSummary(" in source
+    assert "BLOCKER_LABELS[check.blocker]" in source
+    # 前端不得自己拼「已授权」的判定条件（那是服务端的结论）。
+    for forbidden in (
+        "check.real_scan_enabled =",
+        "item.active_scan &&",
+        "scope.active_scan && scope.allowed_domains",
+    ):
+        assert forbidden not in source, f"前端开始自己判定授权了: {forbidden}"
 
 
 def test_scan_center_page_warns_when_real_scan_disabled(admin_client, monkeypatch):
@@ -807,6 +860,72 @@ def test_scan_center_page_separates_restricted_tools_note(admin_client):
     body = admin_client.get("/scan-center").get_data(as_text=True)
     assert 'id="restricted-note"' in body
     assert "本阶段未接入/未开放的工具" not in body
+
+
+# ── Phase 1「增加工具选择」+ 方案第 8、9 节：工具清单 ────────
+
+
+def test_scan_center_page_always_shows_the_tool_list(admin_client):
+    """工具清单**始终可见**，不再只在「自定义模式」下才出现。
+
+    方案第 8 节把「用户无法主动选择工具」列为当前最大缺失。原来清单藏在
+    ``<div id="custom-tools" hidden>`` 里 —— 选模板时用户根本看不到这次要跑什么。
+    现在模板模式下列表仍然列出（置灰，说明由模板决定），自定义模式才可勾选。
+    """
+    import re
+
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    tag = re.search(r'<div[^>]*id="custom-tools"[^>]*>', body)
+    assert tag is not None, "页面缺少工具清单容器"
+    assert "hidden" not in tag.group(0), "工具清单又被藏起来了"
+    assert 'id="tool-list"' in body
+    assert 'id="tool-list-note"' in body
+
+
+def test_scan_center_js_never_hardcodes_tool_names():
+    """方案第 9 节：**不要把工具写死在前端**。
+
+    这是那一条的可执行版本。工具清单必须整体来自服务端下发的
+    ``/api/scan-center``（``tools`` + ``restricted_tools``）；前端一旦出现字面量
+    工具名，新增工具就得改两处，而漏改的那一处不会报错 —— 只会静默不显示。
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    # 方案第 9 节点名禁止的写法。
+    for hardcoded in ("checkbox = httpx", "checkbox = subdomain"):
+        assert hardcoded not in source, f"前端写死了工具: {hardcoded}"
+    # 工具名一律以字符串字面量形式出现也不行 —— 白名单有 17 个工具，逐个写死
+    # 正是方案要避免的形态。工具名只允许出现在注释与 docstring 里。
+    code_only = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith(("*", "//", "/*"))
+    )
+    for name in ("subfinder", "httpx", "nmap", "naabu", "nuclei", "katana", "feroxbuster"):
+        assert f'"{name}"' not in code_only, f"前端代码里出现了写死的工具名: {name}"
+
+
+def test_scan_center_tool_list_comes_from_server_payload():
+    """工具清单的**数据源**必须是服务端响应，而不是任何本地常量表。"""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    # 渲染入口接的是 center.tools / center.restricted_tools。
+    assert "renderToolList(center.tools, center.restricted_tools," in source
+    # 切换模板时复用同一份服务端数据（不发第二次请求、不另建常量表）。
+    assert "renderToolList(metadata.tools, metadata.restricted_tools, strategy)" in source
+
+
+def test_scan_center_metadata_tools_carry_what_the_frontend_needs(admin_client):
+    """前端渲染一个工具需要哪些字段，这里逐项钉死（改字段名就会红）。"""
+    body = admin_client.get("/api/scan-center").get_json()
+    entry = next(item for item in body["tools"] if item["tool_name"] == "subfinder")
+    for field in ("tool_name", "risk_level", "risk_label", "internet_allowed",
+                  "default_enabled", "reason"):
+        assert field in entry, f"工具条目缺少前端需要的字段: {field}"
 
 
 def test_scan_center_page_renders_recent_jobs(admin_client, fake_real_runner):

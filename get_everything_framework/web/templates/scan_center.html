@@ -69,31 +69,45 @@
         <div id="check-result"></div>
       </div>
 
-      <!-- 步骤 2：确认授权范围 -->
+      <!-- 步骤 2：确认授权状态（方案第 7 节） -->
       <div class="sc-step">
-        <h3>步骤 2 · 确认授权范围</h3>
+        <h3>步骤 2 · 确认授权状态</h3>
 
-        <div id="scope-create" hidden>
-          <p class="sc-step-note">
-            上面的目标还没有被任何授权范围覆盖。补一个范围即可 ——
-            范围必须挂在授权项目下，项目的「授权说明」是公网扫描的授权证据。
-          </p>
-          <form class="form" id="project-form" autocomplete="off">
-            <label for="project-name">项目名称</label>
-            <input type="text" id="project-name" name="name" placeholder="学校官网授权测试" required>
+        <dl class="sc-consent-summary" id="consent-summary">
+          <dt>目标</dt><dd id="consent-target">（还没填）</dd>
+          <dt>授权状态</dt><dd id="consent-status">（还没选授权资产）</dd>
+          <dt>授权资产</dt><dd id="consent-scope">（还没选）</dd>
+        </dl>
 
-            <label for="project-note">授权说明（谁授权、范围、凭据形式）</label>
-            <input type="text" id="project-note" name="authorization_note"
-                   placeholder="2026-10-02 校方信息中心书面授权，仅被动信息收集" required>
+        <p class="sc-step-note">
+          授权范围是后端的权限模型，你只需要确认目标属于哪份授权资产。
+          这里选中的资产会作为本次任务的授权依据写入审计。
+        </p>
 
-            <label for="project-owner">负责人（可选）</label>
-            <input type="text" id="project-owner" name="owner" placeholder="张三">
+        <details class="sc-details" id="scope-create" hidden>
+          <summary>还没有授权项目？先建一个授权项目</summary>
+          <div class="sc-details-body">
+            <p class="sc-step-note">
+              授权范围必须挂在授权项目下，项目的「授权说明」（谁授权、范围、凭据形式）
+              就是公网扫描的授权证据，会随任务一并写入审计。
+            </p>
+            <form class="form" id="project-form" autocomplete="off">
+              <label for="project-name">项目名称</label>
+              <input type="text" id="project-name" name="name" placeholder="学校官网授权测试" required>
 
-            <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-              创建授权项目
-            </button>
-          </form>
-        </div>
+              <label for="project-note">授权说明（谁授权、范围、凭据形式）</label>
+              <input type="text" id="project-note" name="authorization_note"
+                     placeholder="2026-10-02 校方信息中心书面授权，仅被动信息收集" required>
+
+              <label for="project-owner">负责人（可选）</label>
+              <input type="text" id="project-owner" name="owner" placeholder="张三">
+
+              <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
+                创建授权项目
+              </button>
+            </form>
+          </div>
+        </details>
 
         <form class="form" id="scope-form" autocomplete="off">
           <label for="job-project">授权项目</label>
@@ -101,16 +115,25 @@
             <option value="">还没有授权项目</option>
           </select>
 
-          <label for="job-scope">授权范围</label>
+          <label for="job-scope">授权资产</label>
           <select id="job-scope" name="scope_id" required>
             <option value="">这个项目还没有授权范围</option>
           </select>
           <p class="sc-step-note" id="scope-feedback">
-            只列出所选项目下的范围 —— 选错项目就选不到范围，从界面上避免张冠李戴。
+            只列出所选项目下的授权资产 —— 选错项目就选不到它，从界面上避免张冠李戴。
           </p>
 
+          <label class="check-inline sc-consent" for="job-consent">
+            <input type="checkbox" id="job-consent" name="authorization_confirmed">
+            <span>
+              我确认该目标属于授权范围。这是一次使用者确认，不是安全边界 ——
+              能不能真的扫仍然由服务端的授权判定与真实扫描开关共同决定，
+              勾上它不会放开任何权限。
+            </span>
+          </label>
+
           <details class="sc-details" id="scope-add">
-            <summary>给这个项目新增一个授权范围</summary>
+            <summary>给这个项目新增一份授权资产</summary>
             <div class="sc-details-body">
               <label for="scope-domains">授权域名（逗号分隔；子域用 *.example.com 或直接写根域）</label>
               <input type="text" id="scope-domains" name="allowed_domains" placeholder="www.example.cn">
@@ -143,15 +166,18 @@
         <p class="sc-step-note" id="strategy-note">资产发现：被动子域枚举 + 存活探测。低频档，适合作为授权公网测试的第一步。</p>
         <div id="restricted-note" hidden></div>
 
-        <div id="custom-tools" hidden>
-          <p class="sc-step-note">自定义模式：勾选要用的工具（被禁工具无法勾选）。</p>
+        <!-- 工具清单始终显示（方案第 8 节「工具选择中心」）：选了模板时它列出
+             「本次会用哪些工具」并置灰；切到自定义模式才可勾选。清单本身由
+             /api/scan-center 动态下发，前端不写死任何工具名。 -->
+        <div id="custom-tools">
+          <p class="sc-step-note" id="tool-list-note">本次会用到的工具（由所选模板决定）。</p>
           <div class="sc-tools" id="tool-list"></div>
         </div>
       </div>
 
-      <!-- 步骤 4：执行模式与提交 -->
+      <!-- 步骤 4：创建任务（执行模式的选择与提交合并在这一步） -->
       <div class="sc-step">
-        <h3>步骤 4 · 执行模式与提交</h3>
+        <h3>步骤 4 · 创建任务</h3>
         <form class="form" id="job-form" autocomplete="off">
           <label class="check-inline" for="job-mock">
             <input type="checkbox" id="job-mock" name="mode_mock">
@@ -160,14 +186,14 @@
 
           <div class="sc-actions">
             <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-              创建测试任务
+              创建任务
             </button>
           </div>
         </form>
         <p class="sc-step-note" id="job-feedback">
           提交后立即返回任务 ID（<code>queued</code>），由 worker 异步执行。
           执行前请确认 worker 已启动：<code>python -m jobs.worker</code>。
-          任务创建必须依次通过「项目 → 项目内范围 → 公网工具白名单 → Policy / Scope / 模式」，
+          任务创建必须依次通过「项目 → 项目内授权资产 → 公网工具白名单 → Policy / Scope / 模式」，
           任何一条不过都会在<strong>创建任务之前</strong>被拒绝。
         </p>
       </div>
@@ -216,7 +242,7 @@
         <p class="hint">状态每 3 秒自动刷新；「详情」展开每个步骤的状态、错误码与耗时。</p>
       {% else %}
         <p class="hint">
-          还没有任务。按左侧四步走：填目标 → 确认授权范围 → 选工具 → 创建任务。
+          还没有任务。按左侧四步走：填目标 → 确认授权状态 → 选工具 → 创建任务。
           创建后若状态一直停在 <code>queued</code>，说明 worker 没在跑。
         </p>
       {% endif %}
