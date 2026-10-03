@@ -65,6 +65,26 @@ def _strip_scheme_and_path(raw: str) -> str:
     if "://" in text:
         parsed = urlsplit(text)
         text = parsed.netloc or parsed.path
+    elif "/" in text:
+        # 没写协议的 URL（方案第 6 节：用户会直接把地址栏里的东西粘进来）。
+        # 区分「网段」与「主机 + 路径」看 ``/`` **两边**：
+        #
+        #   ``192.0.2.0/24``         → 左边是 IP 字面量 → 网段，原样交给下面的分支；
+        #   ``192.0.2.0/99``         → 左边是 IP 但掩码非法 → 仍然如实报
+        #                              「非法的 CIDR」，不把错误吞掉；
+        #   ``example.test/24``      → 右边是纯数字 → 看着就是想写网段，
+        #                              同样原样保留（会报「非法的 CIDR: example.test/24」，
+        #                              而不是悄悄把它当成域名）；
+        #   ``www.example.test/a/b`` → 两边都不像网段 → 路径，取主机那一段。
+        #
+        # 不做这一步的话 ``www.example.test/a/b`` 会掉进 CIDR 分支，报出
+        # 「非法的 CIDR」—— 把一条完全正常的输入说成了网段写错。
+        head, _, suffix = text.partition("/")
+        try:
+            ipaddress.ip_address(head)
+        except ValueError:
+            if not suffix.isdigit():
+                text = head
     # 去掉可能残留的 userinfo
     if "@" in text:
         text = text.rsplit("@", 1)[1]

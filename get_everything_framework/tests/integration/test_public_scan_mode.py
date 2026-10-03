@@ -137,6 +137,46 @@ def test_public_domain_scope_can_be_created(admin_client):
     assert body["active_scan"] is True
 
 
+def test_public_url_target_is_normalized_to_its_host(admin_client, monkeypatch):
+    """方案第 6 节：用户会直接粘 URL（带协议或不带协议）—— 都要能走通。
+
+    与 `test_public_ip_target_is_checked_against_allowed_cidrs` 同一条思路，
+    补的是**第四种输入**：URL。带协议的 URL 一直支持；**没写协议**的
+    （浏览器地址栏里复制出来的那种）此前会掉进 CIDR 分支，报
+    「非法的 CIDR: www.example.test/a/b」—— 把一条完全正常的输入说成网段写错。
+
+    这里同时守住「规范化之后落到同一个目标」：带协议、不带协议、带路径三种写法
+    必须指向同一个主机，否则授权判定会随写法而变。
+    """
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    scope_id = _make_scope(admin_client, domains=["example.test"], active_scan=True)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    for raw in ("www.example.test", "www.example.test/a/b", "https://www.example.test/a/b?q=1"):
+        check = admin_client.post(
+            "/api/public-jobs/check",
+            json={"targets": [raw], "project_id": project["id"]},
+        ).get_json()["checks"][0]
+        assert check["valid"] is True, (raw, check)
+        assert check["normalized"] == "www.example.test", (raw, check)
+        assert check["ready"] is True, (raw, check)
+
+        resp = admin_client.post(
+            "/api/public-jobs",
+            json={
+                "project_id": project["id"],
+                "scope_id": scope_id,
+                "targets": [raw],
+                "strategy": "asset_discovery",
+                "mode": "mock",
+            },
+        )
+        assert resp.status_code == 202, (raw, resp.get_json())
+        # 落库的是**规范化后**的主机，不是用户粘进来的那串 URL。
+        job = jobs_store.get_job(resp.get_json()["job_id"])
+        assert job["targets"] == ["www.example.test"], (raw, job["targets"])
+
+
 def test_public_ip_target_is_checked_against_allowed_cidrs(admin_client):
     """方案第 4 节把目标类型写成「域名 / IP / CIDR」—— 三条路径都要能走通。
 

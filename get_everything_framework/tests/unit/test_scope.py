@@ -47,6 +47,32 @@ def test_normalize_target_rejects_invalid(raw):
         normalize_target(raw)
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # 方案第 6 节：用户输入是「域名 / IP / URL」—— 没写协议的 URL 也算 URL。
+        # 不写这条分支时 ``www.example.test/a/b`` 会掉进 CIDR 分支，
+        # 报出「非法的 CIDR」，把一条正常输入说成网段写错了。
+        ("www.example.test/a/b", "www.example.test"),
+        ("example.test/", "example.test"),
+        ("example.test/a?q=1", "example.test"),
+    ],
+)
+def test_normalize_target_accepts_schemeless_url(raw, expected):
+    assert normalize_target(raw).value == expected
+
+
+def test_normalize_target_still_reports_a_broken_cidr_as_cidr():
+    """把「主机 + 路径」与「网段」分开之后，真正的坏网段仍要如实报网段错。
+
+    这条防的是「顺手把后缀是数字的全都当路径」那种过度修正：
+    ``192.0.2.0/99`` 的掩码非法，报的必须是 CIDR 而不是「非法域名」。
+    """
+    with pytest.raises(InvalidTargetError) as excinfo:
+        normalize_target("192.0.2.0/99")
+    assert "CIDR" in excinfo.value.message
+
+
 # ── Scope 构造约束 ────────────────────────────────────────
 
 
