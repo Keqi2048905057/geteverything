@@ -770,6 +770,106 @@
 
   // ── 步骤 1：检查授权（只读试算） ─────────────────────────
 
+  /** 一个目标**被服务端放行**的授权资产 ID。
+   *
+   *  直接读试算响应里的 ``eligible_scope_ids`` —— 那是服务端按
+   *  ``Scope.match_target`` 算完的结论（``verdict=allowed``），前端不再自己
+   *  从 ``matches[]`` 里重算一遍：重算就是第二条授权判定，改一处漏一处。
+   */
+  function eligibleScopeIds(check) {
+    return (check.eligible_scope_ids || []).slice();
+  }
+
+  /** 这条 ``matches[]`` 条目是否属于**放行**结论（按服务端的 ID 集合判，不重算 verdict）。 */
+  function isEligibleMatch(check, match) {
+    return eligibleScopeIds(check).indexOf(match.scope_id) !== -1;
+  }
+
+  /**
+   * 所有有效目标**共同**命中的那一个授权资产；没有唯一答案时返回 ``null``。
+   *
+   * 取交集而不是取第一个：三个目标分别落在两个资产上时，随便挑一个会让用户
+   * 提交时撞 403（服务端按项目校验范围），却在页面上看不出原因。
+   */
+  function commonEligibleScope(payload) {
+    var checks = (payload.checks || []).filter(function (check) {
+      return check.valid;
+    });
+    if (!checks.length) return null;
+    var common = eligibleScopeIds(checks[0]);
+    checks.slice(1).forEach(function (check) {
+      var ids = eligibleScopeIds(check);
+      common = common.filter(function (id) {
+        return ids.indexOf(id) !== -1;
+      });
+    });
+    return common.length === 1 ? common[0] : null;
+  }
+
+  /**
+   * 方案第 6 节：系统后台自动判断目标属于哪份授权资产（``resolve_scope(target)``）。
+   *
+   * 四条口径，改之前先读：
+   *
+   * * **不是扩大授权范围**（方案第 11 节⛔列表）。目标集合一字未改，只是把
+   *   **用户自己已经建好的**、且服务端已经判定覆盖该目标的那个授权资产**选中**，
+   *   省掉「再选一次」的动作。真正的判定仍是服务端的 Scope / Policy，
+   *   方案第 6 节「**禁止**为了体验删除 Scope 校验」一字未动。
+   * * **只认服务端结论**。候选直接取试算响应的 ``eligible_scope_ids`` ——
+   *   那是服务端按 ``Scope.match_target`` 算完的 ``verdict=allowed`` 集合；
+   *   前端绝不自己比较 ``allowed_domains`` / ``active_scan`` 之类的字段，
+   *   那就成了第二条授权判定。
+   * * **有歧义就不选**。多个目标命中不同资产、或一个目标命中多个资产时保持用户
+   *   当前选择并如实说明，不替他猜一个。
+   * * **不覆盖用户的显式选择**。当前选中的资产本身就是那个答案时原样保留 ——
+   *   自动匹配是省一步，不是把用户刚改的选择顶回去。
+   *
+   * @returns {string} ``selected`` / ``kept`` / ``ambiguous`` / ``none``（用于给出一句说明）。
+   */
+  function applyMatchedScope(payload) {
+    var scopeId = commonEligibleScope(payload);
+    if (!scopeId) {
+      // 有放行结论但不是唯一答案 → 说清楚「请你来选」；一个都没放行 →
+      // 卡片上已经写明缺哪一道闸门，这里不再重复。
+      var anyEligible = (payload.checks || []).some(function (check) {
+        return check.valid && eligibleScopeIds(check).length > 0;
+      });
+      return anyEligible ? "ambiguous" : "none";
+    }
+
+    var scopeSelect = $("job-scope");
+    if (!scopeSelect) return "none";
+    if (scopeSelect.value === scopeId) return "kept"; // 用户已经选的就是它
+
+    // 授权资产必须挂在某个授权项目下（服务端要求 scope ∈ project.scope_ids），
+    // 因此先把项目切过去、重建范围下拉框，再选中那一个范围。
+    var owner = null;
+    ((metadata && metadata.projects) || []).forEach(function (project) {
+      if (!owner && (project.scope_ids || []).indexOf(scopeId) !== -1) owner = project;
+    });
+    if (!owner) return "none"; // 命中但没挂到任何项目：服务端会拒，页面已如实说明
+
+    var projectSelect = $("job-project");
+    if (projectSelect) {
+      projectSelect.value = owner.id;
+      syncJobScopes();
+    }
+    scopeSelect.value = scopeId;
+    refreshConsentScopeLine();
+    return "selected";
+  }
+
+  /** 自动匹配结果 → 一句给用户看的话（空字符串表示不需要额外说明）。 */
+  function autoScopeNote(outcome) {
+    if (outcome === "selected") {
+      return "已自动选中覆盖该目标的授权资产 —— 可在步骤 2 改选。";
+    }
+    if (outcome === "ambiguous") {
+      return "多个目标命中的授权资产不一致，请在步骤 2 自行选择。";
+    }
+    return "";
+  }
+
   function renderCheckResults(payload) {
     var box = $("check-result");
     if (!box) return;
@@ -797,8 +897,10 @@
         card.appendChild(hint("目标格式不合法：" + check.error_message, "sc-check-note"));
       } else {
         // 命中哪些范围 —— 只显示放行的；被排除的单独说明（它有诊断价值）。
+        // 「放行」的判断同样读服务端的 ``eligible_scope_ids``（见 eligibleScopeIds），
+        // 不在这里重算一遍 verdict —— 第二条授权判定就是「改一处漏一处」的来源。
         var eligible = (check.matches || []).filter(function (item) {
-          return item.verdict === "allowed";
+          return isEligibleMatch(check, item);
         });
         if (eligible.length) {
           eligible.forEach(function (match) {
@@ -874,12 +976,16 @@
     if (createBox) createBox.hidden = !needsScope;
 
     lastCheckPayload = payload;
+    // 方案第 6 节：试算完就把「目标属于哪份授权资产」自动选好（见 applyMatchedScope）。
+    // 顺序很重要：先自动匹配，再渲染摘要 —— 否则摘要显示的还是上一个选中项。
+    var autoOutcome = applyMatchedScope(payload);
     renderConsentSummary();
 
     setText(
       "check-summary",
       payload.summary.ready + " / " + payload.summary.total + " 个目标现在可以真实扫描。" +
-        (payload.summary.blocked ? "其余 " + payload.summary.blocked + " 个还缺条件，见下方说明。" : ""),
+        (payload.summary.blocked ? "其余 " + payload.summary.blocked + " 个还缺条件，见下方说明。" : "") +
+        (autoScopeNote(autoOutcome) ? " " + autoScopeNote(autoOutcome) : ""),
       false
     );
   }
@@ -920,7 +1026,7 @@
     if (scopeBox) {
       var matched = check
         ? (check.matches || []).filter(function (item) {
-            return item.status === "ready" || item.status === "scope_inactive";
+            return isEligibleMatch(check, item);
           })
         : [];
       if (matched.length) {
@@ -947,7 +1053,7 @@
     var check = (lastCheckPayload.checks || [])[0];
     var matched = check
       ? (check.matches || []).filter(function (item) {
-          return item.status === "ready" || item.status === "scope_inactive";
+          return isEligibleMatch(check, item);
         })
       : [];
     if (matched.length) return; // 试算已经给了答案，不用下拉框覆盖它

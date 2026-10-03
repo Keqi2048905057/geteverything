@@ -1758,3 +1758,142 @@ def test_job_detail_frontend_shows_the_phase3_context(admin_client):
     assert "job.limits" in script
     # 授权确认必须写明「使用者确认、不是安全边界」——与页面上的口径一致。
     assert "不是安全边界" in script
+
+
+# ── 方案第 6 节：目标 → 授权资产的自动匹配（`resolve_scope(target)`） ──
+#
+# 注意命名：这里**不是**另一份工作单里的「Phase 4 结果体验」。
+# 本项来自 `6GetEverything-下一阶段规划方案.md` 第 6 节（Step 1 目标输入 →
+# 「系统后台：调用 ``resolve_scope(target)``，自动判断」）与第 16 节①
+# （「输入目标 → **自动匹配 scope** → 选择工具 → 创建 job」）。
+
+
+def test_check_endpoint_exposes_the_auto_match_contract(admin_client, monkeypatch):
+    """试算响应里的 ``eligible_scope_ids`` 必须**只含真正放行**的范围。
+
+    前端 Phase 4 的自动匹配（方案第 6 节 ``resolve_scope(target)``）就吃这个字段。
+    因此它必须同时满足两件事，否则「自动选中」会变成一条绕过授权的捷径：
+
+    * 覆盖目标 → 在里面（否则自动匹配永远选不中，功能是死的）；
+    * **命中排除列表** → 不在里面（``matches`` 里仍然有它，那是诊断信息，
+      但它**不构成授权**）—— 否则自动匹配会把用户送进一个必然 403 的组合。
+    """
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    allowed = _make_scope(admin_client, domains=["example.test"], active_scan=True)
+    # 刻意用**另一个根域**：``example.test`` 会覆盖它的所有子域，
+    # 若两个范围同在 ``example.test`` 下，「命中排除」的那一个会同时被
+    # 允许范围覆盖，断言就分不清「排除生效」与「别的范围放行」。
+    excluded_only = _make_scope(
+        admin_client,
+        domains=["blocked.test"],
+        excluded_domains=["secret.blocked.test"],
+    )
+    project = _make_project(admin_client, scope_ids=[allowed, excluded_only])
+
+    body = admin_client.post(
+        "/api/public-jobs/check",
+        json={"targets": ["www.example.test"], "project_id": project["id"]},
+    ).get_json()
+    assert body["checks"][0]["eligible_scope_ids"] == [allowed]
+
+    denied = admin_client.post(
+        "/api/public-jobs/check",
+        json={"targets": ["secret.blocked.test"], "project_id": project["id"]},
+    ).get_json()["checks"][0]
+    # 诊断信息仍在（用户需要知道「是你自己的排除列表挡住了」），但它不构成授权。
+    assert [item["scope_id"] for item in denied["matches"]] == [excluded_only]
+    assert denied["matches"][0]["verdict"] == "excluded"
+    assert denied["eligible_scope_ids"] == []
+    assert denied["ready"] is False
+
+
+def test_scan_center_js_auto_selects_the_scope_from_server_verdict():
+    """方案第 6 节：自动匹配只**选中**服务端判定过的资产，不自己做授权判定。
+
+    四条口径一起守（详见 ``scan_center.js:applyMatchedScope``）：
+    ① 候选来自服务端结论 ``eligible_scope_ids``，前端不得自己比对
+       ``verdict`` / ``allowed_domains`` / ``active_scan`` —— 那会变成第二条授权判定；
+    ② 试算完成后才自动选，且**先选后渲染摘要**（否则摘要显示上一个选中项）；
+    ③ 有歧义（多目标命中不同资产）时如实说明交给用户，不猜；
+    ④ 自动匹配**不扩大任何范围**：它只改 ``<select>`` 的选中项，
+       既不新增目标、也不改 Scope —— 「禁止为了体验删除 Scope 校验」一字未动。
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    assert "function applyMatchedScope(" in source
+    assert "eligible_scope_ids" in source, "自动匹配必须读服务端结论"
+    # ① + ② 一次到位：候选读服务端结论，且「先匹配、后渲染摘要」顺序固定。
+    assert (
+        "var autoOutcome = applyMatchedScope(payload);\n"
+        "    renderConsentSummary();" in source
+    ), "自动匹配必须发生在渲染摘要之前"
+    # ③ 歧义与「已选中」两种如实说明都在。
+    assert "多个目标命中的授权资产不一致" in source
+    assert "已自动选中覆盖该目标的授权资产" in source
+
+    # ① 前端不得自己重算授权：这些写法只允许出现在服务端的响应里。
+    code_only = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith(("*", "//", "/*"))
+    )
+    for forbidden in (
+        "item.verdict ===",
+        'item.status === "ready"',
+        "scope.allowed_domains.indexOf",
+        "scope.active_scan &&",
+    ):
+        assert forbidden not in code_only, f"前端开始自己判定授权了: {forbidden}"
+
+    # ④ 自动匹配只动下拉框的选中项，不碰目标与 Scope 本身。
+    assert "scopeSelect.value = scopeId;" in source
+    assert "projectSelect.value = owner.id;" in source
+
+
+def test_target_to_job_flow_uses_the_auto_matched_scope(admin_client, fake_real_runner):
+    """方案第 16 节①：**输入目标 → 自动匹配 scope → 选择工具 → 创建 job** 整条链路。
+
+    这条把 §16 ① 的链路在服务端侧跑完整：前端那条「自动选中」用的是试算响应里的
+    ``eligible_scope_ids[0]``，因此这里就用**同一个来源**驱动创建请求 —— 前端
+    改了取数口径（例如改成自己比对 ``matches``），这条链路的输入就跟着变，
+    而不是靠源码字符串守卫。
+
+    同时覆盖 §16 ② 的「授权目标」一行：任务创建成功、``tools`` 正确保存、
+    ``scope`` 正确关联。
+    """
+    # 两份授权资产，各挂一个项目：自动匹配必须挑中覆盖目标的那一个，而不是「第一个」。
+    unrelated = _make_scope(admin_client, domains=["other.example.test"], active_scan=True)
+    _make_project(admin_client, name="无关授权项目", scope_ids=[unrelated])
+    matched = _make_scope(admin_client, domains=["example.test"], active_scan=True)
+    project = _make_project(admin_client, scope_ids=[matched], name="目标所在授权项目")
+
+    check = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
+    ).get_json()["checks"][0]
+    assert check["ready"] is True
+    assert check["eligible_scope_ids"] == [matched]
+
+    # 「选择工具」：资产发现模板（= subfinder + httpx），与页面上选中的模板同义。
+    resp = admin_client.post(
+        "/api/public-jobs",
+        json={
+            "project_id": project["id"],
+            "scope_id": check["eligible_scope_ids"][0],
+            "targets": ["www.example.test"],
+            "strategy": "asset_discovery",
+        },
+    )
+    assert resp.status_code == 202, resp.get_json()
+    body = resp.get_json()
+    assert body["status"] == "queued"
+    assert body["mode"] == "real"
+    assert body["strategy"] == "asset_discovery"
+    assert body["scope_id"] == matched
+
+    job = jobs_store.get_job(body["job_id"])
+    assert job["scope_id"] == matched
+    assert sorted(job["tools"]) == ["httpx", "subfinder"]
+    assert job["targets"] == ["www.example.test"]
+    # 自动匹配不改授权范围：任务只落在被选中的那一份资产上。
+    assert len(jobs_store.list_jobs()) == 1
