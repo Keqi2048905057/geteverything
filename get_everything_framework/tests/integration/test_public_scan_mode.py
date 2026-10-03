@@ -913,10 +913,37 @@ def test_scan_center_tool_list_comes_from_server_payload():
     source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
         encoding="utf-8"
     )
-    # 渲染入口接的是 center.tools / center.restricted_tools。
-    assert "renderToolList(center.tools, center.restricted_tools," in source
+    # 渲染入口接的是 center.tools / center.restricted_tools（+ 服务端下发的分组）。
+    assert "center.tools," in source and "center.restricted_tools," in source
+    assert "center.tool_groups" in source
     # 切换模板时复用同一份服务端数据（不发第二次请求、不另建常量表）。
-    assert "renderToolList(metadata.tools, metadata.restricted_tools, strategy)" in source
+    assert "metadata.tools," in source and "metadata.restricted_tools," in source
+    assert "metadata.tool_groups" in source
+
+
+def test_scan_center_js_renders_groups_from_server_metadata():
+    """分组栏位必须整体来自服务端，前端不出现写死的分组中文名。"""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    code_only = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith(("*", "//", "/*"))
+    )
+    # 分组名（含方案第 8 节点名的那几栏）不得以字符串字面量出现在代码里；
+    # 它们只允许存在于注释中 —— 一旦写死，后端调整分组前端就不会跟着变。
+    for group_name in ("资产发现", "服务识别", "技术识别", "内容发现", "漏洞检测", "辅助能力"):
+        assert f'"{group_name}"' not in code_only, f"前端写死了分组名: {group_name}"
+    # 空分组要如实说明，而不是渲染一个空框。
+    assert "本阶段暂无可用工具" in source
+    # 工具用途说明同样来自服务端字段。
+    assert "tool.description" in source
+    # 未开放的工具也必须按**它自己声明的**分组归位（nuclei → vuln），
+    # 前端不得出现「nuclei 属于漏洞检测」这类写死的映射。
+    assert "tool.tool_group === group.key" in source
+    for mapping in ('"nuclei": "vuln"', "nuclei →", 'if (tool.tool_name === "nuclei")'):
+        assert mapping not in source, f"前端写死了受限工具的分组映射: {mapping}"
 
 
 def test_scan_center_metadata_tools_carry_what_the_frontend_needs(admin_client):
@@ -924,8 +951,103 @@ def test_scan_center_metadata_tools_carry_what_the_frontend_needs(admin_client):
     body = admin_client.get("/api/scan-center").get_json()
     entry = next(item for item in body["tools"] if item["tool_name"] == "subfinder")
     for field in ("tool_name", "risk_level", "risk_label", "internet_allowed",
-                  "default_enabled", "reason"):
+                  "default_enabled", "reason",
+                  # Tool Registry（方案第 9 节）：没有这三项，前端就只能写死说明与分组。
+                  "description", "tool_group", "tool_group_label"):
         assert field in entry, f"工具条目缺少前端需要的字段: {field}"
+    assert entry["description"], "工具条目必须带上用途说明"
+    assert entry["tool_group"], "工具条目必须带上能力分组"
+
+
+def test_scan_center_metadata_carries_tool_groups(admin_client):
+    """扫描中心必须下发**分组**本身（名称与说明），否则前端还是要写死中文栏位。"""
+    body = admin_client.get("/api/scan-center").get_json()
+    groups = body["tool_groups"]
+    assert [group["key"] for group in groups] == [
+        "recon", "service", "tech", "content", "vuln", "assist",
+    ]
+    for group in groups:
+        for field in ("key", "name", "description", "tools"):
+            assert field in group, f"分组缺少字段: {field}"
+        assert group["description"], f"分组 {group['key']} 没有说明"
+
+    # 分组里的条目与扁平列表是**同一份** to_dict() 结果：同一个工具不可能
+    # 在扁平列表里叫一个名字、在分组里叫另一个。
+    flat = {item["tool_name"]: item for item in body["tools"]}
+    for group in groups:
+        for tool in group["tools"]:
+            assert tool["tool_group"] == group["key"]
+            assert flat[tool["tool_name"]] == tool, (
+                f"{tool['tool_name']} 在扁平列表与分组里的元数据不一致"
+            )
+
+    # 分组视图与扁平清单同集：未接入的 nuclei **不**混进「能跑的工具」里，
+    # 它由 restricted_tools 单独承载（否则前端会把它当成可勾选的工具）。
+    grouped = [tool["tool_name"] for group in groups for tool in group["tools"]]
+    assert sorted(grouped) == sorted(flat)
+    assert "nuclei" not in grouped
+
+    # 「技术识别 / 漏洞检测」本阶段确实没有可跑的工具，必须如实返回空栏位，
+    # 而不是把别的工具挪进去凑数 —— 空栏位前端会显示「本阶段暂无可用工具」。
+    empty_groups = [group["key"] for group in groups if not group["tools"]]
+    assert "tech" in empty_groups
+
+
+def test_scan_center_restricted_tools_carry_registry_fields(admin_client):
+    """受限未开放的条目同样要带说明，否则前端只能写死一句「未接入」。"""
+    body = admin_client.get("/api/scan-center").get_json()
+    nuclei = next(item for item in body["restricted_tools"] if item["tool_name"] == "nuclei")
+    for field in ("description", "tool_group", "tool_group_label", "reason"):
+        assert nuclei[field], f"受限条目缺少字段: {field}"
+    assert nuclei["tool_group"] == "vuln"
+    assert nuclei["internet_allowed"] is False
+
+
+def test_tools_api_and_scan_center_agree_on_registry_fields(admin_client, client):
+    """/api/tools 与 /api/scan-center 必须给出**同一份**注册表字段。
+
+    方案第 9 节让前端读 ``GET /api/tools``，而工具清单的渲染入口目前在
+    ``/api/scan-center``；两个接口各写一份取数逻辑正是「改一处漏一处」的来源，
+    因此这里逐字段比对（``category`` 除外：它是运行器自报的**观测类别**，
+    只有 /api/tools 会去实例化 runner，扫描中心刻意不实例化）。
+    """
+    tools_body = client.get("/api/tools").get_json()
+    assert [group["key"] for group in tools_body["groups"]] == [
+        "recon", "service", "tech", "content", "vuln", "assist",
+    ]
+
+    from_center = {
+        item["tool_name"]: item
+        for item in admin_client.get("/api/scan-center").get_json()["tools"]
+    }
+    for entry in tools_body["tools"]:
+        center_entry = from_center[entry["tool_name"]]
+        for field in ("risk_level", "risk_label", "internet_allowed",
+                      "default_enabled", "reason", "description",
+                      "tool_group", "tool_group_label"):
+            assert entry[field] == center_entry[field], (
+                f"{entry['tool_name']} 的 {field} 在两个接口间不一致"
+            )
+
+
+def test_tools_api_keeps_the_historical_name_key(admin_client, client):
+    """历史键名 ``name`` 与 ``category`` 不能被这次改造冲掉（脚本在用）。"""
+    body = client.get("/api/tools").get_json()
+    for entry in body["tools"]:
+        assert entry["name"] == entry["tool_name"]
+        assert entry["category"] in {"subdomain", "url", "alive", "web", "port"}
+        # 观测类别与工具分组是两件事，不能互相顶替。
+        assert entry["category"] != entry["tool_group"]
+
+
+def test_tools_api_groups_cover_only_registered_runners(client):
+    """``/api/tools`` 匿名可读，不暴露「还差哪些工具」：分组里只有已接入 runner。"""
+    from modules.registry import get_supported_runners
+
+    body = client.get("/api/tools").get_json()
+    names = [tool["tool_name"] for group in body["groups"] for tool in group["tools"]]
+    assert sorted(names) == sorted(get_supported_runners())
+    assert "nuclei" not in names
 
 
 def test_scan_center_page_renders_recent_jobs(admin_client, fake_real_runner):

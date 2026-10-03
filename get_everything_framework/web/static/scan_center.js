@@ -261,7 +261,13 @@
         renderStrategies(center.strategies, center.restricted_tools);
         // 工具清单跟着**当前选中**的模板渲染：首屏要能看见「这一次会用哪些工具」，
         // 而不是等用户点一下卡片才出现。模板模式下列表置灰但可见。
-        renderToolList(center.tools, center.restricted_tools, activeStrategyOf(center.strategies));
+        // 分组元数据同样来自服务端（``tool_groups``），前端不写死任何栏位名。
+        renderToolList(
+          center.tools,
+          center.restricted_tools,
+          activeStrategyOf(center.strategies),
+          center.tool_groups
+        );
         fillProjectSelects(center.projects);
         renderProjects(center.projects);
         renderConsentSummary();
@@ -334,7 +340,12 @@
         // 工具清单要跟着模板走：模板模式下置灰并显示模板的工具，
         // 自定义模式下开放勾选。清单数据仍来自服务端（不发第二次请求）。
         if (metadata) {
-          renderToolList(metadata.tools, metadata.restricted_tools, strategy);
+          renderToolList(
+            metadata.tools,
+            metadata.restricted_tools,
+            strategy,
+            metadata.tool_groups
+          );
         }
         setText(
           "tool-list-note",
@@ -390,13 +401,75 @@
   }
 
   /**
-   * 渲染工具清单（方案第 8 节「工具选择中心」）。
+   * 渲染**一个**工具条目（勾选框 + 名称 + 风险徽标 + 用途说明 + 权限说明）。
    *
-   * 关键约定：**工具清单来自服务端**（``GET /api/scan-center`` 的 ``tools`` /
-   * ``restricted_tools``），前端一个工具名都不写死 —— 新增工具时改后端即可，
-   * 页面自动出现。这正是方案第 9 节「不要把工具写死在前端」的落地。
+   * 抽成独立函数是因为清单要按能力分组渲染多次；条目形态只有一份，
+   * 因此不会出现「分组里长一个样、扁平列表里长另一个样」。
    *
-   * 两种状态：
+   * @param {Object} tool 服务端下发的工具条目（``tool_name`` / ``internet_allowed`` …）。
+   * @param {boolean} isCustom 当前是否自定义模式（决定能否勾选）。
+   * @param {Object} preset 模板模式下「本次会用到的工具」集合。
+   */
+  function renderToolRow(tool, isCustom, preset) {
+    var locked = tool.internet_allowed && !isCustom;
+    var row = document.createElement("label");
+    row.className = "sc-tool" + (tool.internet_allowed ? "" : " is-blocked");
+
+    var check = document.createElement("input");
+    check.type = "checkbox";
+    check.name = "custom_tool";
+    check.value = tool.tool_name;
+    // 白名单外的工具永远不可勾；模板模式下白名单内的也置灰（由模板决定）。
+    check.disabled = !tool.internet_allowed || locked;
+    check.checked = isCustom
+      ? Boolean(tool.default_enabled && tool.internet_allowed)
+      : Boolean(preset[tool.tool_name]);
+    row.appendChild(check);
+
+    var body = document.createElement("span");
+    var head = document.createElement("span");
+    head.textContent = tool.tool_name + " ";
+    body.appendChild(head);
+    body.appendChild(riskBadge(tool));
+
+    // 用途说明来自 Tool Registry（服务端下发）：前端只负责显示，
+    // 因此新增工具时改后端一处即可，不必回来补文案。
+    if (tool.description) {
+      var desc = document.createElement("span");
+      desc.className = "sc-tool-desc";
+      desc.textContent = tool.description;
+      body.appendChild(desc);
+    }
+
+    var meta = document.createElement("span");
+    meta.className = "sc-tool-meta";
+    if (!tool.internet_allowed) {
+      meta.textContent = "禁止公网 · " + (tool.reason || "未开放");
+    } else if (locked) {
+      meta.textContent = "本次由所选模板决定，要改请切到自定义模式";
+    } else {
+      meta.textContent = "允许公网 · 可勾选";
+    }
+    body.appendChild(meta);
+    row.appendChild(body);
+
+    return row;
+  }
+
+  /**
+   * 渲染工具清单（方案第 8 节「工具选择中心」+ 第 9 节 Tool Registry）。
+   *
+   * 关键约定：**工具清单与能力分组都来自服务端**（``GET /api/scan-center`` 的
+   * ``tool_groups``；每一栏的说明、每个工具的用途都出自同一份
+   * ``ToolPolicy.to_dict()``）。前端一个工具名、一个栏位名都不写死 ——
+   * 新增工具或调整分组时改后端即可，页面自动出现。这正是方案第 9 节
+   * 「不要把工具写死在前端」的落地。
+   *
+   * 分组为空时**照样渲染栏位**并写明「本阶段暂无可用工具」：方案点名的
+   * 「技术识别」「漏洞检测」本阶段确实没有可跑的工具，如实呈现比悄悄藏掉
+   * 更诚实 —— 藏掉会让使用者以为是自己没找到。
+   *
+   * 两种勾选状态：
    *
    * * 选了**模板**（资产发现 / Web 基础检查）：清单仍然列出来，勾选状态是
    *   模板决定的，因此**置灰不可改** —— 用户能看清「这一次会用哪些工具」，
@@ -408,8 +481,10 @@
    * @param {Array} tools 服务端下发的工具权限表（含 ``tool_name`` / ``internet_allowed`` …）。
    * @param {Array} restrictedTools 未接入 / 未开放的工具（如 nuclei），只展示。
    * @param {Object|null} strategy 当前选中的模板；``custom`` 或空表示用户自选。
+   * @param {Array} groups 服务端下发的能力分组（``key`` / ``name`` / ``description`` / ``tools``）。
+   *   缺失时退回扁平清单，行为与引入分组之前一致。
    */
-  function renderToolList(tools, restrictedTools, strategy) {
+  function renderToolList(tools, restrictedTools, strategy, groups) {
     var box = $("tool-list");
     if (!box) return;
     box.textContent = "";
@@ -423,43 +498,88 @@
       });
     }
 
-    var all = tools.concat(restrictedTools || []);
-    all.forEach(function (tool) {
-      var locked = tool.internet_allowed && !isCustom;
-      var row = document.createElement("label");
-      row.className = "sc-tool" + (tool.internet_allowed ? "" : " is-blocked");
+    if (groups && groups.length) {
+      var placed = {};
+      var restricted = restrictedTools || [];
 
-      var check = document.createElement("input");
-      check.type = "checkbox";
-      check.name = "custom_tool";
-      check.value = tool.tool_name;
-      // 白名单外的工具永远不可勾；模板模式下白名单内的也置灰（由模板决定）。
-      check.disabled = !tool.internet_allowed || locked;
-      check.checked = isCustom
-        ? Boolean(tool.default_enabled && tool.internet_allowed)
-        : Boolean(preset[tool.tool_name]);
-      row.appendChild(check);
+      groups.forEach(function (group) {
+        // 未接入 / 未开放的工具（如 nuclei）也归到它**自己声明的**分组里：
+        // 服务端给每条 restricted tool 也带上 ``tool_group``，因此这里不需要
+        // 写死任何「nuclei 属于漏洞检测」这类映射 —— 方案第 8 节那张表里
+        // nuclei 归在「漏洞检测」栏，靠的就是这个字段。
+        // 空栏位照样渲染：如实说明「本阶段暂无可用工具」比悄悄藏掉更诚实。
+        var unopened = restricted.filter(function (tool) {
+          return tool.tool_group === group.key;
+        });
+        var available = group.tools || [];
 
-      var body = document.createElement("span");
-      var head = document.createElement("span");
-      head.textContent = tool.tool_name + " ";
-      body.appendChild(head);
-      body.appendChild(riskBadge(tool));
+        var section = document.createElement("div");
+        section.className = "sc-tool-group";
+        section.setAttribute("data-tool-group", group.key);
 
-      var meta = document.createElement("span");
-      meta.className = "sc-tool-meta";
-      if (!tool.internet_allowed) {
-        meta.textContent = "禁止公网 · " + (tool.reason || "未开放");
-      } else if (locked) {
-        meta.textContent = "本次由所选模板决定，要改请切到自定义模式";
-      } else {
-        meta.textContent = "允许公网 · 可勾选";
+        var head = document.createElement("div");
+        head.className = "sc-tool-group-head";
+        var title = document.createElement("span");
+        title.className = "sc-tool-group-name";
+        title.textContent = group.name;
+        head.appendChild(title);
+        var count = document.createElement("span");
+        count.className = "sc-tool-group-count";
+        if (available.length) {
+          count.textContent = available.length + " 个";
+        } else if (unopened.length) {
+          count.textContent = "本阶段暂无可用工具（仅列出未开放项）";
+        } else {
+          count.textContent = "本阶段暂无可用工具";
+        }
+        head.appendChild(count);
+        section.appendChild(head);
+
+        if (group.description) {
+          var desc = document.createElement("p");
+          desc.className = "sc-tool-group-desc";
+          desc.textContent = group.description;
+          section.appendChild(desc);
+        }
+
+        var grid = document.createElement("div");
+        grid.className = "sc-tools";
+        available.forEach(function (tool) {
+          placed[tool.tool_name] = true;
+          grid.appendChild(renderToolRow(tool, isCustom, preset));
+        });
+        unopened.forEach(function (tool) {
+          placed[tool.tool_name] = true;
+          grid.appendChild(renderToolRow(tool, isCustom, preset));
+        });
+        section.appendChild(grid);
+        box.appendChild(section);
+      });
+
+      // 兜底：扁平表里有、分组表里没有的工具，宁可多显示一行也不静默丢掉
+      // （服务端 ``group_tool_policies`` 遇到未登记分组是直接抛错的，这里只防
+      // 「两张表不同源」这类改动）。
+      var leftovers = tools.concat(restricted).filter(function (tool) {
+        return !placed[tool.tool_name];
+      });
+      if (leftovers.length) {
+        var restGrid = document.createElement("div");
+        restGrid.className = "sc-tools";
+        leftovers.forEach(function (tool) {
+          restGrid.appendChild(renderToolRow(tool, isCustom, preset));
+        });
+        box.appendChild(restGrid);
       }
-      body.appendChild(meta);
-      row.appendChild(body);
+      return;
+    }
 
-      box.appendChild(row);
+    // 没有分组元数据（更早的服务端响应）：退回扁平清单。
+    var flat = document.createElement("div");
+    flat.className = "sc-tools";
+    tools.concat(restrictedTools || []).forEach(function (tool) {
+      flat.appendChild(renderToolRow(tool, isCustom, preset));
     });
+    box.appendChild(flat);
   }
 
   function renderProjects(projects) {

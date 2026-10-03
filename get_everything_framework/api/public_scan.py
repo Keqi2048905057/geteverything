@@ -35,6 +35,7 @@ from core.errors import BadRequestError
 from core.pace import list_paces
 from core.tool_registry import (
     KNOWN_UNAVAILABLE_TOOLS,
+    group_tool_policies,
     internet_allowed_tools,
     list_strategies,
     list_tool_policies,
@@ -165,8 +166,17 @@ def scan_center_metadata():
       以及每档的 ``pace`` / ``pace_label``）；
     * ``paces``          —— 扫描节奏档位（``light`` / ``normal``）与各自的含义、
       步骤间隔秒数，供页面解释「低频到底是什么」；
-    * ``tools``          —— 工具权限元数据（风险等级 / 是否允许公网 / 默认勾选）；
+    * ``tools``          —— 工具权限元数据（风险等级 / 是否允许公网 / 默认勾选 /
+      用途说明 / 能力分组）；
+    * ``tool_groups``    —— **能力分组本身**（``key`` / 中文名 / 这一栏的说明 /
+      本栏工具）。有了它前端才不必写死「资产发现」「服务识别」这些栏位名；
+      空分组照样返回，界面据此如实显示「本阶段暂无可用工具」；
     * ``internet_allowed_tools`` —— 第一阶段公网白名单，便于前端把禁用项置灰。
+
+    字段单一来源（方案第 9 节 Tool Registry）：``tools`` 与 ``tool_groups`` 里的
+    每个条目都是 :meth:`core.tool_registry.ToolPolicy.to_dict` 的输出，因此同一
+    个工具不可能「在清单里一个说明、在分组里另一个说明」；``/api/tools``
+    用的是同一个函数，两个接口同样不会漂移（有测试逐字段比对）。
 
     含项目名称与授权说明，属敏感信息，因此**必须登录**。
     """
@@ -179,7 +189,11 @@ def scan_center_metadata():
             "projects": [item.to_dict() for item in items],
             "strategies": [item.to_dict() for item in list_strategies()],
             "paces": list_paces(),
+            # 扁平清单只含「真能跑」的工具（执行与校验用）；分组视图与它**同源同集**，
+            # 未接入的 nuclei 不进这里 —— 它由 ``restricted_tools`` 单独说明
+            # 「存在但本阶段不可用」，两处各司其职，不在清单里重复出现。
             "tools": [item.to_dict() for item in list_tool_policies()],
+            "tool_groups": group_tool_policies(list_tool_policies()),
             "restricted_tools": [item.to_dict() for item in KNOWN_UNAVAILABLE_TOOLS.values()],
             "internet_allowed_tools": internet_allowed_tools(),
         }

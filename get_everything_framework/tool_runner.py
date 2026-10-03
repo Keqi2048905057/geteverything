@@ -57,21 +57,78 @@ def load_targets(domain=None, file_path=None):
     return unique_targets
 
 
+def normalize_tool_names(value):
+    """把「工具」参数规范化成**去重保序**的工具名列表。
+
+    这是全仓唯一一份工具参数规范化实现，``/api/run``、``/api/tool/<n>/run``、
+    ``POST /api/jobs``（经 ``core.application``）与 CLI 全都走它，避免出现
+    「同一个请求体从两个入口进来得到两种解释」。
+
+    接受的形态：
+
+    * ``None`` / 空 → ``[]``（由调用方决定「空」是报错还是回落配置）；
+    * 逗号分隔字符串 ``"subfinder,httpx"`` → ``["subfinder", "httpx"]``：
+      **修复**了此前把它当成一个名叫 ``"subfinder,httpx"`` 的工具、
+      于是必然报「存在不支持的工具」的老毛病；
+    * 字符串数组 / 元组 → 逐项去空白、丢空项。
+
+    去重是必需的：``total_steps = len(targets) * len(tools)``，
+    同一个工具写两遍会让任务凭空多出一倍步骤（且重复执行同一工具）。
+
+    Args:
+        value: ``None`` / 字符串 / 字符串数组。
+
+    Returns:
+        list[str]: 去重保序的工具名列表。
+
+    Raises:
+        ValueError: ``value`` 既不是字符串也不是数组（例如数字、字典）。
+    """
+    if value is None:
+        items: list = []
+    elif isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        raise ValueError("tools 必须是字符串或字符串数组")
+
+    unique_tools = []
+    seen = set()
+    for item in items:
+        name = str(item).strip()
+        if not name or name in seen:
+            continue
+        unique_tools.append(name)
+        seen.add(name)
+    return unique_tools
+
+
 def load_tools(cli_tools=None):
     """加载并验证要运行的工具列表。
 
-    优先使用命令行参数，否则使用配置文件中的 enabled_runners。
+    未显式提供工具（``cli_tools is None``）时回落到配置里的
+    ``SCAN_CONFIG["enabled_runners"]`` —— 这是 CLI/Agent 的历史行为。
+
+    **显式传空**（``[]`` 或 ``""``）不再回落：那正是「用户没选任何工具，
+    系统却拿配置默认值去扫」的越权路径（``docs/CODEBASE_MAP.md`` 第 6 节
+    BUG 索引第 7 条）。此时返回空列表，由调用方明确拒绝或提示，
+    而不是悄悄换一个工具去执行。
 
     Args:
-        cli_tools: 命令行传入的工具名列表。
+        cli_tools: 工具名列表、逗号分隔字符串；``None`` 表示未指定。
 
     Returns:
-        验证后的工具名列表。
+        验证并去重后的工具名列表。
 
     Raises:
-        ValueError: 存在不支持的工具时抛出。
+        ValueError: 参数形态非法，或存在不支持的工具名时抛出。
     """
-    tools = cli_tools or SCAN_CONFIG.get("enabled_runners", [])
+    if cli_tools is None:
+        tools = normalize_tool_names(SCAN_CONFIG.get("enabled_runners", []))
+    else:
+        tools = normalize_tool_names(cli_tools)
+
     supported_tools = set(get_supported_runners())
     invalid_tools = [tool for tool in tools if tool not in supported_tools]
     if invalid_tools:

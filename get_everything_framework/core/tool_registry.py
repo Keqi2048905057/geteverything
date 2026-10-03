@@ -67,9 +67,85 @@ RISK_LABELS = {
 }
 
 
+# ── 工具分组：Tool Registry（下一阶段方案第 8、9 节） ──────
+#
+# ⚠️ 字段名刻意**不叫** ``category``。本仓库里 ``category`` 已被三种不同含义占用：
+#
+# 1. ``storage.TOOL_DATABASES[*]["category"]`` —— **观测类别**
+#    （``subdomain`` / ``url`` / ``alive`` / ``web`` / ``port``），决定结果落哪张表；
+# 2. ``modules.base.BaseRunner.category`` —— 上面那件事在运行器侧的同一份值；
+# 3. ``api/tools.py`` 从运行器读出的 ``category`` —— 还是第 2 条。
+#
+# 方案第 9 节示例里的 ``category`` 指的是**工具能力分组**（recon / service …），
+# 是第四种含义。再叫 ``category``，代码里就再也说不清「按分类查结果」与
+# 「按分类选工具」的区别，因此这里叫 ``tool_group``。
+#
+# 分组**不是**权限：它只决定界面上把工具摆在哪一栏。能不能打公网仍然只看
+# ``internet_allowed``，能不能跑仍然只看 Scope / Policy / 环境开关。
+
+GROUP_RECON = "recon"
+GROUP_SERVICE = "service"
+GROUP_TECH = "tech"
+GROUP_CONTENT = "content"
+GROUP_VULN = "vuln"
+GROUP_ASSIST = "assist"
+
+
+@dataclass(frozen=True)
+class ToolGroup:
+    """工具能力分组（方案第 8 节「工具选择中心」的栏位）。
+
+    Attributes:
+        key: 分组标识，前端按它给工具归类（**服务端下发**，前端不写死）。
+        name: 中文名。
+        description: 这一栏在做什么，供界面在空分组时如实说明。
+    """
+
+    key: str
+    name: str
+    description: str
+
+    def to_dict(self) -> dict:
+        return {"key": self.key, "name": self.name, "description": self.description}
+
+
+#: 分组顺序即界面顺序（方案第 8 节五栏 + 「内容发现」）。
+#:
+#: 方案第 8 节的表是**示例**，其中只有 5 栏，而本项目注册表里有 17 个 runner：
+#: ``dirsearch`` / ``feroxbuster`` / ``gospider`` / ``katana`` / ``waybackurls``
+#: 这五个既不是资产发现也不是服务识别，硬塞进任何一栏都会误导使用者，
+#: 因此补一栏「内容发现」。方案里点名的两栏（技术识别、漏洞检测）**保留**：
+#: 技术识别本阶段确实没有可接入的 runner，漏洞检测只有未接入的 ``nuclei``，
+#: 两栏都如实呈现为「暂无可用工具」，而不是把工具挪进去凑数。
+TOOL_GROUPS: tuple[ToolGroup, ...] = (
+    ToolGroup(GROUP_RECON, "资产发现", "子域 / 资产枚举，回答「目标有哪些入口」。"),
+    ToolGroup(GROUP_SERVICE, "服务识别", "存活、端口与服务指纹，回答「入口上开着什么」。"),
+    ToolGroup(GROUP_TECH, "技术识别", "技术栈与组件识别。本阶段暂无已接入工具。"),
+    ToolGroup(GROUP_CONTENT, "内容发现", "爬虫与目录枚举，回答「站点上还有什么路径」。"),
+    ToolGroup(GROUP_VULN, "漏洞检测", "模板化漏洞扫描。本阶段只登记未接入的工具。"),
+    ToolGroup(GROUP_ASSIST, "辅助能力", "为上面几栏提供输入（字典、解析、变体）。"),
+)
+
+#: 分组 key → 中文名（前端与错误消息共用一份）。
+TOOL_GROUP_LABELS = {group.key: group.name for group in TOOL_GROUPS}
+
+
+def list_tool_groups() -> list[ToolGroup]:
+    """按固定顺序列出工具分组（API 与前端栏位共用）。"""
+    return list(TOOL_GROUPS)
+
+
+def get_tool_group(key: str) -> ToolGroup | None:
+    """读取分组元数据；未登记返回 ``None``。"""
+    for group in TOOL_GROUPS:
+        if group.key == key:
+            return group
+    return None
+
+
 @dataclass(frozen=True)
 class ToolPolicy:
-    """单个工具的权限元数据（方案第 5 节字段表）。
+    """单个工具的注册与权限元数据（方案第 5 节字段表 + 第 9 节 Tool Registry）。
 
     Attributes:
         tool_name: 工具名，与 ``modules/registry.RUNNER_REGISTRY`` 的键一致。
@@ -77,6 +153,11 @@ class ToolPolicy:
         internet_allowed: 是否允许用于**公网**目标。
         default_enabled: 是否在「自定义」策略里默认勾选。
         reason: 面向使用者的说明，用于解释为何不允许公网。
+        description: 这个工具**做什么**（方案第 9 节 ``description``）。
+            与 ``reason`` 是两个问题：``description`` 回答「它能干什么」，
+            ``reason`` 回答「为什么现在不让它打公网」。
+        tool_group: :data:`TOOL_GROUPS` 里的分组 key（方案第 9 节 ``category``；
+            改名理由见本文件「工具分组」一节）。
     """
 
     tool_name: str
@@ -84,6 +165,10 @@ class ToolPolicy:
     internet_allowed: bool
     default_enabled: bool
     reason: str = ""
+    # 新增字段一律**追加在 reason 之后**并带默认值：本表的构造点用的是位置参数，
+    # 插在中间会静默改变已有条目的字段含义。
+    description: str = ""
+    tool_group: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -93,24 +178,50 @@ class ToolPolicy:
             "internet_allowed": self.internet_allowed,
             "default_enabled": self.default_enabled,
             "reason": self.reason,
+            # Tool Registry：让前端能动态渲染「这一栏、这个工具、干什么用的」，
+            # 而不是把 17 个工具名与说明抄一遍到 JS 里。
+            "description": self.description,
+            "tool_group": self.tool_group,
+            "tool_group_label": TOOL_GROUP_LABELS.get(self.tool_group, self.tool_group),
         }
 
 
-#: 17 个已注册 runner 的权限元数据。
+#: 17 个已注册 runner 的权限元数据与注册信息（方案第 5 节 + 第 9 节 Tool Registry）。
 #:
 #: 公网白名单刻意只有两个（方案第 8 节）：它们都是**被动/轻量**探测 ——
 #: ``subfinder`` 查的是公开数据源（证书透明度、被动 DNS 库），
 #: ``httpx`` 是对「已经存在的 URL」发一次带超时的 GET。
 #: 其余工具要么会爆破目录、要么会扫端口，全部留在公网白名单外。
+#:
+#: ``description`` / ``tool_group`` 与 ``internet_allowed`` **互不影响**：
+#: 前两者只用于界面把工具摆对位置、说清用途；能不能打公网仍然只看
+#: ``internet_allowed``，能不能跑仍然只看 Scope / Policy / 环境开关。
+#: 把某个工具挪到别的分组**不会**让它变得可用，这一点有测试锁定。
 TOOL_POLICIES: dict[str, ToolPolicy] = {
-    "subfinder": ToolPolicy("subfinder", RISK_LOW, True, True),
-    "httpx": ToolPolicy("httpx", RISK_LOW, True, True),
+    "subfinder": ToolPolicy(
+        "subfinder",
+        RISK_LOW,
+        True,
+        True,
+        description="子域名发现：查询证书透明度与被动 DNS 库，不向目标发包。",
+        tool_group=GROUP_RECON,
+    ),
+    "httpx": ToolPolicy(
+        "httpx",
+        RISK_LOW,
+        True,
+        True,
+        description="HTTP 服务探测：存活、状态码、标题、服务端指纹。",
+        tool_group=GROUP_SERVICE,
+    ),
     "dnsx": ToolPolicy(
         "dnsx",
         RISK_LOW,
         False,
         False,
         reason="DNS 批量解析会产生大量查询，本阶段不开放公网",
+        description="批量 DNS 解析：A / CNAME / 泛解析判定。",
+        tool_group=GROUP_RECON,
     ),
     "assetfinder": ToolPolicy(
         "assetfinder",
@@ -118,6 +229,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="公开数据源查询，本阶段不开放公网",
+        description="子域发现：只查公开数据源（crt.sh 等）。",
+        tool_group=GROUP_RECON,
     ),
     "waybackurls": ToolPolicy(
         "waybackurls",
@@ -125,6 +238,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="历史 URL 提取，本阶段不开放公网",
+        description="历史 URL 提取：从 Wayback Machine 取回目标曾出现过的路径。",
+        tool_group=GROUP_CONTENT,
     ),
     "amass": ToolPolicy(
         "amass",
@@ -132,6 +247,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="深度枚举会同时主动与被动词询目标，本阶段不开放公网",
+        description="深度子域枚举：被动数据源 + 主动解析，覆盖面最广也最重。",
+        tool_group=GROUP_RECON,
     ),
     "amass_intel": ToolPolicy(
         "amass_intel",
@@ -139,6 +256,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="ASN 情报收集，本阶段不开放公网",
+        description="ASN / 组织情报：按组织名反查归属网段与资产。",
+        tool_group=GROUP_RECON,
     ),
     "enscan": ToolPolicy(
         "enscan",
@@ -146,6 +265,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="企业信息收集依赖外部数据源 Cookie，本阶段不开放公网",
+        description="企业信息收集：工商、备案（ICP）、子公司等。",
+        tool_group=GROUP_RECON,
     ),
     "oneforall": ToolPolicy(
         "oneforall",
@@ -153,6 +274,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="综合型工具，内部会主动请求目标，本阶段不开放公网",
+        description="综合子域收集：聚合多数据源并对结果做存活确认。",
+        tool_group=GROUP_RECON,
     ),
     "gospider": ToolPolicy(
         "gospider",
@@ -160,6 +283,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="爬虫会持续抓取目标站点，本阶段不开放公网",
+        description="站点爬虫：抓链接、JS 文件、表单与第三方资源。",
+        tool_group=GROUP_CONTENT,
     ),
     "katana": ToolPolicy(
         "katana",
@@ -167,6 +292,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="爬虫会持续抓取目标站点，本阶段不开放公网",
+        description="爬虫（可解析 JS 渲染路径）：枚举可访问的端点。",
+        tool_group=GROUP_CONTENT,
     ),
     "naabu": ToolPolicy(
         "naabu",
@@ -174,6 +301,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="端口扫描，禁止用于公网目标",
+        description="端口扫描：对目标网段探测开放端口。",
+        tool_group=GROUP_SERVICE,
     ),
     "nmap": ToolPolicy(
         "nmap",
@@ -181,6 +310,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="端口与服务扫描，禁止用于公网目标",
+        description="端口与服务扫描：含服务版本识别。",
+        tool_group=GROUP_SERVICE,
     ),
     "dirsearch": ToolPolicy(
         "dirsearch",
@@ -188,6 +319,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="目录爆破，禁止用于公网目标",
+        description="目录与文件枚举：按字典请求常见路径。",
+        tool_group=GROUP_CONTENT,
     ),
     "feroxbuster": ToolPolicy(
         "feroxbuster",
@@ -195,6 +328,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="递归目录爆破，禁止用于公网目标",
+        description="递归目录爆破：发现一层就继续往下钻。",
+        tool_group=GROUP_CONTENT,
     ),
     "shuffledns": ToolPolicy(
         "shuffledns",
@@ -202,6 +337,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="DNS 字典爆破，禁止用于公网目标",
+        description="DNS 字典爆破：用字典批量解析子域，流量取决于字典大小。",
+        tool_group=GROUP_RECON,
     ),
     "alterx": ToolPolicy(
         "alterx",
@@ -209,6 +346,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         False,
         False,
         reason="变体字典生成，属爆破链路前置步骤，本阶段不开放公网",
+        description="变体字典生成：按已知域名拼出候选子域，供爆破类工具使用。",
+        tool_group=GROUP_ASSIST,
     ),
 }
 
@@ -221,6 +360,8 @@ KNOWN_UNAVAILABLE_TOOLS: dict[str, ToolPolicy] = {
         False,
         False,
         reason="模板化漏洞扫描：本阶段未接入 runner，且 internet_allowed=false",
+        description="模板化漏洞扫描：按社区模板匹配已知漏洞指纹（尚未接入）。",
+        tool_group=GROUP_VULN,
     ),
 }
 
@@ -237,6 +378,61 @@ def get_tool_policy(tool_name: str) -> ToolPolicy | None:
 def list_tool_policies() -> list[ToolPolicy]:
     """按工具名排序列出全部权限元数据（API 与前端下拉共用）。"""
     return [TOOL_POLICIES[name] for name in sorted(TOOL_POLICIES)]
+
+
+def list_all_tool_policies() -> list[ToolPolicy]:
+    """列出**全部**登记在案的条目，含未接入 runner 的（如 ``nuclei``）。
+
+    与 :func:`list_tool_policies` 的区别：后者只给「真能跑」的工具，是执行与
+    校验用的名单；本函数给界面用 —— 界面必须能显示 ``nuclei`` 被限制，
+    而不是装作它不存在（方案第 4 节的 ``nuclei(限制)``）。
+    """
+    return list_tool_policies() + [
+        KNOWN_UNAVAILABLE_TOOLS[name] for name in sorted(KNOWN_UNAVAILABLE_TOOLS)
+    ]
+
+
+def group_tool_policies(
+    policies: list[ToolPolicy] | None = None,
+) -> list[dict]:
+    """按 :data:`TOOL_GROUPS` 的顺序把工具装进各自的栏位。
+
+    这是方案第 8 节「工具选择中心」在服务端的唯一实现：前端拿到结构后**直接渲染**，
+    既不用自己写一份分组表，也不会因为漏改一处而静默少显示一个工具。
+
+    空分组**照样返回**（``tools`` 为空列表）：方案点名的「技术识别」「漏洞检测」
+    本阶段确实没有可跑的工具，如实呈现比悄悄藏掉更诚实 —— 藏掉会让使用者以为
+    是自己没找到，而不是「本阶段不支持」。
+
+    Args:
+        policies: 要分组的条目；``None`` 表示 :func:`list_all_tool_policies`。
+
+    Returns:
+        list[dict]: 每项 ``{key, name, description, tools}``，顺序即界面顺序。
+    """
+    items = list_all_tool_policies() if policies is None else list(policies)
+
+    buckets: dict[str, list[dict]] = {group.key: [] for group in TOOL_GROUPS}
+    for policy in items:
+        # 分组 key 未登记（或为空）的条目不能被**静默丢弃** —— 那会让工具从界面上
+        # 凭空消失。归入 ``assist`` 之外的兜底栏位不优雅，这里改为抛错，
+        # 由测试在改动时就拦住（见 tests/unit/test_tool_registry.py）。
+        if policy.tool_group not in buckets:
+            raise ValueError(
+                f"工具 {policy.tool_name} 的分组 {policy.tool_group!r} 未登记，"
+                f"合法取值: {', '.join(buckets)}"
+            )
+        buckets[policy.tool_group].append(policy.to_dict())
+
+    return [
+        {
+            "key": group.key,
+            "name": group.name,
+            "description": group.description,
+            "tools": buckets[group.key],
+        }
+        for group in TOOL_GROUPS
+    ]
 
 
 def internet_allowed_tools() -> list[str]:

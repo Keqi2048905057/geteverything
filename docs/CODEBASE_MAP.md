@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ **Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）**（2026-10-02）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ **Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）**（2026-10-03）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -46,7 +46,7 @@
 | 方法 | 路径 | 处理函数 | 入参形态 | 出参形态 | 鉴权 |
 |---|---|---|---|---|---|
 | GET/POST | `/` | `app.py:index()` | form（`domain` / `action` / `agent_message`） | HTML 模板（**当前必然 500**） | 无 |
-| GET | `/api/tools` | `api/tools.py:list_tools()` | — | `{"tools":[{name,category,database}]}` | 无 |
+| GET | `/api/tools` | `api/tools.py:list_tools()` | — | `{"tools":[{name,tool_name,category,description,tool_group,tool_group_label,risk_level,risk_label,internet_allowed,default_enabled,reason,database}],"groups":[...]}` | 无 |
 | GET | `/api/databases` | `api/tools.py:list_databases()` | — | `{"databases":[...]}` | 无 |
 | POST | `/api/run` | `api/scan.py:execute_scan()` | JSON `{domain?, tools?, tool?, file_path?}` | 扫描 report dict | 无 |
 | POST | `/api/tool/<tool_name>/run` | `api/scan.py:execute_single_tool()` | JSON `{domain}` | 单工具结果 dict | 无 |
@@ -140,7 +140,7 @@
 | `app.py` | Flask 应用实例 + 页面路由 + Blueprint 注册 + 页面上下文构建 | `app`、`index()`、`normalize()`、`normalize_domain`、`build_page_context()`、`_to_ui_history()` | WSGI/`python app.py`；`tests/unit/test_smoke.py:21` | `agent`、`config`、`storage`、`tool_runner`、`api`、flask |
 | `config.py` | 全局配置：`Config` 类（从 `.env` 读取）、路径常量、17 个 `*_CONFIG` 工具配置、分类表 | `Config`、`Config.to_dict()`、`Config._mask()`、`build_tool_config()`、`OUTPUT_DIR`、`SQLITE_CONFIG`、`TARGET_CONFIG`、`SCAN_CONFIG`、`TOOL_CATEGORIES`、`TOOL_COMMANDS` | 几乎全部模块 | `dotenv`、`os` |
 | `storage.py` | SQLite 数据访问层（建表 + 写入 + 多维查询） | `TOOL_DATABASES`、`ScanResultStore`（`_init_db`、`_get_connection`、`save_dedicated_results`、`save_tool_results`、`save_results`、`get_dedicated_results`、`get_tool_results`、`get_view_results`、`get_alive_results`、`get_tool_database_overview` 等） | `api/*`、`tool_runner`、`exporter`、`agent/action`、`modules/dnsx|httpx|alterx|shuffledns` | `sqlite3`、`config` |
-| `tool_runner.py` | 编排核心：加载目标 → 校验工具 → 双层循环执行 → 落库 | `load_targets()`、`load_tools()`、`save_runner_results()`、`run_tools()`、`run_single_tool()` | `app.py:110`、`api/scan.py:105,159`、`agent/action.py:379,396` | `config`、`modules`、`storage` |
+| `tool_runner.py` | 编排核心：加载目标 → 校验工具 → 双层循环执行 → 落库 | `load_targets()`、`normalize_tool_names()`、`load_tools()`、`save_runner_results()`、`run_tools()`、`run_single_tool()` | `app.py:110`、`api/scan.py:105,159`、`agent/action.py:379,396` | `config`、`modules`、`storage` |
 | `target_parser.py` | 目标文件解析与归一化（去协议/去尾点/域名与 IP 校验） | `normalize_target()`、`parse_targets_file()`、`_parse_txt/_parse_csv/_parse_json/_parse_xlsx()`、`save_normalized_targets()`、`DOMAIN_PATTERN`、`IP_PATTERN` | `api/upload.py:56,60` | `csv`/`json`/`re`/`urlparse`、`openpyxl`（延迟导入） |
 | `exporter.py` | 结果聚合与落盘导出 | `ensure_export_dir()`、`gather_export_rows()`、`export_results()` | `api/results.py:138,241`、`agent/action.py:492,493` | `csv`/`json`、`config`、`storage` |
 | `agent_cli.py` | Agent 终端 REPL 入口 | `main()` | `python agent_cli.py` | `agent.AgentAction` |
@@ -153,7 +153,7 @@
 | 文件 | 职责 | 关键函数 | 被谁调用 | 依赖谁 |
 |---|---|---|---|---|
 | `api/__init__.py` | 创建并导出 `api_bp`，末尾 import 5 个子模块以完成路由注册 | `api_bp` | `app.py:31` | flask |
-| `api/tools.py` | `GET /api/tools`、`GET /api/databases` | `_build_tool_payload()`（内部 `build_runner` 实例化 17 个 Runner）、`list_tools()`、`list_databases()` | 前端/curl | `modules`、`storage` |
+| `api/tools.py` | `GET /api/tools`（**Tool Registry 读出点**：注册表字段 + `groups`）、`GET /api/databases` | `_registry_fields()`（读 `core.tool_registry`，未登记则保守降级）、`_build_tool_payload()`（内部 `build_runner` 实例化 17 个 Runner 取观测类别）、`list_tools()`、`list_databases()` | 前端/curl | `modules`、`storage`、`core.tool_registry` |
 | `api/scan.py` | `POST /api/run`（批量）、`POST /api/tool/<name>/run`（单工具） | `_normalize_domain()`、`execute_scan()`、`execute_single_tool()` | 前端/curl | `tool_runner`、`storage` |
 | `api/results.py` | 结果查询与导出 | `_normalize_domain()`、`_normalize_value()`、`_parse_limit()`、`query_results()`、`query_tool_results()`、`export_data()` | 前端/curl | `storage`、`exporter` |
 | `api/upload.py` | 上传目标文件 → 归一化 txt，结果写 Flask `session` | `upload_file()`、`ALLOWED_EXTENSIONS` | 前端/curl | `target_parser`、`config.UPLOAD_DIR`、`werkzeug.utils.secure_filename` |
@@ -253,9 +253,9 @@
 |---|---|---|
 | 1 | `api/scan.py:execute_scan` 接收请求 | JSON → `dict`（`request.get_json(silent=True) or {}`，解析失败得 `{}`） |
 | 2 | `api/scan.py:_normalize_domain(payload["domain"])` | `"Example.COM "` → `str "example.com"` |
-| 3 | `tools = payload["tools"] or payload["tool"]`；`str` 则包一层 list | `list[str]`；**注意 `[]` 或 `""` 会走 `or` 变成 `None`** |
+| 3 | `tools = payload["tools"]`（**`in` 判断，`[]`/`""` 不再被折叠成 `None`**）；`tool_runner.load_tools` 负责逗号拆分与去重 | `list[str]`；空 → 400（**不回落到 `SCAN_CONFIG`**，见 §9.25.3） |
 | 4 | 校验 `domain or file_path` 至少一个 → 否则 400 | `dict` 错误响应 |
-| 5 | `tool_runner.load_tools(tools)`（`tool_runner.py:54`）| `list[str]` → 与 `get_supported_runners()` 求差集；非法则 `ValueError` → `api/scan.py` 转 400 |
+| 5 | `tool_runner.load_tools(tools)` | `list[str]` → `normalize_tool_names()` 去重保序 → 与 `get_supported_runners()` 求差集；非法则 `ValueError` → `api/scan.py` 转 400 |
 | 6 | `ScanResultStore()` → `storage.py:_init_db` + 17 次 `_create_tool_table`（`CREATE TABLE IF NOT EXISTS`） | SQLite DDL；连接用完由 `with` 提交但**不关闭** |
 | 7 | `tool_runner.run_tools(domain, file_path, tools, store)`（`tool_runner.py:94`） | 进入编排 |
 | 8 | `load_targets(domain, file_path)`（`tool_runner.py:11`）| `list[str]`；**空则回落到 `TARGET_CONFIG["domains"]`（即 `nfl.com`）** |
@@ -465,7 +465,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 4 | 结果页看不到数据（明明 scan_runs 有记录） | ① `api/results.py:query_results` → `exporter.gather_export_rows` ② `storage.py:get_view_results`（**只 UNION subdomain 类表**）③ `storage.py:get_tool_results` | `gather_export_rows` 在 `category is None` 时只调 `get_view_results`（subdomain 8 张表）+ `get_tool_results` 兜底；`url/web/port` 类数据在 `category` 未指定时会被 `limit` 截断或重复。`get_tool_results` 的 `category` 形参**在专属表分支被完全忽略**（`storage.py:671-704`），所以按 category 过滤静默失效 |
 | 5 | 上传目标文件解析出错 / 400「未识别到有效目标」 | ① `target_parser.py:normalize_target`（`:31` DOMAIN_PATTERN/IP_PATTERN 双重 `fullmatch`）② `target_parser.py:_parse_xlsx`（`:120` `load_workbook`）③ `api/upload.py:upload_file`（`:46` 扩展名白名单） | 带路径的 URL（`https://a.com/x`）只取 hostname 后仍需匹配域名正则；`*.xlsx` 未装 openpyxl 时 `_parse_xlsx` 抛 `ImportError`，`api/upload.py` **不捕获** → 500；`.xls`（老格式）不在白名单 → 400；中文/全角字符、`_`开头的域会被正则拒掉 |
 | 6 | 新增一个扫描工具后「没生效」 | ① `modules/registry.py:RUNNER_REGISTRY`（`:19-37`）② `config.py:build_tool_config` + 对应 `*_CONFIG` ③ `storage.py:TOOL_DATABASES`（`:15-101`） | 三处都要登记：漏 registry → `load_tools` 报"存在不支持的工具"；漏 TOOL_DATABASES → 结果落到通用 `tool_results` 且 `get_dedicated_results` 抛 `ValueError`；漏 `*_CONFIG` → `KeyError: 'path'` |
-| 7 | 扫描范围/目标校验被绕过（传入任意 file_path 或空目标却扫了别的域名） | ① `tool_runner.py:load_targets`（`:29-41` 直接 `open(file_path)` + 空目标回落 `TARGET_CONFIG`）② `config.py:TARGET_CONFIG`（`:94-97` 默认 `domains=["nfl.com"]`）③ `api/scan.py:execute_scan`（`:94` 只校验 `domain or file_path` 非空） | **没有 Scope 概念**（grep 全仓无 scope 表/校验器）。`file_path` 可为任意绝对路径（任意文件读取）；目标全被过滤掉时回落到硬编码的 `nfl.com` 并真的发起扫描；`tools: []` 也会因为 `payload.get("tools") or payload.get("tool")` 变成 `None`，进而 `load_tools` 回落到 `SCAN_CONFIG["enabled_runners"]=["amass"]` 去扫 |
+| 7 | 扫描范围/目标校验被绕过（传入任意 file_path 或空目标却扫了别的域名） | ① `tool_runner.py:load_targets`（`:29-41` 直接 `open(file_path)` + 空目标回落 `TARGET_CONFIG`）② `config.py:TARGET_CONFIG`（`:94-97` 默认 `domains=["nfl.com"]`）③ `api/scan.py:execute_scan`（`:94` 只校验 `domain or file_path` 非空） | **没有 Scope 概念**（grep 全仓无 scope 表/校验器）。`file_path` 可为任意绝对路径（任意文件读取）；目标全被过滤掉时回落到硬编码的 `nfl.com` 并真的发起扫描。~~`tools: []` 也会因为 `payload.get("tools") or payload.get("tool")` 变成 `None`，进而 `load_tools` 回落到 `SCAN_CONFIG["enabled_runners"]=["amass"]` 去扫~~ ▶ **规划方案 Phase 2 已修**：`api/scan.py` 改用 `"tools" in payload` 判断（`or` 恰会把 `[]`/`""` 折叠成 `None`），`load_tools` 把 `None`（未指定 → 回落）与 `[]`（明确不要 → 空列表）严格分开，Web 侧一律传 `[]`，**回落路径在 HTTP 上不可达**；空选择现在是 400。见 §9.25.3 与 `tests/unit/test_tool_parameters.py`。**注意 `file_path`/`load_targets` 那两半不属本轮**：`/api/run` 早已拒收 `file_path`（M2），但 `tool_runner.load_targets` 自身的回落仍在（只剩 CLI 可达） |
 | 8 | 设置项保存后「不生效」 | ① `api/settings.py:save_settings` → `_write_env_file`（`:99`）② `config.py:Config` 类属性（`:13-39`，**import 期求值**）③ `api/settings.py:KEY_MAPPING`（`:58-80`） | `.env` 写成功了，但 `Config.LLM_API_KEY` 等是类属性，进程内已固化，必须重启（响应里的 message 也这么说）；`load_dotenv` 默认**不覆盖**已存在的环境变量；`KEY_MAPPING` 里 `enscan_*_cookie` 映射到 `FOFA_EMAIL/FOFA_KEY/HUNTER_API_KEY` 是**永远不会走到的死分支**（enscan 键在 `save_settings` 里走 yaml 分支），极易误导后来者 |
 | 9 | 导出文件缺字段 / 行重复 / 混入别的工具数据 / `?format=xlsx` 报 500 | ① `exporter.py:gather_export_rows`（`:46-77` 两段拼接）② `storage.py:_get_tool_results_fallback`（`:706-747` 遍历**全部 17 张表**）③ `exporter.py:export_results`（`:109` 动态 fieldnames）④ `api/results.py:export_data` 的 fmt 白名单校验 | 同一条子域名会先由 `get_view_results` 加入、又被 `_get_tool_results_fallback` 从同一张专属表再加一次 → 重复行；`category` 过滤在专属表分支失效 → 混入其他分类；~~`fmt` 不是 csv/json 时抛 `ValueError`，`api/results.py:export_data` 不捕获 → 500~~ **本轮已修**：调用 `exporter` 前用同一份 `SUPPORTED_FORMATS` 拦下，非法值现在是 400 `bad_request`（原 500 `unknown_error`）。注意 `agent/intent.guess_export_format` 仍会产出 `"xlsx"`，那条链现在拿到的是 400 而不是 500 |
 | 10 | 前端页面 500 / `TemplateNotFound: index.html` | ① `app.py:26` `template_folder="web/templates"` ② `app.py:160` `render_template("index.html", **context)` ③ `app.py:92` `index()` 的 `request.values.get("domain")` | 仓库里 **不存在 `web/` 目录**（实测 `Test-Path web` = False），`/` 必然抛 `TemplateNotFound`；同时 `app.py:110` 会在渲染前同步跑 subfinder；`debug=True` 让异常页暴露堆栈 |
@@ -2186,7 +2186,7 @@ agent/target_ranker.py
 
 | 文件 | 职责 | 关键不变量 |
 |---|---|---|
-| `core/tool_registry.py` | 17 个 runner 的**权限元数据**（`risk_level` / `internet_allowed` / `default_enabled` / `reason`）+ 三档策略模板 | ① **没登记 = 禁止公网**（`assert_tools_internet_allowed` 对未知工具直接拒，不默认放行）；② 公网白名单恰好 `{httpx, subfinder}`；③ 模板里的工具必须全部在白名单内（有测试） |
+| `core/tool_registry.py` | 17 个 runner 的**权限元数据**（`risk_level` / `internet_allowed` / `default_enabled` / `reason`）+ 三档策略模板；**规划方案 Phase 2 起**再承载**能力分组与用途说明**（`ToolGroup` / `TOOL_GROUPS` / `description` / `tool_group` / `group_tool_policies()`，见 §9.25） | ① **没登记 = 禁止公网**（`assert_tools_internet_allowed` 对未知工具直接拒，不默认放行）；② 公网白名单恰好 `{httpx, subfinder}`；③ 模板里的工具必须全部在白名单内（有测试）；④ **分组不改变权限**（`test_tool_group_never_changes_permission`），每个工具必须声明一个已登记的分组 |
 | `core/projects.py` | 授权测试项目：创建 / 读取 / 关联既有 Scope / 按 Scope 反查项目 | 只**新增** `projects` + `project_scopes` 两张表，**`scopes` 表零改动**（方案第 10 节 / DECISIONS-E）；关联项目**不放宽**任何权限 |
 | `api/projects.py` | `/api/projects*` 四条路由 | 只关联**已存在**的 Scope；创建 Scope 仍然只有 `POST /api/scopes` 一处 |
 | `api/public_scan.py` | `/api/public-jobs`（202）+ `/api/scan-center`（页面元数据） | 视图层不含任何闸门逻辑，只做参数转发与 201/202 组装 |
@@ -2245,7 +2245,7 @@ agent/target_ranker.py
 
 | 文件 | 覆盖 |
 |---|---|
-| `tests/unit/test_tool_registry.py`（34） | 元数据完整性（注册表 ↔ 元数据表**双向**无缺漏）、白名单恰好两个、判定报错形状、模板解析的四种拒绝 |
+| `tests/unit/test_tool_registry.py`（41） | 元数据完整性（注册表 ↔ 元数据表**双向**无缺漏）、白名单恰好两个、判定报错形状、模板解析的四种拒绝；**Phase 2 起**再含分组（每个工具声明已登记分组、分组与权限无关、分组覆盖恰好一次、空栏位顺序、未登记分组抛错、子集输入） |
 | `tests/unit/test_projects.py`（26） | 创建/校验/上限/去重、关联幂等、**`scopes` 表结构逐列比对**、关联项目不改写 Scope 本体 |
 | `tests/integration/test_public_scan_mode.py`（45） | 方案第 9 节五类（Scope / Policy / Job / Tool / Worker）+ 第 11 节验收 + 扫描中心页面 + 两条源码守卫 + 旧链路不受影响 |
 | `tests/conftest.py` | 环境变量钉死（见 §9.22.5） |
@@ -2493,4 +2493,108 @@ WHERE o.job_id = ?
 - **观测的 `data_json` 仍按字段拆开渲染**：这里只把 `status_code / title / webserver /
   tech / cdn` 这几项提出来（它们是有语义的），其余原样留在观测时间线里。
 - **`GET /api/tool/<tool_name>/results` 依旧没有任何用例走到**（§9.21.1 的结论不变）。
+
+---
+
+### 9.25 下一阶段规划方案 Phase 2：Tool Registry（工具能力平台化）
+
+依据：《6GetEverything-下一阶段规划方案》（仓库根，本机工作单，不入库）第 8、9、13、14 节。
+一句话目标：**开放能力给用户，限制风险在后端** —— 前端可以放开工具选择，
+后端一条闸门都不放松。
+
+#### 9.25.1 字段名为什么叫 `tool_group` 而不是方案里的 `category`
+
+方案第 9 节的示例条目写的是 `{"name","description","category","risk"}`。
+本仓库**没有**照抄 `category`，理由是它已经有三重含义：
+
+| 出现位置 | 含义 |
+|---|---|
+| `storage.py:TOOL_DATABASES[*]["category"]` | 结果落哪张表 |
+| `modules/base.py:BaseRunner.category` | 运行器自报的观测类别 |
+| `api/tools.py` 读 runner 的 `category` | 上面那个值的转发 |
+
+再借它当「能力分组」，就会造出一个**同名异义**的字段：看接口的人永远说不清
+`category=subdomain` 指的是观测类别还是能力分组。分组与观测类别是两件事，
+字段名不共用 —— 分组叫 `tool_group`，观测类别仍是 `category`，
+两者在同一份出参里并存（用例：`test_tools_api_keeps_the_historical_name_key`
+断言 `entry["category"] != entry["tool_group"]`）。
+
+#### 9.25.2 方案第 8 节那张五栏表是示意，不是要求填满
+
+方案第 8 节画了「资产发现 / 服务识别 / 技术识别 / 漏洞检测 / 辅助能力」五栏。
+本仓库的 17 个 runner 里，`技术识别` / `漏洞检测` / `内容发现` **本阶段确实没有
+可跑的工具**（`nuclei` 未接入 runner）。
+
+处理方式是**如实返回空栏位**，而不是把别的工具挪进去凑数：
+
+- `TOOL_GROUPS` 有 6 栏（多一栏 `content` 内容发现），空栏位照样下发；
+- 前端对空栏位显示「本阶段暂无可用工具」——
+  藏掉栏位会让使用者以为是自己没找到；
+- 用例 `test_group_tool_policies_keeps_empty_groups_in_plan_order`
+  钉死顺序与空栏位，`test_scan_center_metadata_carries_tool_groups` 断言
+  `tech` 必须在空栏位里。
+
+#### 9.25.3 三个「真实存在」的参数缺陷（`load_tools` 参数标准化）
+
+这一段的依据不是文档，是代码：
+
+| 缺陷 | 位置（改前） | 后果 |
+|---|---|---|
+| 空工具**静默回落** | `tool_runner.py:74` `cli_tools or SCAN_CONFIG["enabled_runners"]` | 用户没选任何工具 → 系统拿配置默认值（当时是 `["amass"]`）去扫 |
+| 逗号串被当成一个工具 | `api/scan.py:175-176` `isinstance(tools, str) → [tools]` | `"subfinder,httpx"` 变成名叫 `"subfinder,httpx"` 的工具 → 必然「存在不支持的工具」；同一个请求体从 `/api/jobs` 进得来、从 `/api/run` 进不来 |
+| 全链不去重 | 两处都没有 | `total_steps = len(targets) * len(tools)`，同一工具写两遍 → 步骤数翻倍且重复执行 |
+
+修法：
+
+- 新增 `tool_runner.normalize_tool_names()` 作为**全仓唯一一份**参数规范化实现
+  （逗号拆分、逐项去空白、丢空项、去重保序、非字符串非数组 → `ValueError`）；
+- `load_tools(None)` 与 `load_tools([])` **严格分开**：前者是 CLI 语义（未指定 → 回落
+  配置），后者是「明确不要」（→ 空列表，由调用方拒绝）。HTTP 侧一律传 `[]` 而不是
+  `None`，因此**回落路径在 Web 上不可达**；
+- `api/scan.py` 用 `"tools" in payload` 而不是 `payload.get("tools") or ...`
+  —— `or` 恰好会把 `[]` / `""` 折叠成 `None`，正好落进回落分支；
+- 工具名仍然逐一过 `get_supported_runners()`，**白名单一条都没放松**。
+
+对应用例：`tests/unit/test_tool_parameters.py`（新，17 条），其中
+`test_run_rejects_empty_tools_instead_of_falling_back` 对
+`{"tools":[]}` / `{"tools":""}` / `{"tools":"  ,  "}` / 不给 四种形态逐一断言 400 ——
+**只要出现 200，就说明「用户没选工具，系统自己挑了一个」这条路径又回来了**。
+
+#### 9.25.4 注册表是唯一读出点，两个接口不可能漂移
+
+`/api/tools` 与 `/api/scan-center` 的注册表字段都来自同一个
+`ToolPolicy.to_dict()`：前者按 `get_supported_runners()` 遍历，后者按
+`list_tool_policies()` 遍历，**取数函数只有一份**。
+`test_tools_api_and_scan_center_agree_on_registry_fields` 逐字段比对两个接口，
+`test_scan_center_metadata_carries_tool_groups` 断言分组里的条目与扁平列表**恒等**
+（`flat[tool_name] == tool`）—— 同一个工具不可能「在清单里一个说明、在分组里另一个」。
+
+`group_tool_policies()` 遇到未登记的分组**直接抛 `ValueError`**，不静默丢进兜底栏：
+那只会在「加了分组字段却忘了登记分组表」时发生，静默兜底会让新工具悄悄消失。
+
+#### 9.25.5 前端：分组栏位名一个都不许写死
+
+`web/static/scan_center.js` 的 `renderToolList(tools, restrictedTools, strategy, groups)`
+按服务端 `tool_groups` 渲染：栏位名、每栏说明、每个工具的用途说明全部来自响应。
+
+- 新增 `renderToolRow()`：条目形态只有一份，不会「分组里长一个样、扁平列表里长另一个样」；
+- 未接入的 `nuclei` 按**它自己声明的 `tool_group`** 归进「漏洞检测」栏
+  （`restricted.filter(tool => tool.tool_group === group.key)`），
+  前端因此不需要写死「nuclei 属于漏洞检测」这类映射；
+- `groups` 缺失时**退回扁平清单**，行为与引入分组之前一致（旧响应不会白屏）；
+- 源码守卫：`test_scan_center_js_never_hardcodes_tool_names`（工具名零字面量）、
+  `test_scan_center_js_renders_groups_from_server_metadata`（分组名零字面量）。
+
+#### 9.25.6 本节的已知边界
+
+- **`/api/tools` 仍匿名可读**（`docs/DECISIONS.md` D 有意保持），本轮只是给它加了字段，
+  没有动鉴权。新加的 `groups` 刻意**只含已接入 runner 的工具** ——
+  匿名接口没必要把「还差哪些工具」一并公开。
+- **`/api/tools` 仍会为每个工具 `build_runner()` 实例化**（BUG 索引第 21 条），
+  本轮没改：那是「单个 adapter 坏掉就整体 500」的同一根因，属另一件事。
+- **扫描模式（方案第 10 节：信息收集 / 基础检测 / 深度测试）未引入**：
+  当前只有「模板 + 节奏」两维，加第三维需要先与公网白名单口径对齐（留 Phase 3）。
+- **Agent 边界未动**（方案第 12 节）：`agent/action.py` 仍直接调 `tool_runner.run_tools`，
+  没有走 Job Service。本轮的参数标准化**没有**放宽它的能力（工具名仍受 registry 校验），
+  但「Agent 不拥有最终执行权」这条目前只对 Web 入口成立 —— 见 P0-6 阶段二。
 

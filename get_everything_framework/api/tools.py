@@ -3,47 +3,94 @@
 功能: 提供工具列表与数据库元信息的查询接口
 
 路由:
-  GET /api/tools      — 获取所有可用扫描工具列表及其关联的数据库信息
+  GET /api/tools      — 工具注册表（Tool Registry）+ 关联数据库表信息
   GET /api/databases  — 获取所有工具数据库表的元信息（表名、记录数等）
+
+**Tool Registry（下一阶段方案第 9 节）**
+    ``/api/tools`` 是本项目工具能力元数据的**唯一读出点**：工具的中文说明
+    （``description``）、能力分组（``tool_group`` / ``tool_group_label``）、
+    风险等级（``risk_level`` / ``risk_label``）、是否允许公网
+    （``internet_allowed``）全部来自 :mod:`core.tool_registry`，
+    与 ``/api/scan-center`` 是同一次 ``ToolPolicy.to_dict()`` 的结果 ——
+    两个接口不可能对同一个工具给出不同的说明（有测试逐字段比对）。
+
+    条目里同时保留 ``name`` 与 ``tool_name``：``name`` 是这套接口的历史键名
+    （脚本在用），``tool_name`` 是注册表与本仓库其它地方的统一键名。
+    两者恒等，同时给出是为了不改历史契约、也不引入第二套命名。
+
+    ``category`` 仍然是**观测类别**（``subdomain`` / ``url`` / ``web`` …），
+    由运行器自己声明，决定结果落哪张表；它与工具分组 ``tool_group``
+    是两件不同的事，字段名刻意不共用（理由见 ``core/tool_registry.py``）。
 """
 
 from flask import jsonify
 
 from api import api_bp            # Flask 蓝图实例
+from core.tool_registry import (  # Tool Registry：工具能力与权限元数据
+    get_tool_policy,
+    group_tool_policies,
+    list_tool_policies,
+)
 from modules import build_runner, get_supported_runners  # 工具运行器工厂函数
 from storage import ScanResultStore  # 扫描结果持久化存储
 
 
-def _build_tool_payload(tool_name: str) -> dict:
+def _registry_fields(tool_name: str) -> dict:
+    """取一个工具在注册表里的元数据（未登记时给出**明确**的降级值）。
+
+    未登记不应该发生（``tests/unit/test_tool_registry.py`` 要求每个 runner 都有
+    条目），但这里也不抛异常：``/api/tools`` 是匿名可读的列表接口，
+    为了一个字段缺失而整页 500 比少一个字段更糟。降级值一律取「最保守」：
+    ``internet_allowed=False``、``risk_level="high"``。
     """
-    构建单个工具的 API 响应数据结构
+    policy = get_tool_policy(tool_name)
+    if policy is not None:
+        return policy.to_dict()
+    return {
+        "tool_name": tool_name,
+        "risk_level": "high",
+        "risk_label": "未登记",
+        "internet_allowed": False,
+        "default_enabled": False,
+        "reason": "该工具没有在 core.tool_registry 里登记权限元数据，按禁止处理",
+        "description": "",
+        "tool_group": "",
+        "tool_group_label": "",
+    }
 
-    参数:
-        tool_name: 工具名称（如 "subfinder", "httpx" 等）
 
-    返回:
-        dict: 包含工具名称和分类的字典
-              - name: 工具名称
-              - category: 工具分类（subdomain/url/alive/web/port 等）
+def _build_tool_payload(tool_name: str) -> dict:
+    """构建单个工具的 API 响应数据结构。
 
-    内部逻辑:
-        通过 build_runner() 获取对应工具的运行器实例，
-        从运行器中提取分类信息。若运行器未定义 category 属性，
-        则默认归类为 "subdomain"。
+    Args:
+        tool_name: 工具名称（如 ``subfinder`` / ``httpx``）。
+
+    Returns:
+        dict: 历史字段 + 注册表字段的合并体。
+
+        * ``name`` / ``tool_name`` —— 工具名（两者恒等）；
+        * ``category`` —— **观测类别**，从运行器实例读取
+          （``subdomain`` / ``url`` / ``alive`` / ``web`` / ``port``）；
+        * ``description`` / ``tool_group`` / ``tool_group_label`` —— 注册表里的
+          用途说明与能力分组；
+        * ``risk_level`` / ``risk_label`` / ``internet_allowed`` /
+          ``default_enabled`` / ``reason`` —— 权限元数据。
     """
     # 根据工具名构建运行器实例
     runner = build_runner(tool_name)
     return {
         "name": tool_name,
+        "tool_name": tool_name,
         # 安全获取分类属性，缺失时默认为 subdomain
         "category": getattr(runner, "category", "subdomain"),
+        **_registry_fields(tool_name),
     }
 
 
 @api_bp.route("/tools", methods=["GET"])
 def list_tools():
     """
-    列出所有可用扫描工具及其关联的数据库表
+    列出所有可用扫描工具（Tool Registry）及其关联的数据库表
 
     请求方式: GET
     路径: /api/tools
@@ -54,7 +101,16 @@ def list_tools():
             "tools": [
                 {
                     "name": "subfinder",
+                    "tool_name": "subfinder",
                     "category": "subdomain",
+                    "description": "子域名发现：查询证书透明度与被动 DNS 库，不向目标发包。",
+                    "tool_group": "recon",
+                    "tool_group_label": "资产发现",
+                    "risk_level": "low",
+                    "risk_label": "低（被动/轻量探测）",
+                    "internet_allowed": true,
+                    "default_enabled": true,
+                    "reason": "",
                     "database": {
                         "tool_name": "subfinder",
                         "table": "subfinder_results",
@@ -63,13 +119,21 @@ def list_tools():
                     }
                 },
                 ...
+            ],
+            "groups": [
+                {
+                    "key": "recon",
+                    "name": "资产发现",
+                    "description": "子域 / 资产枚举，回答「目标有哪些入口」。",
+                    "tools": [ ...同上，仅属于本分组的条目... ]
+                },
+                ...
             ]
         }
 
-    内部逻辑:
-        1. 创建扫描结果存储实例
-        2. 获取所有工具对应的数据库信息，构建 tool_name -> database 映射
-        3. 遍历所有支持的扫描工具，为每个工具构建响应数据（工具信息 + 数据库信息）
+    ``groups`` 供界面按能力分组渲染（方案第 8 节「工具选择中心」）；
+    它只包含**已接入 runner** 的工具 —— 未接入的（如 ``nuclei``）不在本接口，
+    因为本接口匿名可读，没必要把「还差哪些工具」也一并公开。
     """
     # 初始化存储层实例
     store = ScanResultStore()
@@ -85,7 +149,10 @@ def list_tools():
                 "database": database_by_tool.get(tool_name),
             }
             for tool_name in get_supported_runners()
-        ]
+        ],
+        # 分组视图：与 /api/scan-center 的 tool_groups 同源（同一个
+        # group_tool_policies()），只是这里的输入限定为「已接入 runner」。
+        "groups": group_tool_policies(list_tool_policies()),
     })
 
 

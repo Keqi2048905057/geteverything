@@ -1,9 +1,9 @@
 # TEST_REPORT.md — 测试报告（M7 交付项）
 
 > ⚠️ **基线已前移：本文件 §0–§5 描述的是 M7 那一轮（901 条用例）的历史快照，
-> 未逐处改写以免抹掉当时的实测记录。当前基线是 1004 条，本轮增量见文末
-> [§6 公网授权测试模式体验版](#6-公网授权测试模式体验版本轮增量1004)。**
-> 两处数字不一致时，以 §6 与 `PROJECT_STATE.md` 的「最近一次验证」为准。
+> 未逐处改写以免抹掉当时的实测记录。当前基线是 1189 条，本轮增量见文末
+> [§9 下一阶段规划方案 Phase 2：Tool Registry](#9-下一阶段规划方案-phase-2tool-registry1189)。**
+> 两处数字不一致时，以 §9 与 `PROJECT_STATE.md` 的「最近一次验证」为准。
 
 > **这份报告回答三件事**：**测了什么**、**没测什么**、**为什么没测**。
 > §0 是方案第 23 节规定的里程碑输出；§1–§2 是可复现的事实；
@@ -98,11 +98,11 @@ mypy 0 error（63 source files），`check_env.py` 退出码 1（= warn，fail 0
 * `ruff` / `mypy` / `node --check` 三条静态检查的实际输出（见 §1）。
 
 > ⚠️ **口径提醒**：上面第一条（901）与第二条（41/40）是 **M7 当时的快照**。
-> 后续里程碑只在本文件末尾**增量追加**（§6 Phase 2、§7 Phase 3、§8 Phase 4），
-> 刻意不改写前面的实测记录 —— 所以本节的数字**以对应的增量小节为准**。
-> 截至 Phase 4：用例 **1149**（1147 passed / 2 skipped）、方法绑定 **50 / 49 被命中**，
+> 后续里程碑只在本文件末尾**增量追加**（§6 Phase 2、§7 Phase 3、§8 Phase 4、
+> §9 规划方案 Phase 2），刻意不改写前面的实测记录 —— 所以本节的数字**以对应的增量小节为准**。
+> 截至规划方案 Phase 2：用例 **1189**（1187 passed / 2 skipped）、方法绑定 **50 / 49 被命中**，
 > 未走到的仍只有 `GET /api/tool/<tool_name>/results` 一条
-> （§3.1 的这条结论在各轮中一直成立，见 §8.2 的重跑记录）。
+> （§3.1 的这条结论在各轮中一直成立，见 §8.2 与 §9.2 的重跑记录）。
 
 **仅代码审查、尚未实测**
 
@@ -123,8 +123,8 @@ mypy 0 error（63 source files），`check_env.py` 退出码 1（= warn，fail 0
 四条命令，都在 `get_everything_framework/` 下执行：
 
 > **本节是 M7 那一轮的原始实测记录（基线 901 / mypy 63 文件）**，
-> 后面各轮的增量见 §6（Phase 2）、§7（Phase 3）、§8（Phase 4）。
-> 当前基线以 §8 与 `PROJECT_STATE.md` 的「最近一次验证」为准 ——
+> 后面各轮的增量见 §6（Phase 2）、§7（Phase 3）、§8（Phase 4）、§9（规划方案 Phase 2）。
+> 当前基线以 §9 与 `PROJECT_STATE.md` 的「最近一次验证」为准 ——
 > 保留本节原样，是为了让「当时到底跑出了什么」可被追溯。
 
 ```powershell
@@ -852,3 +852,166 @@ mock 空那份： headings = 发现资产（0） / 服务（0） / 技术栈（0
 于是本阶段交付的是「可观察事实 + 明确的免责说明 + 覆盖缺口提示」，
 并有用例禁止任何 `severity` / `cve` 字段出现。
 **一个把「没看」和「没问题」分开的页面，比一个看起来很专业的漏洞列表更有用。**
+
+---
+
+## 9. 下一阶段规划方案 Phase 2：Tool Registry（1189）
+
+> 本轮依据仓库根的工作单 `6GetEverything-下一阶段规划方案.md`（本机材料，不入库）
+> 第 8、9、13、14 节。§1～§8 的实测记录不改写。
+
+### 9.1 实测结果
+
+```powershell
+cd get_everything_framework
+python -m pytest                    # 1189 collected / 1187 passed, 2 skipped, 0 failures / 0 errors
+python -m ruff check .              # All checks passed!
+python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 71 source files
+node --check web/static/scan_center.js                          # 语法通过
+git diff --check                                                # 退出码 0
+```
+
+| 项 | 规划方案 Phase 1 | 本轮 |
+|---|---|---|
+| 用例总数（`--collect-only` 汇总 + `--junitxml` 复核，两者一致） | 1159 | **1189**（+30；junit `tests="1189"` failures=0 errors=0 skipped=2） |
+| `test_*.py` 文件 | 38 | **39**（新增 `tests/unit/test_tool_parameters.py`） |
+| mypy 源文件 | 71 | **71**（本轮未新增/删除源文件） |
+| `app.url_map` 规则总数 / 方法绑定 / `/api/*` | 48 / 50 / 42 | **48 / 50 / 42**（**未新增路由**，只给既有两条加字段） |
+| 被用例真实命中的方法绑定 | 49 / 50 | **49 / 50**（探针重跑，见 9.2） |
+
+**+30 的构成（逐文件，可复算）**：
+
+| 文件 | Phase 1 收集 | 本轮收集 | 增量 |
+|---|---|---|---|
+| `tests/unit/test_tool_parameters.py`（新） | — | 17 | **+17** |
+| `tests/unit/test_tool_registry.py` | 34 | 41 | **+7** |
+| `tests/integration/test_public_scan_mode.py` | 83 | 89 | **+6** |
+| **合计** | | | **+30** |
+
+> 校验：`1159 + 30 = 1189`。
+>
+> **这三行是逐文件实测出来的，不是推算** —— 用
+> `git worktree add --detach <tmp> 548d196` 把规划方案 Phase 1 单独检出，
+> 两个工作树各跑一遍 `--collect-only -q` 后逐文件求差，差额**恰好只有这三行**。
+> 同时确认**没有任何一条既有断言被放松**：`test_split_str_list_rejects_non_list`、
+> `test_create_scan_job_requires_tools`、`test_scan_center_js_never_hardcodes_tool_names`
+> 等原样保留并通过。
+
+### 9.2 路由覆盖重跑：结论未变
+
+用与 §3.1 / §6.4 / §8.2 相同的一次性探针（包装 `flask.Flask.full_dispatch_request` 跑全量）：
+
+```text
+声明的方法绑定: 50
+测试命中的:     49
+
+== 没有被任何用例走到的方法绑定 ==
+    GET /api/tool/<tool_name>/results
+```
+
+本轮**没有新增路由**（`/api/tools` 与 `/api/scan-center` 只是加了字段），
+因此「唯一没被任何用例走到的是 `GET /api/tool/<tool_name>/results`」这句
+**在第三轮之后依然成立**。
+
+### 9.3 本轮最重要的一条：`load_tools` 的三个真实缺陷
+
+这一轮的测试不是在验证「新功能有返回值」，而是在钉死**三条当时确实存在的错误路径**。
+三条都能在改前的代码里指出来，不是假想：
+
+| 缺陷 | 改前位置 | 可观察的后果 | 钉死它的用例 |
+|---|---|---|---|
+| 空工具**静默回落** | `tool_runner.py:74` `cli_tools or SCAN_CONFIG["enabled_runners"]` | 用户没选任何工具 → 系统拿配置默认值（当时是 `["amass"]`）去扫 | `test_run_rejects_empty_tools_instead_of_falling_back`（四种空形态逐一断言 400）、`test_load_tools_falls_back_to_config_only_when_unspecified` |
+| 逗号串被当成**一个**工具 | `api/scan.py:175-176` `isinstance(tools, str) → [tools]` | `"subfinder,httpx"` 变成名叫 `"subfinder,httpx"` 的工具 → 必然「存在不支持的工具」；同一个请求体从 `/api/jobs` 进得来、从 `/api/run` 进不来 | `test_run_accepts_comma_separated_tools`、`test_jobs_and_run_agree_on_tool_parsing` |
+| 全链**不去重** | `load_tools` 与 `core.application.split_str_list` 都没有 | `total_steps = len(targets) * len(tools)`，同一工具写两遍 → 步骤数翻倍且重复执行 | `test_run_dedupes_repeated_tools`（断言 `len(outcomes) == 1`）、`test_jobs_and_run_agree_on_tool_parsing`（断言 `total_steps == 2`） |
+
+**`test_run_rejects_empty_tools_instead_of_falling_back` 的写法值得记一笔**：
+它一次断言 `{"tools":[]}` / `{"tools":""}` / `{"tools":"  ,  "}` / **不给 tools**
+四种形态都得 400，并在注释里写明「只要出现 200，就说明『用户没选工具，系统自己挑了一个』
+这条路径又回来了」。空选择与「未指定」的区别是本轮最容易被后续改动抹平的一处
+（`payload.get("tools") or payload.get("tool")` 写起来太顺手了），所以用四种形态钉死。
+
+`test_load_tools_fallback_result_is_itself_normalized` 另锁一条边界：
+**回落值本身也要过一遍规范化** —— 配置里写重复或带空格时不能漏。
+
+### 9.4 分组不是权限：`test_tool_group_never_changes_permission`
+
+方案第 8 节引入「能力分组」，最危险的方向是让人以为**分组即权限**
+（「归到辅助能力那栏的工具是不是就能随便用了？」）。用例直接钉死不变量：
+
+| 要证明的事 | 用例 | 断言的可观察对象 |
+|---|---|---|
+| 分组**不改变**任何权限字段 | `test_tool_group_never_changes_permission` | 给同一工具换一个 `tool_group`，`risk_level` / `internet_allowed` 逐一不变 |
+| 每个工具都必须声明**已登记**的分组 | `test_every_policy_declares_a_registered_group` | 17 个工具的 `tool_group ∈ TOOL_GROUPS` |
+| 每个工具都必须有用途说明 | `test_every_policy_declares_a_description` | `description` 非空 |
+| 分组覆盖**恰好一次**，不重不漏 | `test_group_tool_policies_covers_every_policy_exactly_once` | 各组工具名展平后与 `list_tool_policies()` 等集 |
+| 空栏位保留且顺序固定 | `test_group_tool_policies_keeps_empty_groups_in_plan_order` | 顺序 `recon/service/tech/content/vuln/assist`，`tech` 为空 |
+| 未登记分组**直接抛错** | `test_group_tool_policies_rejects_unregistered_group` | `pytest.raises(ValueError, match="未登记")` |
+| 子集输入可用 | `test_group_tool_policies_accepts_a_subset` | 传入 2 个策略 → 其余组为空 |
+
+「未登记分组直接抛错」是一条**刻意的严格**：静默丢进兜底栏会让新工具悄悄消失，
+而这只会在「加了 `tool_group` 字段却忘了往 `TOOL_GROUPS` 里登记」时发生。
+
+### 9.5 两个接口不可能漂移
+
+`/api/tools` 与 `/api/scan-center` 的注册表字段来自**同一个** `ToolPolicy.to_dict()`。
+用例逐字段比对（`test_tools_api_and_scan_center_agree_on_registry_fields`），
+并另锁两条历史契约：
+
+* `test_tools_api_keeps_the_historical_name_key` —— `name == tool_name`，
+  `category ∈ {subdomain,url,alive,web,port}`，且 **`category != tool_group`**
+  （观测类别与能力分组是两件事，字段名不共用）；
+* `test_tools_api_groups_cover_only_registered_runners` —— 匿名接口的 `groups`
+  只含已接入 runner 的工具，`nuclei` 不出现在这里。
+
+后端侧另有 `test_scan_center_metadata_carries_tool_groups` 断言
+分组里的条目与扁平列表**恒等**（`flat[tool_name] == tool`）——
+同一个工具不可能「在清单里一个说明、在分组里另一个」。
+
+### 9.6 前端：本轮补了**第三次**一次性 DOM 桩人工核对
+
+项目没有浏览器测试（不引入前端框架 / 构建链），源码守卫只能证明「字符串在文件里」。
+因此本轮在 Node 里用最小 DOM 桩加载**真实的** `web/static/scan_center.js`，
+喂服务端**真实形状**的 `/api/scan-center`（含 `tool_groups`）+ `/api/scopes`
++ `/api/public-jobs/check` 响应，走真实渲染路径。
+
+实测输出：
+
+```text
+分组顺序: recon → service → tech → content → vuln → assist   （全部来自服务端）
+  资产发现 1 个 | 被动收集子域与 URL，不发主动探测。 | 条目 1
+  服务识别 2 个 | 探测存活、端口与响应特征。 | 条目 2
+  技术识别 本阶段暂无可用工具 | 识别框架与组件指纹。 | 条目 0
+  内容发现 本阶段暂无可用工具 | 目录与路径探测。 | 条目 0
+  漏洞检测 本阶段暂无可用工具（仅列出未开放项） | 漏洞验证能力。 | 条目 1   ← nuclei 归位
+  辅助能力 本阶段暂无可用工具 | 解析、字典与流程编排。 | 条目 0
+
+工具清单（模板 = 资产发现）：subfinder ✓ subfinder·httpx（4/4 全部来自服务端）
+切到自定义模式：subfinder / httpx 变可勾选，nmap / nuclei 仍禁用
+试算返回后：授权状态「已授权，可以真实扫描」，授权资产「培正学院公网资产 · …」
+未勾选提交：job-feedback 拦下，**不发任何请求**；勾选后发出 POST /api/public-jobs
+源码守卫：工具名零字面量、分组名零字面量、摘要读 BLOCKER_LABELS（不自行判定）
+```
+
+**探针本身又踩过一次坑**（记在这里，与前两轮同因）：第一版桩用的断言字符串是
+`renderToolList(center.tools, center.restricted_tools, activeStrategyOf(`，
+而本轮为了让分组参数进来，调用被拆成了多行 —— 于是**源码级断言报 MISS**，
+但页面渲染其实完全正常。这与 §8.6 的 `classList` 缺、§7.5 的 `input.name` 不反射
+是同一类风险：**探针自己会撒谎**。判别方法是把断言放宽到「数据来自哪个对象」
+（`center.tools,` 与 `metadata.tool_groups`）而不是「调用怎么写在一行里」。
+
+### 9.7 本轮新增的缺口
+
+| 未测项 | 现状 | 风险 |
+|---|---|---|
+| 前端分组渲染的**浏览器**验证 | DOM 桩 + 源码守卫；仍无浏览器测试（与 §6.5 / §7.5 / §8.6 同一缺口） | 低：桩走的是真实代码路径，且断言了分组顺序与空栏位文案 |
+| `/api/tools` 单工具坏掉整体 500 | `api/tools.py` 仍为每个工具 `build_runner()` 实例化（BUG 索引第 21 条），本轮**未改** | 中：与「单个 adapter 依赖缺失」是同一根因，属另一件事，已在 `docs/ARCHITECTURE.md` §12 第 9 条登记 |
+| `normalize_tool_names` 对**极端输入**的行为 | 覆盖了 `None` / 字符串 / 数组 / 元组 / 数字 / 字典 / `object()`；未测超大列表与超长单项 | 低：纯内存变换，无 IO、无上限语义（工具数受 registry 收敛到 17） |
+| 扫描模式（方案第 10 节） | **未实现**（信息收集 / 基础检测 / 深度测试） | 低：留 Phase 3，且需先与公网白名单口径对齐 |
+| Agent 仍可直接调 `tool_runner.run_tools` | 本轮未动（方案第 12 节） | 中：参数标准化**没有**放宽它的能力（工具名仍受 registry 校验），但「Agent 不拥有最终执行权」这条目前只对 Web 入口成立 —— 见 P0-6 阶段二 |
+
+### 9.8 一句话结论
+
+本轮的价值不在 +30，而在**把「用户没选工具」与「系统替用户挑工具」彻底分开**：
+前者现在是 400，后者只剩 CLI 一条可达路径。
+配套的注册模型让「工具说明与分组」有了唯一供源 —— 前端一个工具名、一个栏位名都不写死，
+而后端**一条闸门都没放松**（公网白名单仍是 `subfinder` + `httpx`）。

@@ -159,9 +159,27 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 
 | 方法 | 路径 | 认证 | 请求 | 成功响应 | 主要错误 |
 |---|---|---|---|---|---|
-| GET | `/api/tools` | 匿名 | — | `{"tools":[{"name","category","database"}]}` | — |
+| GET | `/api/tools` | 匿名 | — | `{"tools":[{"name","tool_name","category","description","tool_group","tool_group_label","risk_level","risk_label","internet_allowed","default_enabled","reason","database"}],"groups":[...]}` | — |
 | GET | `/api/databases` | 匿名 | — | `{"databases":[{"tool_name","table","result_column","category"}]}` | — |
 
+> **Tool Registry（下一阶段规划方案 §9）**：`/api/tools` 是本项目工具能力元数据的
+> 唯一读出点。`description` / `tool_group` / `tool_group_label` / `risk_*` /
+> `internet_allowed` / `default_enabled` / `reason` 全部来自
+> `core/tool_registry.py:ToolPolicy.to_dict()`，与 `/api/scan-center` 的
+> `tools[]` 是**同一次调用的结果**（`test_tools_api_and_scan_center_agree_on_registry_fields`
+> 逐字段比对）。
+>
+> * `name` 与 `tool_name` **恒等**：前者是历史键名（脚本在用），后者是注册表与
+>   全仓统一键名；保留两个是不改历史契约、也不引入第二套命名。
+> * `category` 是**观测类别**（`subdomain` / `url` / `alive` / `web` / `port`，
+>   由运行器自报、决定结果落哪张表），**不是**能力分组 —— 分组字段叫
+>   `tool_group`。两者同名异义会在接口层面永远说不清，故字段名不共用。
+> * `groups` 供界面按能力分组渲染（`资产发现` / `服务识别` / …）；
+>   它**只含已接入 runner 的工具**，`nuclei` 不在此接口出现 ——
+>   本接口匿名可读，没必要把「还差哪些工具」一并公开。
+> * 未登记的工具不抛异常，而是保守降级（`risk_level="high"`、
+>   `internet_allowed=False`）：匿名只读列表接口为缺一个字段整页 500 更糟。
+>
 > 这两个接口的 docstring 示例键名（`table_name` / `record_count`）**与实现不符**，
 > 实际以 `storage.get_tool_databases()` 为准：`tool_name` / `table` / `result_column` / `category`。
 
@@ -182,6 +200,13 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 * `domain` 与 `upload_id` 至少给一个；给 `file_path` 一律 **400**（已废弃，须先上传换 `upload_id`）。
 * `scope_id` **必填**：缺失 → 400 `bad_request`；不存在或目标越界 → 403 `scope_violation`（整体拒绝）。
 * `mode` 默认 `mock`；`real` 需要 `GEF_ALLOW_REAL_SCAN=true` **且** `scope.active_scan=true`。
+* `tools`（或历史别名 `tool`）接受**字符串数组**或**逗号分隔字符串**，两者等价；
+  逐项去空白、丢空项、**去重保序**（`tool_runner.normalize_tool_names()`，全仓唯一一份实现）。
+  工具名逐一过 `get_supported_runners()`，未登记者 → 400。
+* **空 `tools`（`[]` / `""` / 不给）一律 400 `bad_request`**，绝不回落到
+  `SCAN_CONFIG["enabled_runners"]`。回落等于「用户没选工具，系统自己挑一个去扫」——
+  这条路径在 `docs/CODEBASE_MAP.md` BUG 索引第 7 条里记过，已修。
+  回落语义只保留在 **CLI/Agent** 一侧（`load_tools(None)`，未指定 ≠ 明确不要）。
 * `mock` 响应：200 `{"ok":true,"mode":"mock","scope_id","targets","tools","outcomes":[...]}`；
   `real` 响应：`tool_runner.run_tools` 的 report + `mode` + `scope_id`。
 

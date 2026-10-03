@@ -10,12 +10,12 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · **下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅** · **23 个提交已推送（`a2389e8..b47fb1d`，快进无 force，未推任何标签）** · M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · 下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅ · **下一阶段规划方案：Phase 1 前端体验重构 ✅（`548d196`）/ Phase 2 Tool Registry ✅（本轮）** · M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → **下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（`59047ee` / `5960bc0`）→ Phase 4 结果体验 ✅（本轮）** → P0-6 阶段二 + M5 剩余 ⬜**
-- 更新日期：2026-10-02（下一阶段体验优化 Phase 1～4；此后 23 个提交已推送并复核；M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → 下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（`59047ee` / `5960bc0`）→ Phase 4 结果体验 ✅（`f88dd57` / `547d827`）→ 下一阶段规划方案 Phase 1 前端体验重构 ✅（`548d196`）→ Phase 2 Tool Registry ✅（本轮）** → P0-6 阶段二 + M5 剩余 ⬜**
+- 更新日期：2026-10-03（下一阶段规划方案 Phase 1～2；上一批 23 个提交已推送并复核；M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
 
 ---
 
@@ -454,6 +454,59 @@
   CVE / 修复建议」字段）；② 不改 `jobSignature` —— 事件流仍未在页面上渲染，
   仍是排查用的接口而不是给人读的结论
 
+**下一阶段规划方案 Phase 1 前端体验重构（`548d196`）**
+- 依据：`6GetEverything-下一阶段规划方案.md`（仓库根，本机工作单，不入库）第 4、5.2、7 节。
+  一句话目标：**让真实用户能顺畅创建任务**，方法是「隐藏 Scope，不是删除 Scope」
+- 四步流程落地：`输入目标 → 确认授权状态 → 选择工具 → 创建任务`。
+  「先选项目 → 再选范围」两个内部概念合并为一步；步骤 2 的三行摘要
+  （目标 / 授权状态 / 授权资产）**只回显服务端试算结论**，前端不比较
+  `active_scan`、不读环境变量（有源码守卫禁止它自行判定）
+- 全部实体 ID 从**可见文案**里消失（退到 `<option value>` 与请求体）；
+  新增 `scopeLabel()` / `projectLabel()` / `describeScopeTargets()` /
+  `scopeStateLabel()` 四个翻译函数作为文案唯一出处
+- 新增授权确认勾选（第 7 节），文案里明写「这是使用者确认，不是安全边界」；
+  `authorization_confirmed` 原样转发给服务端**仅供审计**，不参与任何闸门
+- 工具清单从「只在自定义模式下出现」改为**始终可见**，数据全部来自服务端
+  `/api/scan-center`，前端一个工具名都不写死（第 9 节）
+- **未动**：Policy / Scope 模型 / Job 模型（第 14 节 Phase 1 的「不修改」列）
+
+**下一阶段规划方案 Phase 2 Tool Registry（本轮）**
+- 依据：同一份规划方案第 8、9、13、14 节。一句话目标：**工具能力平台化** ——
+  前端放开工具选择，后端一条闸门都不放松
+- `core/tool_registry.py`：`ToolPolicy` 新增 `description`（用途说明）与
+  `tool_group`（能力分组），17 个工具全部标注；新增 `ToolGroup` / `TOOL_GROUPS`
+  承载**分组本身**（`key` / 中文名 / 这一栏的说明）与 `group_tool_policies()`
+- **字段名刻意叫 `tool_group` 而不是方案示例里的 `category`**：本仓库里
+  `category` 已有三重含义（`storage.TOOL_DATABASES[*]["category"]` /
+  `BaseRunner.category` / `api/tools.py` 从 runner 读它）。再借它当分组名会造出
+  **同名异义**的字段 —— 看接口的人永远说不清 `category=subdomain` 指观测类别还是能力分组
+- **方案第 8 节那张五栏表是示意、不是要求填满**：`技术识别` / `漏洞检测` /
+  `内容发现` 本阶段确实没有可跑的工具，因此**如实返回空栏位**（前端显示
+  「本阶段暂无可用工具」），而不是把别的工具挪进去凑数
+- `GET /api/tools`：条目补上 `tool_name` 与全部注册表字段，并新增 `groups`；
+  `name` 与 `tool_name` **恒等**（前者是历史键名、脚本在用，后者是全仓统一键名）；
+  未登记工具不再抛异常而是**保守降级**（`risk_level="high"`、`internet_allowed=False`）
+- `GET /api/scan-center` 新增 `tool_groups`；扁平 `tools` 与分组**同源同集**，
+  `nuclei` 不在其中（只由 `restricted_tools` 承载）。两个接口的注册表字段来自
+  **同一个** `ToolPolicy.to_dict()`，有用例逐字段比对
+- **Job tools 参数标准化 —— 修的是三个真实缺陷**：
+  ① `load_tools` 空工具**静默回落**到 `SCAN_CONFIG["enabled_runners"]`
+  （当时是 `["amass"]`）→ 用户没选工具、系统自己挑一个重的去扫；
+  ② `api/scan.py` 把 `"subfinder,httpx"` 包成**一个**工具名 → 必然报
+  「存在不支持的工具」，同一个请求体从 `/api/jobs` 进得来、从 `/api/run` 进不来；
+  ③ 全链**不去重** → `total_steps = len(targets) * len(tools)` 凭空翻倍。
+  现在 `None`（未指定 → 回落，CLI 语义）与 `[]` / `""`（**明确不要** → 空列表）
+  严格分开，HTTP 侧一律传 `[]`，**回落路径在 Web 上不可达**；空选择一律 400
+- 新增 `tool_runner.normalize_tool_names()` 作为**全仓唯一一份**参数规范化实现
+  （逗号拆分、去空白、丢空项、去重保序）。工具名仍逐一过 `get_supported_runners()`，
+  **公网白名单一条都没放松**（仍是 `subfinder` + `httpx`）
+- 前端：分组栏位名、每栏说明、每个工具的用途说明**全部来自服务端**；
+  未接入的 `nuclei` 按**它自己声明的 `tool_group`** 归进「漏洞检测」栏，
+  因此前端不需要写死任何映射；分组元数据缺失时**退回扁平清单**（旧响应不会白屏）
+- **未动**：`ScanStrategy` / `STRATEGIES` / `resolve_strategy_*`、Policy / Scope 判定、
+  `jobs` 表结构（**零 schema 变更**）、路由总数（**48 规则 / 50 绑定 / 42 个 `/api/*`**）、
+  同步 Runner 链路、Agent
+
 ---
 
 ## 部分完成
@@ -632,44 +685,46 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-02（Phase 4：结果体验 —— 从 Job 导向结果）
+验证时间：2026-10-03（下一阶段规划方案 Phase 2：Tool Registry）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1149 passed, 2 skipped, 0 failures / 0 errors      ← 本轮全量 --junitxml 解析
+pytest: 1189 collected / 1187 passed / 2 skipped / 0 failures / 0 errors
+        ← 本轮全量 --junitxml 解析（tests="1189" failures="0" errors="0" skipped="2"）
         （逐文件 --collect-only -q 汇总复核一致）
-mypy:   Success: no issues found in 71 source files        ← 本轮新增 core/findings.py（70 → 71）
-node --check web/static/app.js: 语法检查通过（本轮改的就是它）
+mypy:   Success: no issues found in 71 source files        ← 未新增/删除源文件（71 不变）
+node --check web/static/scan_center.js: 语法检查通过（本轮改的就是它）
 git diff --check: 退出码 0
 本轮前端另做了一次**一次性 DOM 桩人工核对**（项目没有浏览器测试）：
-        在 Node 里用最小 document/fetch 桩加载真实的 web/static/app.js，
-        走真实的点击路径（`.job-detail` → refreshDetail → renderDetail → /results），
-        断言渲染出四段标题、notes 免责句、级别徽标与截断提示；
-        mock 空结果那一路另跑一遍，确认四段各自显示「本次任务没有这一类结果」。
-        探针文件跑完即删，不入库。
-覆盖口径（口径与上一轮相同，用一次性探针重跑）：
-        声明的方法绑定 50 / 路由规则 48 —— 本轮**新增 1 条路由**
-        （`GET /api/jobs/<job_id>/results`），这是方案 Phase 4 要求的入口本身
-本轮新增 58 项：test_findings.py 35 + test_job_results_api.py 20 +
-        两份鉴权清单各补参数（test_api_auth_contract.py 24 → 26、
-        test_m3_jobs_api.py 45 → 46）
-        逐文件差额用 git worktree 检出 Phase 3（5960bc0）后两树对跑 --collect-only 求差
-业务 .py 92 个被测试提及 82 个（新增 core/findings.py 被 35 条用例直接覆盖），
-        未提及的仍是同样 10 个（全在 agent/）——
-        同一探针在 Phase 3 工作树上跑出 91 / 81，差的就是本轮新增的 core/findings.py
-交付报告：docs/milestones/本机验收报告_公网授权测试模式_2026-10-02.md（目录被忽略，本机材料）
+        在 Node 里用最小 document/fetch 桩加载真实的 web/static/scan_center.js，
+        喂服务端真实形状的 /api/scan-center（含 tool_groups）+ /api/scopes
+        + /api/public-jobs/check 响应，走真实的渲染路径，实测输出：
+          分组顺序     recon → service → tech → content → vuln → assist（全部来自服务端）
+          资产发现     1 个 | 被动收集子域与 URL，不发主动探测。 | 条目 1
+          服务识别     2 个 | 探测存活、端口与响应特征。 | 条目 2
+          技术识别     本阶段暂无可用工具 | …
+          漏洞检测     本阶段暂无可用工具（仅列出未开放项） | … | 条目 1（nuclei 归位）
+          工具清单     subfinder ✓ · httpx ✓ · nmap · nuclei（4/4 全部来自服务端）
+          切自定义     subfinder / httpx 变可勾选，nmap / nuclei 仍禁用
+        探针文件跑完即移出仓库，不入库。
+本轮新增 30 项：tests/unit/test_tool_parameters.py（新）17 +
+        test_tool_registry.py 34 → 41（+7）+ test_public_scan_mode.py 83 → 89（+6）
+        逐文件差额用 git worktree 检出规划方案 Phase 1（548d196）后两树对跑
+        --collect-only 求差（1159 → 1189，差额恰好只有这三行）
+业务 .py 92 个被测试提及 82 个（本轮未新增业务模块，比例不变）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → **Phase 4 结果体验 `1149`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → **Phase 2 Tool Registry `1189`**
 
-> 本轮 +58 = 两个新文件（35 + 20）+ 两处既有鉴权清单补参数（+2、+1）。
-> 逐文件差额**实测**得出：`git worktree add --detach <tmp> 5960bc0` 检出 Phase 3 后，
-> 两个工作树各跑一遍 `--collect-only -q` 求差，差额恰好只有这四行 ——
-> 即没有任何既有用例被删改。
+> 本轮 +30 = 一个新文件（17）+ 两处既有测试文件补用例（+7、+6）。
+> 逐文件差额**实测**得出：`git worktree add --detach <tmp> 548d196` 检出规划方案 Phase 1 后，
+> 两个工作树各跑一遍 `--collect-only -q` 求差，差额恰好只有这三行 ——
+> 即没有任何既有用例被删改，也**没有任何一条既有断言被放松**
+> （`test_split_str_list_rejects_non_list`、`test_create_scan_job_requires_tools`
+> 等原样保留并通过）。
 >
-> 另有一处刻意的**新增参数**：`ADMIN_ONLY` 补上了 `GET /api/jobs/job_x`（详情本身）。
-> 它自 Phase 2 起就一直缺失（`/steps`、`/events`、`/artifacts` 都在，唯独详情不在），
-> 属本轮顺手补齐的覆盖缺口，不是行为变更 —— 该接口本来就是需登录的。
+> 本轮**未新增路由、未新增业务模块、未改表结构**：`/api/tools` 与 `/api/scan-center`
+> 只是加了字段，路由计数仍为 **48 规则 / 50 绑定 / 42 个 `/api/*`**。
 
 ---
 
@@ -856,12 +911,12 @@ cd E:\Programmingtools\geteverything\get_everything_framework
 python -m pip install -r requirement.txt -r requirement-dev.txt
 
 python -m ruff check .                                  # 期望 All checks passed!
-python -m pytest                                        # 期望 1149 passed, 2 skipped
+python -m pytest                                        # 期望 1187 passed, 2 skipped
 python -m mypy app.py core api jobs storage.py modules scripts  # 期望 Success: no issues found in 71 source files
 python scripts/check_env.py                             # 期望退出码 0/1（未配 .env 时为 1），fail 项为 0
 ```
 
-> 这三个数字以「最近一次验证」为准（本节是 Phase 4 时的快照）。
+> 这三个数字以「最近一次验证」为准（本节是规划方案 Phase 2 时的快照）。
 
 **运行期产物隔离（重要）**：测试**从不**写仓库的 `results/`、`exports/` 与
 `results/local.db`。**保障有两层，缺一不可**：

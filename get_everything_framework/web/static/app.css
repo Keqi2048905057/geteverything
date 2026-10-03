@@ -595,6 +595,29 @@ ul.result-evidence {
   margin-top: 8px;
 }
 
+/* 工具按能力分组渲染（方案第 8 节「工具选择中心」）。
+   分组名与说明都来自服务端；空分组照样显示，只是写明「本阶段暂无可用工具」。 */
+.sc-tool-group { margin-top: 14px; }
+
+.sc-tool-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.sc-tool-group-name { font-weight: 600; font-size: 13px; }
+
+.sc-tool-group-count { color: var(--text-dim); font-size: 11.5px; }
+
+.sc-tool-group-desc {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  margin: 6px 0 0;
+  line-height: 1.6;
+}
+
 .sc-tool {
   display: flex;
   align-items: flex-start;
@@ -610,6 +633,15 @@ ul.result-evidence {
   opacity: 0.6;
   background: rgba(239, 68, 68, 0.06);
   border-color: rgba(239, 68, 68, 0.25);
+}
+
+/* 工具用途（Tool Registry 的 description）：一句话说清「它能干什么」。 */
+.sc-tool-desc {
+  display: block;
+  color: var(--text);
+  font-size: 11.5px;
+  margin-top: 2px;
+  line-height: 1.55;
 }
 
 .sc-tool-meta {

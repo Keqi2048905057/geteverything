@@ -101,7 +101,8 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
    a. require_admin()                      → 无 Session / X-Local-Token → 401 unauthenticated
    b. 交给 core/application.py:create_scan_job()   ← Application Service（唯一编排入口）
         · resolve_targets / _split_list    → targets 显式列表 或 upload_id（受控上传）
-        · load_tools(tools)                → 不在 RUNNER_REGISTRY 一律 400
+        · load_tools(tools)                → 逗号拆分/去重（normalize_tool_names）；不在 RUNNER_REGISTRY 一律 400
+                                             **空选择（[]/""/不给）→ 400，绝不回落到 SCAN_CONFIG["enabled_runners"]**
         · 超过 SCAN_LIMITS["max_targets_per_job"]（20）→ 400
         · validate_job_targets(scope_id, ...) → 缺失 400 / Scope 不存在 403 / 任一越界 403（整体拒绝）
         · resolve_mode(mode)               → real 需 GEF_ALLOW_REAL_SCAN=true，否则 403

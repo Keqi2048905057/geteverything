@@ -76,12 +76,109 @@ def test_policy_to_dict_shape():
         "internet_allowed",
         "default_enabled",
         "reason",
+        # Tool Registry（方案第 9 节）：用途说明与能力分组。
+        "description",
+        "tool_group",
+        "tool_group_label",
     }
     assert payload["internet_allowed"] is True
+    assert payload["description"], "工具必须说明自己做什么"
+    assert payload["tool_group"] == "service"
+    assert payload["tool_group_label"] == "服务识别"
 
 
 def test_unknown_tool_policy_is_none():
     assert get_tool_policy("definitely-not-a-tool") is None
+
+
+# ── Tool Registry：用途说明与能力分组（方案第 8、9 节） ────
+
+
+def test_every_policy_declares_a_registered_group():
+    """每个条目（含未接入的）都必须落在已登记分组里。
+
+    分组 key 未登记时 :func:`group_tool_policies` 会抛错而不是静默丢弃，
+    这里把同一件事提前到元数据层面拦住：新增工具的人必须选一栏，
+    不能让它从界面上凭空消失。
+    """
+    from core.tool_registry import TOOL_GROUP_LABELS, list_all_tool_policies
+
+    bad = [
+        policy.tool_name
+        for policy in list_all_tool_policies()
+        if policy.tool_group not in TOOL_GROUP_LABELS
+    ]
+    assert bad == [], f"以下工具的分组未登记: {bad}"
+
+
+def test_every_policy_declares_a_description():
+    """方案第 9 节要求每个工具给出 ``description``：界面靠它解释工具用途。"""
+    from core.tool_registry import list_all_tool_policies
+
+    missing = [policy.tool_name for policy in list_all_tool_policies() if not policy.description]
+    assert missing == [], f"以下工具缺少 description: {missing}"
+
+
+def test_tool_group_never_changes_permission():
+    """分组只决定界面摆位，**不得**影响权限。
+
+    这是防「把工具挪个栏位就以为它变得可用了」的回归：
+    分组的增删改都不应该让公网白名单发生变化。
+    """
+    assert internet_allowed_tools() == ["httpx", "subfinder"]
+    for name in internet_allowed_tools():
+        assert get_tool_policy(name).internet_allowed is True
+
+
+def test_group_tool_policies_covers_every_policy_exactly_once():
+    """分组视图必须**不重不漏**地覆盖全部条目。"""
+    from core.tool_registry import group_tool_policies, list_all_tool_policies
+
+    groups = group_tool_policies()
+    names = [tool["tool_name"] for group in groups for tool in group["tools"]]
+    assert sorted(names) == sorted(policy.tool_name for policy in list_all_tool_policies())
+    assert len(names) == len(set(names)), "同一个工具出现在多个分组里"
+
+
+def test_group_tool_policies_keeps_empty_groups_in_plan_order():
+    """方案点名的「技术识别 / 漏洞检测」本阶段没有可用工具，也必须如实返回。"""
+    from core.tool_registry import group_tool_policies
+
+    groups = group_tool_policies()
+    assert [group["key"] for group in groups] == [
+        "recon",
+        "service",
+        "tech",
+        "content",
+        "vuln",
+        "assist",
+    ]
+    by_key = {group["key"]: group for group in groups}
+    # 空分组照样在列表里（前端据此显示「本阶段暂无可用工具」）。
+    assert by_key["tech"]["tools"] == []
+    assert by_key["tech"]["description"], "空分组也要说明这一栏是干什么的"
+    # 未接入的 nuclei 归在「漏洞检测」，而不是被藏起来。
+    assert [tool["tool_name"] for tool in by_key["vuln"]["tools"]] == ["nuclei"]
+
+
+def test_group_tool_policies_rejects_unregistered_group():
+    """未登记的分组 key 必须抛错，不能被静默丢弃。"""
+    from core.tool_registry import ToolPolicy, group_tool_policies
+
+    stray = ToolPolicy("stray", "low", False, False, tool_group="not-a-group")
+    with pytest.raises(ValueError, match="未登记"):
+        group_tool_policies([stray])
+
+
+def test_group_tool_policies_accepts_a_subset():
+    """传入子集时只对子集分组，未用到的栏位留空。"""
+    from core.tool_registry import group_tool_policies, list_tool_policies
+
+    subset = [policy for policy in list_tool_policies() if policy.tool_name == "httpx"]
+    groups = group_tool_policies(subset)
+    by_key = {group["key"]: group for group in groups}
+    assert [tool["tool_name"] for tool in by_key["service"]["tools"]] == ["httpx"]
+    assert by_key["recon"]["tools"] == []
 
 
 # ── 公网白名单：方案第 8 节 ────────────────────────────────

@@ -158,8 +158,17 @@ def execute_scan():
     payload = request.get_json(silent=True) or {}
     # 提取并规范化域名
     domain = _normalize_domain(payload.get("domain"))
-    # 兼容 "tools" 和 "tool" 两种参数名
-    tools = payload.get("tools") or payload.get("tool")
+    # 兼容 "tools" 和 "tool" 两种参数名。
+    #
+    # 这里刻意用 ``in`` 判断「有没有给」，而不是 ``or``：
+    # ``tools: []`` / ``tools: ""`` 是**明确的空选择**，此前会被 ``or`` 折叠成
+    # ``None``，再让 ``load_tools`` 回落到配置默认值 ``["amass"]`` ——
+    # 用户没选任何工具，系统却自己挑一个去跑（``docs/CODEBASE_MAP.md``
+    # BUG 索引第 7 条）。现在空选择一律 400，绝不替换成别的工具。
+    if "tools" in payload:
+        raw_tools = payload.get("tools")
+    else:
+        raw_tools = payload.get("tool")
     # 受控上传 ID（M2 起唯一的文件目标入口）
     upload_id = (payload.get("upload_id") or "").strip() or None
     # 授权范围：M2 起为必填（方案第 2.3 节第 2 条）
@@ -171,21 +180,25 @@ def execute_scan():
             details={"field": "file_path"},
         )
 
-    # 将单个工具名字符串转换为列表，统一后续处理逻辑
-    if isinstance(tools, str):
-        tools = [tools]
-
     # 校验：domain 和 upload_id 至少提供一个
     if not domain and not upload_id:
         raise BadRequestError("必须提供 domain 或 upload_id", details={"fields": ["domain", "upload_id"]})
 
     file_path = uploads.resolve_targets_file(upload_id) if upload_id else None
 
-    # 加载并验证工具列表，无效工具名会抛出 ValueError
+    # 加载并验证工具列表：``load_tools`` 负责逗号分隔字符串、去重与 registry 校验
+    # （``/api/jobs`` 那条链走 ``core.application.split_str_list``，两边口径一致）。
+    #
+    # 关键：**显式**把「没给工具」表达成 ``[]``，而不是 ``None``。``load_tools(None)``
+    # 是 CLI 语义（回落到 ``SCAN_CONFIG["enabled_runners"]``，当前是 ``amass``）；
+    # 但 HTTP 请求里没写 tools，绝不等于「请用配置里的默认工具」——
+    # 那正是「用户没选工具，系统自己挑了一个重的去扫」的路径。
     try:
-        selected_tools = load_tools(tools)
+        selected_tools = load_tools([] if raw_tools is None else raw_tools)
     except ValueError as exc:
         raise BadRequestError(str(exc)) from exc
+    if not selected_tools:
+        raise BadRequestError("必须提供至少一个工具", details={"field": "tools"})
 
     # ── Scope 强制校验（M2 起） ─────────────────────────────
     # 没有显式 Scope 不允许创建任何扫描任务；目标在执行前必须逐个过校验。
