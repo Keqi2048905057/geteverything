@@ -161,7 +161,11 @@
       <div class="sc-step">
         <h3>步骤 3 · 选择工具</h3>
         <div class="sc-strategies" id="strategy-list"></div>
-        <p class="sc-step-note" id="strategy-note">资产发现：被动子域枚举 + 存活探测。低频档，适合作为授权公网测试的第一步。</p>
+        <!-- 这里刻意**只放中性占位**，不放任何模板的说明文案：说明的唯一来源是
+             服务端下发的 ``strategies[].description``，由 scan_center.js 写进这个元素。
+             此前这里逐字抄了「资产发现」那一档的描述，后端改描述后它会静默过期 ——
+             首屏一闪而过的旧文案同样是「前端写死第二份」。 -->
+        <p class="sc-step-note" id="strategy-note">正在加载策略说明…</p>
         <div id="restricted-note" hidden></div>
 
         <!-- 工具清单始终显示（方案第 8 节「工具选择中心」）：选了模板时它列出

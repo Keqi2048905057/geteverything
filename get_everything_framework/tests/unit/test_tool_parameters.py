@@ -206,3 +206,52 @@ def test_jobs_and_run_agree_on_tool_parsing(admin_client):
     assert sorted(run_body["tools"]) == sorted(job["tools"])
     # 去重口径也一致：2 个工具 × 1 个目标 = 2 步（不是 4 步）。
     assert job["total_steps"] == 2
+
+
+@pytest.mark.parametrize(
+    "empty",
+    [{"tools": []}, {"tools": ""}, {"tools": "  ,  "}],
+    ids=["empty-list", "empty-string", "blank-string"],
+)
+def test_jobs_does_not_fold_an_explicit_empty_selection_into_the_alias(admin_client, empty):
+    """**明确给了空选择**时，别名 ``tool`` 不得顶上来（与 ``/api/run`` 同口径）。
+
+    历史写法是 ``tools=payload.get("tools") or payload.get("tool")``：``or`` 会把
+    ``[]`` / ``""`` / ``"  ,  "`` 一律折叠成假值，于是别名 ``tool`` 接管，
+    请求体 ``{"tools": [], "tool": "subfinder"}`` 从 ``/api/jobs`` 进来落库成
+    ``tools=['subfinder']`` 并**真的去扫**，而同一个请求体从 ``/api/run`` 进来是 400。
+    这正是「同一个请求体从两条链进来得到两种解释」，方向与 BUG 索引第 7 条相反、
+    成因相同。判据必须是「有没有给这个键」，不是「这个键的值真不真」。
+    """
+    scope_id = _scope(admin_client)
+
+    from core import jobs as jobs_store
+
+    resp = admin_client.post(
+        "/api/jobs",
+        json={"scope_id": scope_id, "targets": ["example.test"], "tool": "subfinder", **empty},
+    )
+    assert resp.status_code == 400, (empty, resp.get_json())
+    assert resp.get_json()["error_code"] == "bad_request"
+    # 更要紧的是**没有落库**：400 但留下一条 queued 任务同样是越权执行。
+    assert jobs_store.list_jobs() == []
+
+    run_resp = admin_client.post(
+        "/api/run",
+        json={"domain": "example.test", "scope_id": scope_id, "mode": "mock", "tool": "subfinder", **empty},
+    )
+    assert run_resp.status_code == 400, (empty, run_resp.get_json())
+
+
+def test_jobs_still_accepts_the_single_tool_alias(admin_client):
+    """修 `or` 折叠**不得**顺手删掉别名：只给 ``tool`` 时仍要正常创建。"""
+    scope_id = _scope(admin_client)
+
+    from core import jobs as jobs_store
+
+    resp = admin_client.post(
+        "/api/jobs",
+        json={"scope_id": scope_id, "targets": ["example.test"], "tool": "subfinder"},
+    )
+    assert resp.status_code == 202, resp.get_json()
+    assert jobs_store.get_job(resp.get_json()["job_id"])["tools"] == ["subfinder"]

@@ -103,7 +103,14 @@ def create_job():
     submission = create_scan_job(
         scope_id=str(payload.get("scope_id") or "").strip(),
         targets=payload.get("targets"),
-        tools=payload.get("tools") or payload.get("tool"),
+        # 兼容 "tools" / "tool" 两种参数名，但**不能**用 ``or`` 折叠
+        # （口径与 ``api/scan.py`` 那条链逐字一致）：
+        # ``tools: []`` / ``tools: ""`` 是**明确的空选择**，用 ``or`` 会被折叠成
+        # ``None``，再让别名 ``tool`` 顶上来 —— 同一个请求体
+        # ``{"tools": [], "tool": "subfinder"}`` 于是从 ``/api/run`` 进来是 400、
+        # 从这里进来是 202 并真的扫 subfinder（$env:TEMP 探针实测）。
+        # 用 ``in`` 判断「有没有给」，两条链才得到同一种解释。
+        tools=payload.get("tools") if "tools" in payload else payload.get("tool"),
         upload_id=payload.get("upload_id"),
         mode=payload.get("mode"),
         scenario=payload.get("scenario"),

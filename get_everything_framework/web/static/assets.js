@@ -220,14 +220,19 @@
     detailSignature = signature;
 
     panel.hidden = false;
-    if (idEl) idEl.textContent = asset.id;
+    // 详情标题**不再渲染 ``asset_<32hex>``**：方案第 4 节原则 2 把「UUID / 数据库
+    // 字段」列进「前端不显示」。标题给的是人类认得出的那几样（类型 + 值），
+    // 实体 ID 仍留在 ``data-asset-id`` 与接口里供脚本定位，只是不上屏。
+    if (idEl) idEl.textContent = typeLabel(asset.type) + " · " + (asset.value || "—");
     body.textContent = "";
 
     var meta = el("dl", "summary");
     [
       ["类型", typeLabel(asset.type) + "（" + asset.type + "）"],
       ["值", asset.value],
-      ["规范化键", asset.canonical_key],
+      // 「规范化键」原样显示的是数据库列值（``host|example.com``）。它的用途是
+      // 「为什么这两条观测归并成一行」，属于排查信息，不是给使用者看的字段 ——
+      // 摘要里不再铺开，观测时间线里每条观测仍带自己的原始值可对照。
       ["状态", statusLabel(asset.status) + "（" + asset.status + "）"],
       ["首次发现", asset.first_seen || "—"],
       ["最近发现", asset.last_seen || "—"],

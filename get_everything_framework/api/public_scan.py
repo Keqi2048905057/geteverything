@@ -93,7 +93,10 @@ def create_public_job():
         targets=payload.get("targets"),
         upload_id=payload.get("upload_id"),
         strategy=payload.get("strategy"),
-        tools=payload.get("tools") or payload.get("tool"),
+        # 与 ``api/scan.py`` / ``api/jobs.py`` 同一条口径：用 ``in`` 判断
+        # 「有没有给」，而不是 ``or`` —— 后者会把 ``tools: []`` 折叠成 ``None``
+        # 再让别名 ``tool`` 顶上来，于是「明确不要任何工具」变成「用别名那个工具」。
+        tools=payload.get("tools") if "tools" in payload else payload.get("tool"),
         pace=payload.get("pace"),
         mode=payload.get("mode"),
         scenario=payload.get("scenario"),

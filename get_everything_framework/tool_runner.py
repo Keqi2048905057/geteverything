@@ -60,9 +60,16 @@ def load_targets(domain=None, file_path=None):
 def normalize_tool_names(value):
     """把「工具」参数规范化成**去重保序**的工具名列表。
 
-    这是全仓唯一一份工具参数规范化实现，``/api/run``、``/api/tool/<n>/run``、
-    ``POST /api/jobs``（经 ``core.application``）与 CLI 全都走它，避免出现
-    「同一个请求体从两个入口进来得到两种解释」。
+    ``/api/run``、``/api/tool/<n>/run``、``POST /api/jobs``（经 ``core.application``）
+    与 CLI 全都走它，避免出现「同一个请求体从两个入口进来得到两种解释」。
+
+    **不是全仓唯一一份「列表规范化」实现**（此前这句写得过头了，实测打脸）：
+    ``core/application.py:95 split_str_list()`` 是另一份，服务对象是
+    ``targets`` / ``tools`` 这类请求字段。两者**不是同一个函数**，差别有二：
+    它不去重（去重由 :func:`load_tools` 与 ``resolve_targets`` 各自收口），
+    且它对非法类型抛 ``BadRequestError`` 而不是 ``ValueError``。
+    端到端行为一致的原因不是「只有一份实现」，而是**去重与 registry 校验
+    只有一个收口点**（:func:`load_tools`）。改其中一处时，别忘了另一处。
 
     接受的形态：
 

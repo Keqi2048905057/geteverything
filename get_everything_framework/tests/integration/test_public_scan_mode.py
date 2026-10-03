@@ -497,6 +497,50 @@ def test_unknown_strategy_is_400(admin_client):
     assert jobs_store.list_jobs() == []
 
 
+def test_custom_strategy_does_not_fall_back_to_the_tool_alias(admin_client, monkeypatch):
+    """``custom`` 模板下「明确给了空 tools」不得让别名 ``tool`` 顶上来。
+
+    公网入口这条链比老入口**多一层**：``resolve_strategy_tools()`` 先按模板解析，
+    所以两种情形必须分开看（两侧都实测过，不是推理）：
+
+    * ``asset_discovery``（默认模板）+ 空 ``tools``：模板本来就要 ``subfinder + httpx``，
+      别名接不接管都不改变结果 —— 这条**不是**漏洞；
+    * ``custom`` + 空 ``tools``：``custom`` 的语义是「工具由请求体决定」，
+      于是 ``payload.get("tools") or payload.get("tool")`` 里的 ``or`` 会让别名接管 ——
+      改前返回 **202 并落库 ``tools=['subfinder']``**（真的去扫），
+      而 ``{"tools": []}`` 单独出现时是 400「自定义模式必须显式选择至少一个工具」。
+      也就是说：**同一件事，加了一个别名就从「拒绝」变成「接受」**。
+
+    本用例钉的是第二种。判据是「有没有给 ``tools`` 这个键」，不是「这个键的值真不真」。
+    """
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    empty_only = _public_job(admin_client, project["id"], scope_id, strategy="custom", tools=[])
+    assert empty_only.status_code == 400, empty_only.get_json()
+    assert empty_only.get_json()["details"]["field"] == "tools"
+
+    with_alias = _public_job(
+        admin_client, project["id"], scope_id, strategy="custom", tools=[], tool="subfinder"
+    )
+    assert with_alias.status_code == 400, with_alias.get_json()
+    assert with_alias.get_json()["details"]["field"] == "tools"
+    # 400 但留下一条 queued 任务同样是越权执行，所以这条也要断言。
+    assert jobs_store.list_jobs() == []
+
+
+def test_custom_strategy_still_accepts_the_single_tool_alias(admin_client, fake_real_runner):
+    """修 `or` 折叠**不得**顺手删掉别名：``custom`` 下只给 ``tool`` 时仍要能建任务。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, strategy="custom", tool="subfinder")
+    assert resp.status_code == 202, resp.get_json()
+    job = jobs_store.get_job(resp.get_json()["job_id"])
+    assert job["tools"] == ["subfinder"]
+
+
 def test_real_mode_without_env_switch_is_403_and_does_not_fall_back_to_mock(admin_client, monkeypatch):
     """环境开关没开时**明确报错**，绝不静默退化成 mock。
 
@@ -950,6 +994,28 @@ def test_scan_center_page_separates_restricted_tools_note(admin_client):
     assert "本阶段未接入/未开放的工具" not in body
 
 
+def test_scan_center_page_does_not_copy_any_strategy_description(admin_client):
+    """模板说明在 HTML 里**不得**出现第二份（首屏兜底也不行）。
+
+    模板说明的唯一来源是服务端下发的 ``strategies[].description``。此前
+    ``#strategy-note`` 的初始文本逐字抄了「资产发现」那一档的描述 —— 它会在 JS
+    拉完元数据后被覆盖，所以肉眼几乎看不见；但后端一改描述，这段 HTML 就静默过期，
+    而当时**没有任何守卫**盯着它（节奏说明有守卫，策略说明没有）。
+
+    判据不是「有没有这句话」，而是**服务端当前下发的每一段 description 逐字都
+    不在页面里** —— 后端改了描述，这条仍然成立；谁再抄一份，它立刻红。
+    """
+    from core.tool_registry import list_strategies
+
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    for strategy in list_strategies():
+        assert strategy.description not in body, (
+            f"scan_center.html 抄了一份模板说明（{strategy.key}）：{strategy.description}"
+        )
+    # 占位本身仍要留着：JS 拉不到元数据时用户得看到一句人话，而不是空白。
+    assert 'id="strategy-note"' in body
+
+
 # ── Phase 1「增加工具选择」+ 方案第 8、9 节：工具清单 ────────
 
 
@@ -976,8 +1042,18 @@ def test_scan_center_js_never_hardcodes_tool_names():
     这是那一条的可执行版本。工具清单必须整体来自服务端下发的
     ``/api/scan-center``（``tools`` + ``restricted_tools``）；前端一旦出现字面量
     工具名，新增工具就得改两处，而漏改的那一处不会报错 —— 只会静默不显示。
+
+    **黑名单必须从注册表派生**：此前这里手写了 7 个工具名
+    （``subfinder`` / ``httpx`` / ``nmap`` / ``naabu`` / ``nuclei`` / ``katana`` /
+    ``feroxbuster``），于是把 ``dnsx`` / ``amass`` / ``gospider`` / ``waybackurls`` /
+    ``dirsearch`` 等**另外 11 个**写进前端时守卫一律放行 —— 守卫看起来在守，
+    实际只守住三分之一。现在逐个走 ``get_supported_runners()`` 与
+    ``KNOWN_UNAVAILABLE_TOOLS``，注册表加一个工具，守卫自动覆盖它。
     """
     from pathlib import Path
+
+    from core.tool_registry import KNOWN_UNAVAILABLE_TOOLS
+    from modules.registry import get_supported_runners
 
     source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
         encoding="utf-8"
@@ -990,7 +1066,9 @@ def test_scan_center_js_never_hardcodes_tool_names():
     code_only = "\n".join(
         line for line in source.splitlines() if not line.strip().startswith(("*", "//", "/*"))
     )
-    for name in ("subfinder", "httpx", "nmap", "naabu", "nuclei", "katana", "feroxbuster"):
+    registry_tools = sorted(set(get_supported_runners()) | set(KNOWN_UNAVAILABLE_TOOLS))
+    assert len(registry_tools) >= 18, f"注册表读出点异常，守卫会形同虚设: {registry_tools}"
+    for name in registry_tools:
         assert f'"{name}"' not in code_only, f"前端代码里出现了写死的工具名: {name}"
 
 

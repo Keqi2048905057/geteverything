@@ -361,3 +361,27 @@ def test_assets_js_never_renders_a_raw_scope_id_as_text(client):
         "textContent = asset.scope_id",
     ):
         assert forbidden not in script, f"assets.js 又把 scope_id 当文案了: {forbidden}"
+
+
+def test_assets_js_keeps_internal_ids_and_db_columns_off_the_screen(client):
+    """方案第 4 节原则 2 的另外两个点名项：**UUID** 与**数据库字段**。
+
+    原则 2 列的是三样 —— ``scope_id`` / UUID / 数据库字段。前一样在
+    ``test_assets_js_never_renders_a_raw_scope_id_as_text`` 里守着，这里补后两样：
+
+    * 详情标题此前写 ``idEl.textContent = asset.id``，页面上出现 ``asset_3f9c…``；
+    * 摘要此前有一行「规范化键」，铺开的是 ``host|example.com`` 这种**列值**。
+
+    两者都不是给使用者看的：ID 用来在 DOM 里定位（``data-asset-id`` 仍在、接口仍在），
+    规范化键用来解释「为什么两条观测归并成一行」，属于排查信息。
+    """
+    script = client.get("/static/assets.js").get_data(as_text=True)
+
+    for forbidden in (
+        "textContent = asset.id",
+        '["规范化键"',
+        "asset.canonical_key",
+    ):
+        assert forbidden not in script, f"assets.js 又把内部标识/数据库字段上屏了: {forbidden}"
+    # 定位能力不能一起删掉：详情面板仍要靠 ``data-asset-id`` 与接口取数。
+    assert "asset-detail-id" in script
