@@ -179,6 +179,27 @@
       <div class="sc-step">
         <h3>步骤 4 · 创建任务</h3>
         <form class="form" id="job-form" autocomplete="off">
+          <label for="job-operator">操作者（写入审计，可留空）</label>
+          <input type="text" id="job-operator" name="operator" autocomplete="off"
+                 placeholder="例如：张三 —— 本仓库没有身份体系，这是自称，不是登录身份">
+          <p class="sc-step-note">
+            它会连同目标、授权资产、时间一起写入任务审计，事后能对上「谁提交的」。
+            它是<strong>记录</strong>而不是权限：填什么都不影响能不能扫。
+          </p>
+
+          <!-- 限速与超时（规划方案第 14 节 Phase 3）：字段名、取值范围与中文说明
+               全部由 /api/scan-center 的 limits 下发，输入框也由 JS 按那份元数据
+               生成 —— 前端写死第二份，后端改了上下界页面还停在上一个版本。 -->
+          <details class="sc-details" id="limits-config">
+            <summary>高级：限速与超时（可选，只能收紧）</summary>
+            <div class="sc-details-body">
+              <div id="limits-fields"></div>
+              <p class="sc-step-note" id="limits-feedback">
+                这两项只能把本次任务<strong>收紧</strong>：低频档已经压下来的并发与速率不会被它们顶回去。
+              </p>
+            </div>
+          </details>
+
           <label class="check-inline" for="job-mock">
             <input type="checkbox" id="job-mock" name="mode_mock">
             本地验证模式（mock，不联网，仅演练流程）

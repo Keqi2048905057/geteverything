@@ -229,6 +229,72 @@
     return text;
   }
 
+  /**
+   * 按服务端下发的 ``limits`` 元数据渲染限速 / 超时输入框（Phase 3）。
+   *
+   * 字段名（``rate_limit`` / ``timeout_seconds``）、上下界与中文说明**全部**来自
+   * ``/api/scan-center`` 的 ``limits`` —— 与工具清单、分组、节奏同一口径：
+   * 前端写死第二份文案，后端改了上下界页面还停在上一个版本，而且不会报错。
+   * 元数据缺席（老后端 / 接口失败）时**不渲染**输入框：宁可不给这个能力，
+   * 也不给一个范围写错的框 —— 用户以为设好了、实际拿到的却是服务端的默认值
+   * 是最坏的错法（与 ``core/job_limits`` 拒绝静默夹边界同一条理由）。
+   */
+  function renderLimits(limits) {
+    var box = $("limits-fields");
+    if (!box) return;
+    box.textContent = "";
+    if (!limits) return;
+
+    // 遍历**服务端给的键**而不是写死一张键名表：后端加一项（例如「最大并发」）
+    // 前端就自动多一个输入框，不需要改这里 —— 与工具清单同一口径。
+    Object.keys(limits).forEach(function (key) {
+      var spec = limits[key];
+      if (!spec || !spec.field) return;
+
+      var inputId = "job-limit-" + key;
+      var label = document.createElement("label");
+      label.setAttribute("for", inputId);
+      label.textContent = spec.label || spec.field;
+      box.appendChild(label);
+
+      var input = document.createElement("input");
+      input.type = "number";
+      input.id = inputId;
+      // ``name`` 直接取服务端字段名：提交时按它拼请求键，前端不参与改名。
+      input.name = spec.field;
+      input.setAttribute("inputmode", "numeric");
+      input.setAttribute("data-limit-field", spec.field);
+      input.min = spec.min;
+      input.max = spec.max;
+      input.placeholder = spec.min + " ~ " + spec.max + "（留空表示不额外收紧）";
+      box.appendChild(input);
+
+      if (spec.hint) {
+        box.appendChild(hint(spec.hint));
+      }
+    });
+  }
+
+  /**
+   * 读回用户填的限速 / 超时，拼成请求字段。
+   *
+   * 留空 → **不加这个键**（而不是传 ``0`` 或 ``null``）：服务端把「没指定」与
+   * 「指定了非法值」分得很开，传 ``null`` 只是绕一圈回到同一个结论，
+   * 传 ``0`` 却会被判成越界 —— 而用户什么都没填。
+   * 合法性与范围仍由服务端判定，这里不替它做校验（前端不是安全边界）。
+   */
+  function collectLimits() {
+    var payload = {};
+    var box = $("limits-fields");
+    if (!box) return payload;
+    Array.prototype.forEach.call(box.querySelectorAll("input[data-limit-field]"), function (input) {
+      var text = String(input.value || "").trim();
+      if (!text) return;
+      payload[input.getAttribute("data-limit-field")] = text;
+    });
+    return payload;
+  }
+
   // ── 元数据（项目 / 范围 / 策略 / 工具权限） ───────────────
 
   function loadMetadata() {
@@ -270,6 +336,8 @@
         );
         fillProjectSelects(center.projects);
         renderProjects(center.projects);
+        // 限速 / 超时的输入框同样由服务端元数据生成（Phase 3）。
+        renderLimits(center.limits);
         renderConsentSummary();
       })
       .catch(function () {
@@ -1099,6 +1167,7 @@
 
       var projectSelect = $("job-project");
       var scopeSelect = $("job-scope");
+      var operator = $("job-operator");
       var payload = {
         project_id: (projectSelect && projectSelect.value) || "",
         scope_id: (scopeSelect && scopeSelect.value) || "",
@@ -1110,6 +1179,16 @@
         // 使用者确认的原始事实（服务端只用于审计记录，不参与任何判定）。
         authorization_confirmed: Boolean(consent && consent.checked),
       };
+      // 操作者标识（Phase 3「操作者记录」）：留空就不加这个键，由服务端
+      // 退化成缺省标识 —— 传空串只是绕一圈回到同一个结论，还会让「用户没填」
+      // 与「用户填了空」在审计里长得一模一样。
+      var operatorName = operator && String(operator.value || "").trim();
+      if (operatorName) payload.operator = operatorName;
+      // 限速 / 超时：只在真的填了数字时才带上（见 collectLimits 的说明）。
+      var limits = collectLimits();
+      Object.keys(limits).forEach(function (key) {
+        payload[key] = limits[key];
+      });
       if (ACTIVE_STRATEGY === "custom") payload.tools = selectedCustomTools();
       if ($("job-mock") && $("job-mock").checked) payload.mode = "mock";
 

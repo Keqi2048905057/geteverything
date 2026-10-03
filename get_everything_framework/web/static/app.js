@@ -254,6 +254,29 @@
       ["结束", job.finished_at || "—"],
       ["worker", job.worker_id || "—"],
     ];
+    // 审计上下文（下一阶段规划方案第 14 节 Phase 3）：这几项**不是** jobs 表的列，
+    // 而是创建时写进 job.created 事件的事实，服务端读回来放在详情里。
+    // 它们不随任务执行变化，因此不进 jobSignature —— 进了只会让每轮轮询都重建 DOM。
+    if (job.operator) {
+      pairs.push(["操作者", job.operator]);
+    }
+    if (job.strategy) {
+      pairs.push(["扫描策略", job.strategy]);
+    }
+    if (job.authorization && job.authorization.confirmed !== null && job.authorization.confirmed !== undefined) {
+      pairs.push(["授权确认", job.authorization.confirmed ? "已确认（使用者确认，不是安全边界）" : "未确认"]);
+    }
+    var limits = job.limits || {};
+    var limitParts = [];
+    if (limits.rate_limit !== null && limits.rate_limit !== undefined) {
+      limitParts.push("每秒请求上限 " + limits.rate_limit);
+    }
+    if (limits.timeout_seconds !== null && limits.timeout_seconds !== undefined) {
+      limitParts.push("单步超时 " + limits.timeout_seconds + " 秒");
+    }
+    if (limitParts.length) {
+      pairs.push(["本次收紧", limitParts.join(" · ")]);
+    }
     // 退避中的任务也是 queued，光看状态会以为「马上就会跑」。把窗口显示出来，
     // 用户才能区分「排队中」与「在等退避」。
     if (job.next_attempt_at) {
@@ -268,6 +291,12 @@
     var targets = (job.targets || []).join(", ");
     var tools = (job.tools || []).join(", ");
     body.appendChild(el("p", "hint", "目标: " + targets + " · 工具: " + tools));
+
+    // 授权依据（Phase 3「授权备注」）：显示的是**创建当时**的快照，
+    // 项目上的授权说明后来被改，这里仍然是当时那一份 —— 这正是快照的意义。
+    if (job.authorization && job.authorization.note) {
+      body.appendChild(el("p", "hint", "授权依据: " + job.authorization.note));
+    }
 
     if (!job.steps || !job.steps.length) {
       body.appendChild(el("p", "hint", "尚无步骤记录。"));

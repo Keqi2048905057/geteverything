@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ **Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）**（2026-10-03）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）**（2026-10-03）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -642,7 +642,8 @@ get_everything_framework/
 │   ├── observability.py      P1 §19：**唯一日志出口**——一行一个 JSON 事件 + 四个关联 ID（request_id/job_id/step_id/worker_id，contextvars 绑定）+ 脱敏与容器上限
 │   ├── application.py        P0-6 阶段一：**Application Service 层**——create_scan_job() 是创建扫描任务的唯一编排入口（解析目标 → 查重 → 限流 → Policy → 模式 → 落库 → 审计 → 结构化日志），HTTP 视图 / 首页表单 / 以后的 Agent 共用
 │   ├── findings.py           Phase 4：任务结果**派生层**（纯函数）——把 assets + observations 整理成「发现资产 / 服务 / 技术栈 / 风险提示」四段；不碰 sqlite / Flask / 网络（见 §9.24）
-│   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复
+│   ├── job_limits.py         规划方案 Phase 3：单任务的**限速 / 超时**（`job_limits`）——**只能收紧**（`min` 合并）、越界 400 不静默夹边界、上下界每次读活配置；不是安全闸门（见 §9.26）
+│   └── jobs.py               job 数据层：状态机、步骤快照、认领/租约/cancel/retry/恢复 + `*_of_job()` 从 `job.created` 事件读回审计上下文（pace / operator / strategy / authorization / limits）
 ├── scripts/                  ← 运维脚本（不在包里，靠 sys.path 前插项目根自举）
 │   ├── run_local.ps1         一键拉起 Web + worker（退出时收尾）
 │   ├── migrate_legacy_results.py  P1 §12：旧库 → 新库迁移，**默认 dry-run**，`--apply` 才写
@@ -705,8 +706,8 @@ get_everything_framework/
 | GET | `/api/projects` | `api/projects.py` | **需管理员** | 同上；项目列表（含 `scope_ids` / `scope_count`） |
 | GET | `/api/projects/{id}` | `api/projects.py` | **需管理员** | 同上；不存在 → 404 `not_found` |
 | POST | `/api/projects/{id}/scopes` | `api/projects.py` | **需管理员** | 同上；把**已存在**的 Scope 关联进项目（201，幂等）。**不创建 Scope** —— 那仍然只有 `POST /api/scopes` |
-| POST | `/api/public-jobs` | `api/public_scan.py` | **需管理员** | 同上；**202 + `queued`**。授权公网测试的唯一任务入口，内部转交 `core.application.create_authorized_public_job` |
-| GET | `/api/scan-center` | `api/public_scan.py` | **需管理员** | 同上；页面元数据：`projects` / `strategies` / `tools` / `restricted_tools` / `internet_allowed_tools`。**不下发任何目标清单** |
+| POST | `/api/public-jobs` | `api/public_scan.py` | **需管理员** | 同上；**202 + `queued`**。授权公网测试的唯一任务入口，内部转交 `core.application.create_authorized_public_job`。**规划方案 Phase 3 起**接受 `operator` / `authorization_confirmed` / `rate_limit` / `timeout_seconds`，并在响应里回 `operator` / `authorization_confirmed` / `limits`（见 §9.26） |
+| GET | `/api/scan-center` | `api/public_scan.py` | **需管理员** | 同上；页面元数据：`projects` / `strategies` / `paces` / `tools` / `tool_groups` / `restricted_tools` / `limits` / `internet_allowed_tools`。**不下发任何目标清单**；`limits` 是限速/超时输入框的唯一事实源（见 §9.26.4） |
 
 ### 9.3 双库架构（**最容易踩的坑**）
 
@@ -2068,7 +2069,7 @@ CI runner 上本来就没有 `.env`、也没有那 17 个 Go 工具，warn（退
 #### 9.21.1 路由覆盖：41 条方法绑定，40 条被真实走到
 
 > **口径快照说明**：本节是 M7 当时的实测（绑定 41）。后续里程碑新增了路由，
-> 最新的覆盖口径见 §9.23.8 与 `docs/TEST_REPORT.md` §8 ——
+> 最新的覆盖口径见 §9.26.7 与 `docs/TEST_REPORT.md` §10 ——
 > 结论（**只有 `GET /api/tool/<tool_name>/results` 一条从未被走到**）在各轮中一直成立。
 
 做法：包装 `flask.Flask.full_dispatch_request` 跑一遍全量测试，收集实际命中的
@@ -2400,7 +2401,7 @@ normal 常规 —— 完全沿用工具自身配置，不额外等待（= 引入
 - `GEF_PACE_LIGHT_STEP_DELAY_SEC` 是**运维级**旋钮，不是策略模板的一部分：
   它允许把间隔调大，但**调不小**（`light` 恒 ≥ 0，`normal` 恒 = 0）。
 - 本文件里凡写死「47 / 49」这类路由计数的段落，**都是当时的口径快照**；
-  最新的实测值见 §9.23.8。
+  最新的实测值见 §9.26.7。
 
 ### 9.24 Phase 4：结果体验 —— 从 Job 导向结果
 
@@ -2597,4 +2598,150 @@ WHERE o.job_id = ?
 - **Agent 边界未动**（方案第 12 节）：`agent/action.py` 仍直接调 `tool_runner.run_tools`，
   没有走 Job Service。本轮的参数标准化**没有**放宽它的能力（工具名仍受 registry 校验），
   但「Agent 不拥有最终执行权」这条目前只对 Web 入口成立 —— 见 P0-6 阶段二。
+
+### 9.26 下一阶段规划方案 Phase 3：公网授权测试完善（操作者 / 授权备注 / 策略 / 限速 / 超时）
+
+依据：同一份工作单第 14 节 Phase 3（`6GetEverything-下一阶段规划方案.md:428-436`）。
+五项 = **操作者记录 / 授权备注 / 扫描策略 / 限速配置 / 超时配置**。
+
+#### 9.26.1 一句话：五项全部走「事件 detail」，**零 DDL**
+
+这是本节最该先记住的一条。五个字段**都没有**加成 `jobs` 表的列：
+
+| 字段 | 落点 | 读回函数 |
+|---|---|---|
+| `operator` | `job.created` detail + 审计 detail + 结构化日志 | `core/jobs.py:operator_of_job()` |
+| `project_id` | 同上（仅公网入口） | `project_id_of_job()` |
+| `strategy` | 同上（仅公网入口） | `strategy_of_job()` |
+| `authorization_note` / `authorization_confirmed` | 同上（仅公网入口） | `authorization_of_job()` |
+| `rate_limit` / `timeout_seconds` | 同上 | `limits_of_job()` → `core.job_limits` |
+
+理由与 §9.23.3 的 `pace` **完全相同**（读那一节）：加列属于 DB 结构变更
+（`DECISIONS §1 E` 限纯增量，§2 把「需要改动数据库结构」挡回预授权流程），
+而事件 detail 这条路已经被 `pace` 证明可行。差别只有一处：`pace` 是**一个**
+读函数，这里是**一族**，因此抽出了 `created_detail_of_job()` 作为唯一取数点 ——
+「某个键读不到时怎么办」只在那一个函数里回答一次。
+
+**反向守卫**：`test_phase3_context_does_not_add_columns_to_jobs` 直接读
+`PRAGMA table_info(jobs)`，断言这六个列名**不存在**。哪天有人图省事加成列，
+这条会红，而那时必须先去走 §1 的预授权流程。
+
+> 拼 detail 的地方只有一处：`core/jobs.py:_created_detail()`，并且在
+> `hit_id is None` 分支内 —— 幂等命中时**不会**写第二条 `job.created`
+> （`test_reused_creation_writes_no_extra_created_event` 仍锁着这一点）。
+> 调用链上任何一层自行往 detail 里塞键都会造成「同一份事实两种形状」。
+
+#### 9.26.2 `authorization_confirmed` 刻意**不是**闸门（本节的中心判断）
+
+页面上那个「我确认该目标属于授权范围」复选框，服务端**如实记录、不参与判定**。
+理由一句话：**一个可被脚本置真的 JSON 布尔值不构成安全边界。**
+
+把它当闸门会制造一种更糟的状态 ——「勾了就等于放行」的错觉。授权本来就由
+三道各自独立的闸门判定（Scope 命中 / `Scope.active_scan` / `GEF_ALLOW_REAL_SCAN`），
+再叠一个自述布尔值只会让人以为「安全是靠这个勾选框保证的」。
+
+用例把两种取值都跑通：`test_authorization_confirmation_is_recorded_but_is_not_a_gate`
+断言 `false` / `true` / 不给（→ `null`）**都能创建任务**。
+页面上也明写「**不是安全边界**」，与 `scan_center.html` 的文案同源。
+
+> 这属于**需要用户确认的语义选择**，已按无人值守规则登记在
+> `docs/DECISIONS.md` §3.8 第 2 条：要把它改成闸门是一次**新增**判定，需明确授权。
+
+#### 9.26.3 `core/job_limits.py`：只能收紧，且报错必须指到具体字段
+
+| 机制 | 位置 | 关键不变量 |
+|---|---|---|
+| 严格解析 | `normalize_rate_limit()` / `normalize_timeout_seconds()` | `None` / 空串 = 不指定；其余非法 → `ValueError`；**`bool` 必须拒**（`True` 是 `int` 子类，放进来就是 1 请求/秒） |
+| 宽松读回 | `coerce_*()` / `limits_of_detail()` | 读库里的历史脏值退化成「没指定」，而不是让 worker 停摆 |
+| 上下界 | `RATE_LIMIT_MAX = 100`、`timeout_seconds_max()` **每次调用**读 `SCAN_LIMITS["process_timeout"]` | 上界必须低于工具自身默认速率（subfinder 默认 150），否则「只能收紧」是空话；超时上界刻意不固化，否则 `GEF_PROCESS_TIMEOUT` 那条路径失效 |
+| 合并 | `apply_to_runner(runner, limits)` 用 **`min`** | 低频档已写下的 `httpx -rl 10` 不会被请求里的 `rate_limit=50` 顶回去 |
+| 形状 | `to_dict()`（恒两键）vs `to_detail()`（只写实际指定的） | 前者是接口出参（前端按「键总在」取值），后者是历史事实（没指定就不写 `null`） |
+| 注入点 | `jobs/executor.py:_execute_real_step()`，在 `pace` **之后** | 顺序不影响结果（两者都是「更保守者胜」），但读起来与页面呈现顺序一致 |
+
+**一个实测出来的缺陷（值得单独记）**：`_as_int()` 原先的报错文案是裸的
+「必须是整数」，于是 `core/application.py` 只能用 `in` 猜字段 ——
+实测后果是 `timeout_seconds="abc"` 被报成 `details.field = "rate_limit"`，
+使用者盯着一个自己没填过的框找错。现在 `_as_int(value, field)` 把字段名写进文案，
+`core.application` 按文案定位；这条不变量有参数化用例锁着
+（`test_format_errors_name_the_offending_field`）。
+
+#### 9.26.4 前端：限速输入框由服务端元数据**生成**
+
+`GET /api/scan-center` 下发 `limits` = `describe_limits()` 的输出
+（每项含 `field` / `min` / `max` / `label` / `hint`）。
+`web/static/scan_center.js:renderLimits()` 遍历**服务端给的键**动态生成输入框：
+
+- 字段名取自 `spec.field`（写进 `data-limit-field`），提交时按它拼请求键；
+- 源码守卫禁止 `"rate_limit"` / `"timeout_seconds"` 以字符串字面量出现在 JS **代码**里
+  （注释可以 —— 那是设计说明）。与工具清单、分组、节奏同一口径；
+- **留空 = 不加这个键**，而不是传 `0` 或 `null`：服务端把「没指定」与「指定了非法值」
+  分得很开，传 `0` 会被判越界 —— 而用户什么都没填；
+- 元数据缺席时**不渲染**输入框：宁可不给这个能力，也不给一个范围写错的框。
+
+`web/static/app.js:renderDetail()` 新增四行元数据（操作者 / 扫描策略 / 授权确认 /
+本次收紧）与一行「授权依据」。它们**刻意不进 `jobSignature()`** ——
+这些值不随执行变化，进了只会让每 3 秒一轮的轮询无谓重建 DOM、把用户展开的
+原始证据冲掉（`jobSignature` 的存在理由见 §9.24.5）。
+
+#### 9.26.5 与既有守卫的相容性（改之前必须知道）
+
+Phase 3 给两个既有响应体加字段，踩点集中在**形状断言**上：
+
+| 断言 | 为什么不能破 | 处理 |
+|---|---|---|
+| `test_application_service.py:117` `set(api_body) == set(submission.to_dict())` | `JobSubmission.to_dict()` 与 `POST /api/jobs` 必须同形状 | `to_dict()` **一行没改**（仍是 9 键）。新增上下文只进 `AuthorizedJobSubmission.to_dict()`（公网入口那条链） |
+| `test_public_scan_mode.py:637` `"project_id" not in resp.get_json()` | 老入口的响应形状是既有契约 | 同上；`POST /api/jobs` 仍能收 `operator` / `rate_limit` / `timeout_seconds`，但**不回显**它们 |
+| `test_normal_pace_leaves_the_runner_config_untouched` | 缺省路径不得碰 `runner.config` | `JobLimits.is_empty` → `apply_to_runner` 在碰 config **之前**返回 `False` |
+| `test_observability_chain.py` 的日志反向守卫 | 结构化日志不得出现目标清单 / 长文本 | 只把 `operator=`（一个标识字符串）加进日志；授权说明与限速值**不进**日志（前者可能是敏感凭据描述，后者在审计表里可查） |
+
+#### 9.26.6 本节的已知边界
+
+- **`operator` 是「自称」，不是已验证身份**：本仓库认证是一个布尔态的本地管理员
+  Token（`session[SESSION_KEY] = True`），`core/audit.py:record()` 的 `actor` 仍硬编码
+  `local-admin`。真正的多用户身份属方案第 15 节「多租户 / SSO」暂缓项，
+  本轮**没有**偷偷做一半。这一点也登记在 `docs/DECISIONS.md` §3.8 第 3 条。
+- **`RATE_LIMIT_MAX = 100` 是一个判断，不是推导**：取它是因为上界要低于工具的默认
+  速率（否则放松），而低频档实际只用 3 / 10。登记在 §3.8 第 1 条等用户确认。
+- **外发速率仍未被计量**：测到的是「命令行参数正确」（`-rl` / `process_timeout` 落进
+  config）与「合并方向正确」（`min`），真实工具对参数的解释由工具自身负责 ——
+  与 §9.23.7 同一条边界。
+- **`timeout_seconds` 的上界随 `GEF_PROCESS_TIMEOUT` 变**：页面上显示的上界因此是活的。
+  这是刻意的（见 §9.26.3），但意味着「界面写 120、后端只收 30」这类漂移**不会**发生，
+  而「换台机器上界变了」会。
+- **方案第 10 节的扫描模式（信息收集 / 基础检测 / 深度测试）仍未引入**：
+  当前 Profile 仍只有「模板 + 节奏」两维，限速/超时是**数值维度**而非第三档模式。
+- **`nuclei` 仍未接入**（`internet_allowed=False`），公网白名单**仍是
+  `subfinder` + `httpx`**。方案第 8 节的工具表把 `nuclei` 列在「漏洞检测」栏，
+  那是示意；本轮没有因 Phase 3 放开任何一条。登记在 §3.8 第 5 条。
+
+#### 9.26.7 本轮实测（口径快照）
+
+```text
+用例总数          1290 collected / 1288 passed / 2 skipped / 0 failures
+mypy              72 source files（新增 core/job_limits.py，71 → 72）
+node --check      web/static/scan_center.js + app.js 均通过
+app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
+被用例命中        49 / 50 —— 唯一没被走到的是 GET /api/tool/<tool_name>/results
+```
+
+路由覆盖用与 §3.1 / §6.4 / §9.2 **同一算法**的一次性探针重跑（包装
+`flask.Flask.full_dispatch_request` 跑全量后与 `app.url_map` 求差）：
+
+```text
+declared: 50
+hit:      49
+== never hit ==
+    GET /api/tool/<tool_name>/results
+```
+
+**结论未变**：本轮**没有新增路由**，因此「唯一没被任何用例走到的是
+`GET /api/tool/<tool_name>/results`」这句在**第四轮之后依然成立**。
+
+**+101 的构成（逐文件实测，见 `docs/TEST_REPORT.md` §10.1）**：
+`tests/unit/test_job_limits.py`（新）59 + `test_jobs_store.py` 72 → 90（+18）
++ `test_public_scan_mode.py` 89 → 113（+24）。
+
+> 差额是用 `git worktree add --detach <tmp> ce0ef22` 检出规划方案 Phase 2 后
+> **两个工作树各跑一遍 `--collect-only -q` 求差**得到的，不是推算；
+> 且**没有任何一条既有断言被放松**。
 

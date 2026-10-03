@@ -1,9 +1,9 @@
 # TEST_REPORT.md — 测试报告（M7 交付项）
 
 > ⚠️ **基线已前移：本文件 §0–§5 描述的是 M7 那一轮（901 条用例）的历史快照，
-> 未逐处改写以免抹掉当时的实测记录。当前基线是 1189 条，本轮增量见文末
-> [§9 下一阶段规划方案 Phase 2：Tool Registry](#9-下一阶段规划方案-phase-2tool-registry1189)。**
-> 两处数字不一致时，以 §9 与 `PROJECT_STATE.md` 的「最近一次验证」为准。
+> 未逐处改写以免抹掉当时的实测记录。当前基线是 1290 条，本轮增量见文末
+> [§10 下一阶段规划方案 Phase 3：公网授权测试完善](#10-下一阶段规划方案-phase-3公网授权测试完善1290)。**
+> 两处数字不一致时，以 §10 与 `PROJECT_STATE.md` 的「最近一次验证」为准。
 
 > **这份报告回答三件事**：**测了什么**、**没测什么**、**为什么没测**。
 > §0 是方案第 23 节规定的里程碑输出；§1–§2 是可复现的事实；
@@ -1015,3 +1015,164 @@ git diff --check                                                # 退出码 0
 前者现在是 400，后者只剩 CLI 一条可达路径。
 配套的注册模型让「工具说明与分组」有了唯一供源 —— 前端一个工具名、一个栏位名都不写死，
 而后端**一条闸门都没放松**（公网白名单仍是 `subfinder` + `httpx`）。
+
+---
+
+## 10. 下一阶段规划方案 Phase 3：公网授权测试完善（1290）
+
+> 本轮依据同一份工作单第 14 节 Phase 3（`6GetEverything-下一阶段规划方案.md:428-436`）：
+> **操作者记录 / 授权备注 / 扫描策略 / 限速配置 / 超时配置**。
+> §1～§9 的实测记录不改写。
+
+### 10.1 实测结果
+
+```powershell
+cd get_everything_framework
+$env:PYTHONIOENCODING="utf-8"; python -m pytest -o addopts="" -q
+                                    # 1290 collected / 1288 passed, 2 skipped, 0 failures / 0 errors
+ruff check .                        # All checks passed!
+mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
+node --check web/static/scan_center.js ; node --check web/static/app.js   # 两个都通过
+```
+
+| 项 | Phase 2（`ce0ef22`） | 本轮 |
+|---|---|---|
+| 用例总数（`--collect-only -q` 汇总） | 1189 | **1290**（+101） |
+| `test_*.py` 文件 | 39 | **40**（新增 `tests/unit/test_job_limits.py`） |
+| mypy 源文件 | 71 | **72**（新增 `core/job_limits.py`） |
+| `app.url_map` 规则 / 方法绑定 / `/api/*` | 48 / 50 / 42 | **48 / 50 / 42**（**未新增路由**，只给既有接口加字段） |
+| 被用例真实命中的方法绑定 | 49 / 50 | **49 / 50**（探针重跑，见 10.2） |
+
+**+101 的构成（逐文件，可复算）**：
+
+| 文件 | Phase 2 收集 | 本轮收集 | 增量 |
+|---|---|---|---|
+| `tests/unit/test_job_limits.py`（新） | — | 59 | **+59** |
+| `tests/unit/test_jobs_store.py` | 72 | 90 | **+18** |
+| `tests/integration/test_public_scan_mode.py` | 89 | 113 | **+24** |
+| **合计** | | | **+101** |
+
+> 校验：`1189 + 101 = 1290`。这三行同样是**逐文件实测**出来的，不是推算 ——
+> `git worktree add --detach <tmp> ce0ef22` 检出规划方案 Phase 2，
+> 两个工作树各跑一遍 `--collect-only -q` 后逐文件求差，差额**恰好只有这三行**。
+> 同时确认**没有任何一条既有断言被放松**：`test_normal_pace_leaves_the_runner_config_untouched`、
+> `test_public_job_request_cannot_relax_the_template_pace`、`test_legacy_job_api_still_works`、
+> `test_service_delegates_to_single_job_entry` 等原样保留并通过。
+
+### 10.2 路由覆盖重跑：结论未变（连续第四轮）
+
+用与 §3.1 / §6.4 / §8.2 / §9.2 相同的一次性探针（包装 `flask.Flask.full_dispatch_request` 跑全量）：
+
+```text
+declared: 50
+hit:      49
+== never hit ==
+    GET /api/tool/<tool_name>/results
+```
+
+本轮**没有新增路由**，因此「唯一没被任何用例走到的是 `GET /api/tool/<tool_name>/results`」
+这句在**第四轮之后依然成立**。
+
+### 10.3 本轮补了**第四次**一次性 DOM 桩人工核对（这次真跑通了）
+
+项目没有浏览器测试，源码守卫只能证明「字符串在文件里」。本轮在 Node 里用最小
+DOM 桩加载**真实的** `web/static/scan_center.js` 与 `app.js`，喂服务端**真实形状**的
+`/api/scan-center`（含本轮新增的 `limits`），走真实渲染路径。实测输出：
+
+```text
+① 由服务端 limits 生成的输入框: 2 个
+   field=rate_limit        min=1 max=100 name=rate_limit
+   field=timeout_seconds   min=1 max=120 name=timeout_seconds
+   （前端一个字段名、一个上下界都没写死 —— 全部来自 describe_limits()）
+
+② 留空提交的请求体键:
+   ["authorization_confirmed","pace","project_id","scope_id","strategy","targets"]
+   含 rate_limit? false / 含 timeout_seconds? false / 含 operator? false
+   ← 留空 = **不加键**，而不是传 0 或 null
+
+③ 填好后的请求体: {"operator":"keqi","rate_limit":"3","timeout_seconds":"20"}
+   ← 键名取自 input[data-limit-field]（= 服务端 spec.field），前端不参与改名
+
+④ app.js renderDetail 真实渲染出的元数据行（Phase 3 新增的五行加粗）：
+   状态 / 模式 / 进度 / 尝试次数 / 错误码 / 错误说明 / 创建 / 开始 / 结束 / worker
+   **操作者 keqi**
+   **扫描策略 asset_discovery**
+   **授权确认 已确认（使用者确认，不是安全边界）**
+   **本次收紧 每秒请求上限 3 · 单步超时 20 秒**
+   目标: www.peizheng.edu.cn · 工具: subfinder, httpx
+   **授权依据: 校内书面授权（2026）**
+   尚无步骤记录。
+```
+
+**探针自己又踩了三个坑，全部记下来（与前几轮同因：探针会撒谎）**：
+
+| 现象 | 真正原因 | 教训 |
+|---|---|---|
+| 第一次跑：`form.onsubmit` 是 `undefined`，一次请求都没发出 | 真实代码用的是 `addEventListener("submit", …)`，桩里没实现 `addEventListener` | 桩缺一个方法，症状看起来像「被测代码不工作」 |
+| 第二次跑：`window.location` undefined，脚本直接抛 | `scan_center.js` 创建成功后跳 `/scan-center?job_id=…` | 桩要把**全部**被用到的宿主对象补齐，缺一个就是假失败 |
+| 第三次跑：输入框 0 个、`strategy-list` 空 | 元素 id 表漏了 `strategy-list`，`DOMContentLoaded` 里 `if (!$("strategy-list")) return;` 提前退出 | **漏一个 id，整页初始化静默不发生**；而这次输出「0 个输入框」看起来像**真缺陷** |
+
+第三个坑最值得记：如果只跑一次就下结论，会写成「前端没生成输入框」——
+而真实缺陷一个都没有。判别方法是**把初始化链的中间产物也打出来**
+（`strategy-list` 子节点数、`tool-list` 子节点数、`check-summary` 文案），
+看到 `3 / 3` 才能确认元数据链真的跑完了。
+
+`app.js` 的 `renderDetail` 是 IIFE 内部函数、只对外暴露三张文案表，因此探针在
+**内存里**给源码插一句把它挂出来（不改仓库文件），并在找不到挂载点时以退出码 2 明确失败 ——
+避免「探针静默失效、结果看起来像通过」。
+
+### 10.4 本轮最重要的一条：**零 DDL** 与它的反向守卫
+
+五项全部写进 `job.created` 事件的 detail，**没有**给 `jobs` 表加一列：
+
+```sql
+-- 有测试直接读它，断言这六个列名不存在
+PRAGMA table_info(jobs)
+```
+
+`test_phase3_context_does_not_add_columns_to_jobs` 是**反向**守卫：它证明的不是
+「功能能用」，而是「结构没被动过」。这类守卫比正向断言更重要 ——
+功能测试红了会有人看，结构偷偷变了没人看得出来，而它正是
+[`DECISIONS.md`](DECISIONS.md) §1 E「只允许纯增量」的边界。
+
+### 10.5 限速 / 超时：两条不变量各自有反向用例
+
+1. **只能收紧**：`apply_to_runner` 用 `min` 合并。用例把低频档已写下的 `httpx -rl 10`
+   摆好，再传 `rate_limit=50`，断言**最终仍是 10**；反向（传 3、已有 10）则断言变成 3。
+2. **缺省路径一根手指都不碰**：`test_normal_pace_leaves_the_runner_config_untouched`
+   仍断言 `seen == [{"threads": 50, "timeout": 10}]` 且 `"rate_limit" not in seen[0]` ——
+   保证靠的是 `JobLimits.is_empty` 在碰 `config` **之前**就返回 `False`。
+
+另有一条**实测出来的**缺陷进了回归：`_as_int()` 原先的报错文案没有字段名，
+`core/application.py` 只能猜，于是 `timeout_seconds="abc"` 被报成
+`details.field = "rate_limit"`。现在字段名写进文案，并有 6 条参数化用例锁住
+（`test_format_errors_name_the_offending_field`）。这就是「错误消息要能被机器读」的实例。
+
+### 10.6 `authorization_confirmed` 为什么不是闸门（本轮的中心判断）
+
+它是页面上那个复选框，服务端**如实记录、不参与判定**：`false` / `true` / 不给（→ `null`）
+三种取值**都能创建任务**（`test_authorization_confirmation_is_recorded_but_is_not_a_gate`）。
+
+一个可被脚本置真的 JSON 布尔值不构成安全边界。把它当闸门只会制造
+「勾了就等于放行」的错觉 —— 授权仍由 Scope 命中 / `Scope.active_scan` /
+`GEF_ALLOW_REAL_SCAN` 三道闸门判定。这属于**需要用户确认的语义选择**，
+已按无人值守规则登记在 `docs/DECISIONS.md` §3.8 第 2 条。
+
+### 10.7 本轮新增的缺口
+
+| 未测项 | 现状 | 风险 |
+|---|---|---|
+| 限速的**实际外发速率** | 只测到「命令行参数正确」（`rate_limit` / `process_timeout` 落进 config）与「合并方向正确」（`min`）；真实工具对参数的解释由工具自身负责 | 低（与 §7.5 / §9.7 同一条边界，非本轮引入） |
+| `RATE_LIMIT_MAX = 100` 的取值 | 是判断而非推导（依据：上界须低于工具默认速率 150，而低频档实际只用 3 / 10） | 低：值本身有参数化边界用例；**判断依据需用户确认**（§3.8 第 1 条） |
+| `operator` 的**身份真实性** | 只能记自称；本仓库认证是布尔态本地 Token，`audit.actor` 仍硬编码 `local-admin` | 中：属「多租户 / SSO」范畴（方案第 15 节暂缓），本轮**没有**偷偷做一半（§3.8 第 3 条） |
+| `timeout_seconds` 上界随环境变量变 | 上界每次读 `SCAN_LIMITS["process_timeout"]`（本机 120） | 低：刻意的（否则 `GEF_PROCESS_TIMEOUT` 失效）；意味着换机器上界会变 |
+| 浏览器端渲染 | 第四次 DOM 桩核对；仍无浏览器测试 | 低：本次桩跑通了完整渲染路径，逐行核对了元数据输出 |
+| 扫描模式（方案第 10 节） | **仍未实现**（信息收集 / 基础检测 / 深度测试） | 低：限速/超时是**数值维度**而非第三档模式，需先与白名单口径对齐 |
+
+### 10.8 一句话结论
+
+本轮把「这次任务是谁、依据什么授权、用哪个模板、要了多快」四件事**全部落到任务本身**，
+并且**一条闸门都没放松、一个列都没加**：
+记录类字段只记录，限速类字段只收紧，授权确认**刻意**不成为安全边界。
+新增的 101 条用例里有 6 条是**反向**守卫（结构没变、缺省路径没碰 config、
+不用授权确认也能建任务、越界不被静默夹边界）。

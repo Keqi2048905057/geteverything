@@ -681,3 +681,179 @@ def test_get_job_or_raise_distinguishes_missing_job(scope_id):
     assert jobs_store.get_job_or_raise(job["id"])["id"] == job["id"]
     with pytest.raises(ValueError, match="任务不存在"):
         jobs_store.get_job_or_raise("job_missing")
+
+
+# ── Phase 3：创建时的策略上下文（操作者 / 授权备注 / 策略 / 限速 / 超时）──
+#
+# 这一节锁的是「这些字段**不是** jobs 表的列，而是 job.created 事件 detail 里的
+# 事实快照」这条设计（零 schema 变更，见 core/jobs.py:_created_detail）。
+# 因此断言分两半：事件 detail 里确实写了，读函数确实读得回来。
+
+
+def _make_phase3_job(scope_id, **overrides):
+    from core.job_limits import JobLimits
+
+    payload = {
+        "operator": "张三",
+        "project_id": "proj_phase3",
+        "strategy": "asset_discovery",
+        "authorization_note": "2026-10-02 校方信息中心书面授权",
+        "authorization_confirmed": True,
+        "limits": JobLimits(rate_limit=2, timeout_seconds=30),
+    }
+    payload.update(overrides)
+    return _make_job(scope_id, **payload)
+
+
+def test_created_detail_carries_the_phase3_context(scope_id):
+    """五个字段必须真的写进 ``job.created`` 的 detail，且键名与读函数一致。"""
+    job = _make_phase3_job(scope_id)
+
+    detail = jobs_store.created_detail_of_job(job["id"])
+    assert detail[jobs_store.EVENT_KEY_OPERATOR] == "张三"
+    assert detail[jobs_store.EVENT_KEY_PROJECT_ID] == "proj_phase3"
+    assert detail[jobs_store.EVENT_KEY_STRATEGY] == "asset_discovery"
+    assert detail[jobs_store.EVENT_KEY_AUTHORIZATION_NOTE] == "2026-10-02 校方信息中心书面授权"
+    assert detail[jobs_store.EVENT_KEY_AUTHORIZATION_CONFIRMED] is True
+    assert detail["rate_limit"] == 2
+    assert detail["timeout_seconds"] == 30
+
+    # 事件仍然**只有一条** job.created —— 多写一条会让「读第一条」的语义变脆。
+    created = [
+        event for event in jobs_store.list_events(job["id"]) if event["event_type"] == jobs_store.EVENT_JOB_CREATED
+    ]
+    assert len(created) == 1
+
+
+def test_phase3_readers_read_back_what_was_written(scope_id):
+    job = _make_phase3_job(scope_id)
+
+    assert jobs_store.operator_of_job(job["id"]) == "张三"
+    assert jobs_store.project_id_of_job(job["id"]) == "proj_phase3"
+    assert jobs_store.strategy_of_job(job["id"]) == "asset_discovery"
+    assert jobs_store.authorization_of_job(job["id"]) == {
+        "note": "2026-10-02 校方信息中心书面授权",
+        "confirmed": True,
+    }
+    limits = jobs_store.limits_of_job(job["id"])
+    assert limits.rate_limit == 2
+    assert limits.timeout_seconds == 30
+
+
+def test_unspecified_limits_are_absent_from_the_created_detail(scope_id):
+    """没指定限速/超时就不写这两个键（``to_detail`` 与 ``to_dict`` 刻意不同）。
+
+    detail 是历史事实：没指定却写 ``null``，会让「这次到底有没有额外收紧」
+    多一层解读；而接口出参要固定形状，所以两个方法必须分开。
+    """
+    job = _make_job(scope_id)
+
+    detail = jobs_store.created_detail_of_job(job["id"])
+    assert "rate_limit" not in detail
+    assert "timeout_seconds" not in detail
+    # 但**读函数**给出的仍是固定形状（前端与调用方按「两个键总在」取值）。
+    assert jobs_store.limits_of_job(job["id"]).to_dict() == {
+        "rate_limit": None,
+        "timeout_seconds": None,
+    }
+
+
+def test_phase3_readers_fall_back_for_legacy_jobs(scope_id):
+    """老任务（没有这些字段）读回缺省值，而不是抛异常把 worker 弄停。
+
+    缺省值刻意与「新任务但没给操作者」一致：页面上不该出现第三种状态。
+    """
+    job = _make_job(scope_id)
+
+    assert jobs_store.operator_of_job(job["id"]) == jobs_store.DEFAULT_OPERATOR
+    assert jobs_store.strategy_of_job(job["id"]) is None
+    assert jobs_store.project_id_of_job(job["id"]) is None
+    assert jobs_store.authorization_of_job(job["id"]) == {"note": None, "confirmed": None}
+    assert jobs_store.limits_of_job(job["id"]).is_empty is True
+
+
+def test_phase3_readers_tolerate_a_missing_job(local_db):
+    """任务不存在时也要给缺省值 —— 读函数在详情页与排障脚本里都会被调用。"""
+    assert jobs_store.created_detail_of_job("job_missing") == {}
+    assert jobs_store.operator_of_job("job_missing") == jobs_store.DEFAULT_OPERATOR
+    assert jobs_store.strategy_of_job("job_missing") is None
+    assert jobs_store.limits_of_job("job_missing").is_empty is True
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_normalize_operator_treats_blank_as_the_default(scope_id, blank):
+    """空值退化成缺省标识，**不留空串**：审计里「谁提交的」必须有答案。"""
+    assert jobs_store.normalize_operator(blank) == jobs_store.DEFAULT_OPERATOR
+
+
+@pytest.mark.parametrize("bad", [True, False, ["张三"], {"name": "张三"}, {"张三"}])
+def test_normalize_operator_rejects_non_string_shapes(scope_id, bad):
+    """``True`` 这类「看起来像字符串」的值一律拒绝，避免审计里出现假操作者。"""
+    with pytest.raises(ValueError):
+        jobs_store.normalize_operator(bad)
+
+
+def test_normalize_operator_rejects_overlong_values(scope_id):
+    assert jobs_store.normalize_operator("张" * jobs_store.MAX_OPERATOR_CHARS)
+    with pytest.raises(ValueError, match="最长"):
+        jobs_store.normalize_operator("张" * (jobs_store.MAX_OPERATOR_CHARS + 1))
+
+
+def test_normalize_authorization_note_is_optional_but_bounded(scope_id):
+    """授权说明快照可以为空，但**不得**成为绕过项目字段校验的第二条写入口。"""
+    assert jobs_store.normalize_authorization_note(None) is None
+    assert jobs_store.normalize_authorization_note("   ") is None
+    assert jobs_store.normalize_authorization_note(" 授权原文 ") == "授权原文"
+    with pytest.raises(ValueError):
+        jobs_store.normalize_authorization_note(True)
+    with pytest.raises(ValueError, match="最长"):
+        jobs_store.normalize_authorization_note("x" * (jobs_store.MAX_AUTHORIZATION_NOTE_CHARS + 1))
+
+
+def test_get_job_detail_exposes_the_phase3_context(scope_id):
+    """详情页要能回答「谁、依据什么、按什么策略、跑得多克制」。"""
+    job = _make_phase3_job(scope_id)
+
+    detail = jobs_store.get_job_detail(job["id"])
+    assert detail["operator"] == "张三"
+    assert detail["strategy"] == "asset_discovery"
+    assert detail["project_id"] == "proj_phase3"
+    assert detail["authorization"]["note"] == "2026-10-02 校方信息中心书面授权"
+    assert detail["authorization"]["confirmed"] is True
+    assert detail["limits"] == {"rate_limit": 2, "timeout_seconds": 30}
+
+
+def test_get_job_detail_phase3_context_is_absent_for_legacy_jobs(scope_id):
+    """老任务的详情仍是固定形状，且 ``confirmed`` 为 ``None``（而不是 ``False``）。
+
+    ``None`` 与 ``False`` 必须分得开：前者是「那时还没有这个字段」，
+    后者才是「明确没确认」。混成一个值会让历史数据被读成一次未确认。
+    """
+    job = _make_job(scope_id)
+
+    detail = jobs_store.get_job_detail(job["id"])
+    assert detail["operator"] == jobs_store.DEFAULT_OPERATOR
+    assert detail["strategy"] is None
+    assert detail["project_id"] is None
+    assert detail["authorization"] == {"note": None, "confirmed": None}
+    assert detail["limits"] == {"rate_limit": None, "timeout_seconds": None}
+
+
+def test_phase3_context_does_not_add_columns_to_jobs(scope_id):
+    """零 schema 变更的可执行口径：``jobs`` 表里**没有**这五个字段的列。
+
+    这条是刻意的反向守卫 —— 哪天有人图省事把它们加成列，这里会红，
+    而那时必须先去走 ``docs/DECISIONS.md`` §1 的预授权流程。
+    """
+    import core.db as db
+
+    columns = {row["name"] for row in db.query("PRAGMA table_info(jobs)")}
+    for forbidden in (
+        "operator",
+        "project_id",
+        "strategy",
+        "authorization_note",
+        "rate_limit",
+        "timeout_seconds",
+    ):
+        assert forbidden not in columns, f"jobs 表多出了列 {forbidden}：这属于 DB 结构变更"

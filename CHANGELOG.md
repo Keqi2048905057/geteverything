@@ -1185,12 +1185,86 @@ Scan Profile **不能只等于「换个工具组合」** —— 同一组工具�
 本轮用例全部走 mock，或把 `build_runner` 换成假 runner，目标是保留域 `example.test`
 与 RFC 5737 保留段。
 
+#### Phase 3 — 公网授权测试完善（本轮）
+
+方案第 14 节列的五项：**操作者记录 / 授权备注 / 扫描策略 / 限速配置 / 超时配置**。
+五项**全部**不落成 `jobs` 表的新列 —— 它们写进那条 `job.created` 事件的 detail，
+再由 `*_of_job()` 读回（`pace` 已证明可行的那条路）。**零 DDL、零迁移脚本**，
+并有**反向守卫**测试锁着这件事：`jobs` 表里出现这六个列名就会红。
+
+1. **操作者记录**（`core/jobs.py:normalize_operator`）
+
+   - `POST /api/public-jobs` 与 `POST /api/jobs` 都新增可选字段 `operator`：
+     空值退化为 `local-admin`（**不留空串** —— 审计里「谁提交的」必须有答案），
+     非法形状（`true` / 数组 / 对象）或超长（> 120）→ 400 `details.field="operator"`。
+   - 落三处：`job.created` detail、审计 detail、结构化日志的 `operator=`。
+     方案第 7 节点名的四要素（`operator` · `target` · `timestamp` · `scope_id`）
+     因此齐全 —— 时间戳由 `audit_events.created_at` 提供。
+   - **它是「自称」而不是已验证身份**：本仓库的认证是一个布尔态的本地管理员
+     Token（`session[SESSION_KEY] = True`），`audit.actor` 也硬编码为 `local-admin`。
+     记它的价值在**问责留痕**，不在权限。真正的多用户身份属方案第 15 节
+     「多租户 / SSO」暂缓项，本轮**没有**偷偷做一半。
+
+2. **授权备注**（快照，不是第二份可写字段）
+
+   - 取**项目上那一份授权说明的当前值**写进 `job.created`。项目说明事后被改，
+     这条任务所依据的仍是创建当时的原文。上限 500（与 `core.projects` 一致）——
+     快照**不得**成为绕过项目字段校验的第二条写入口。
+
+3. **扫描策略**
+
+   - 请求/项目解析出的模板 key 一并落到任务上（老入口无模板 → `null`）。
+     只记「跑了哪些工具」不够，还得能回答「用哪个模板跑的」。
+
+4. **限速配置 / 超时配置**（`core/job_limits.py`，新增模块）
+
+   - 请求字段 `rate_limit`（每秒请求上限，`1 ~ 100`）与 `timeout_seconds`
+     （单步超时秒数，`1 ~ SCAN_LIMITS["process_timeout"]`，本机默认 120）。
+   - **唯一硬规则：只能收紧，不能放松。** 合并用 `min` 而不是覆盖，且发生在
+     `pace` **之后** —— 低频档已经压下来的 `httpx -rl 10` 不会被请求里的
+     `rate_limit=50` 顶回去。`timeout_seconds` 映射成 `process_timeout`
+     （`modules/base.py:_timeout_seconds()` 读的键），最后还会与本机上限取一次 `min`。
+   - **越界一律 400，不静默夹到边界**：写了 `100000` 却拿到 `100`，与
+     `core.pace` 里「写了拼错的档位却拿到常规档」是同一种危险错法 ——
+     使用者以为自己已经设好了。`RATE_LIMIT_MAX` 取 100 的理由同上：上界若高于
+     工具自身默认速率（subfinder 默认 150），`rate_limit=1000` 就变成了**放松**限速。
+   - 覆盖写的是 Runner 实例上的 `config` **副本**，不是模块级配置对象本身
+     （原地改会污染同进程内后续所有任务与页面上的工具状态）。
+   - **报错文案必须带字段名**：`core.application` 正是靠文案把 400 定位到
+     `details["field"]`。修之前 `timeout_seconds="abc"` 会被报成 `rate_limit`
+     有问题（`_as_int` 不区分字段）—— 使用者盯着一个自己没填过的框找错。
+     现在这条不变量有单测锁着。
+
+5. **接口与前端**
+
+   - `GET /api/scan-center` 新增 `limits`（可填范围 + 中文说明）。前端据此
+     **动态生成**输入框，不写死字段名与上下界 —— 与工具清单、分组、节奏同一口径；
+     源码守卫禁止 `"rate_limit"` / `"timeout_seconds"` 以字符串字面量出现在 JS 代码里。
+   - 留空 = **不加这个键**，而不是传 `0` 或 `null`：服务端把「没指定」与
+     「指定了非法值」分得很开，传 `0` 会被判越界 —— 而用户什么都没填。
+   - `GET /api/jobs/<id>` 平铺出 `operator` / `strategy` / `project_id` /
+     `authorization` / `limits`；任务详情页显示它们，其中授权确认明写
+     「使用者确认，不是安全边界」。
+   - **`authorization_confirmed` 刻意不做闸门**：一个可被脚本置真的 JSON 布尔值
+     不构成安全边界，把它当闸门只会制造「勾了就等于放行」的错觉。
+     两种取值都能建任务，这条有测试钉住。
+
+**未动**：`scopes` / `jobs` / `assets` / `observations` / `projects` 表结构与数据
+（**零 DDL**）、Scope / Policy 判定逻辑、认证授权、公网工具白名单
+（**仍是 `subfinder` + `httpx`**）、`ScanStrategy` / `STRATEGIES`、Agent、
+`pyproject.toml`、`.env`。**路由总数未变**（48 规则 / 50 绑定 / 42 个 `/api/*`）——
+本轮只给既有接口**加字段**，老入口 `POST /api/jobs` 的响应形状一字未改
+（仍不出现 `project_id` 等公网专属字段）。
+**未引入**任何新依赖、React、Redis。**未对任何真实外部目标发起扫描** ——
+本轮用例全部走 mock，或把 `build_runner` 换成假 runner，目标是保留域 `example.test`
+与 RFC 5737 保留段。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1187 passed, 2 skipped, 0 failures
-$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 71 source files
+$ python -m pytest           # 1288 passed, 2 skipped, 0 failures
+$ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
 ```
@@ -1199,17 +1273,24 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 > 脚本里不写死任何值；缺失时以退出码 2 退出并打印设置方法。
 
 基线演进：公网体验版 `1004` → Phase 1 UI 清理 `1009` → Phase 2 `1036` → Phase 3 `1091`
-→ Phase 4 `1149` → 规划方案 Phase 1 `1159` → **本轮（规划方案 Phase 2）`1189`**。
-数字用逐文件 `--collect-only -q` 汇总 + 本轮全量 `--junitxml` 解析复核（两者一致；
-junit `tests="1189"`，其中 **1187 passed / 2 skipped / 0 errors**）。
-本轮 +30 的构成：`tests/unit/test_tool_parameters.py`（新）17 +
-`tests/unit/test_tool_registry.py` 34 → 41（+7）+
-`tests/integration/test_public_scan_mode.py` 83 → 89（+6）。
-逐文件差额是用 `git worktree add --detach <tmp> 548d196` 把规划方案 Phase 1
-单独检出后**两个工作树各跑一遍 `--collect-only -q` 求差**得到的，差额恰好只有这三行 ——
-不是推算，也没有任何既有用例被删改（**没有一条既有断言被放松**：
-`test_split_str_list_rejects_non_list`、`test_create_scan_job_requires_tools`
-等原样保留并通过）。
+→ Phase 4 `1149` → 规划方案 Phase 1 `1159` → 规划方案 Phase 2 `1189`
+→ **本轮（规划方案 Phase 3）`1290`**。
+
+本轮 +101 的构成（用 `git worktree add --detach <tmp> ce0ef22` 把规划方案 Phase 2
+单独检出后**两个工作树各跑一遍 `--collect-only -q` 求差**得到，不是推算）：
+
+| 文件 | 基线 `ce0ef22` | 本轮 | 差额 |
+|---|---|---|---|
+| `tests/unit/test_job_limits.py` | —（新文件） | 59 | +59 |
+| `tests/unit/test_jobs_store.py` | 72 | 90 | +18 |
+| `tests/integration/test_public_scan_mode.py` | 89 | 113 | +24 |
+| 全量 | **1189** | **1290** | **+101** |
+
+**没有一条既有断言被放松**：`test_normal_pace_leaves_the_runner_config_untouched`
+（常规档不得改写 `config`）、`test_public_job_request_cannot_relax_the_template_pace`
+（请求放松不了模板档）、`test_legacy_job_api_still_works`（旧响应体不含
+`project_id`）、`test_service_delegates_to_single_job_entry`（公网编排必须复用
+`create_scan_job`）等全部原样保留并通过。
 
 测试报告的完整版见 [`docs/TEST_REPORT.md`](docs/TEST_REPORT.md)（测了什么 / 没测什么 / 为什么没测）。
 

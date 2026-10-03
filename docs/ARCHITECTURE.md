@@ -101,25 +101,37 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
    a. require_admin()                      → 无 Session / X-Local-Token → 401 unauthenticated
    b. 交给 core/application.py:create_scan_job()   ← Application Service（唯一编排入口）
         · resolve_targets / _split_list    → targets 显式列表 或 upload_id（受控上传）
+        · resolve_pace(...)                → 非法档位 400（不静默回退；请求放松不了模板档位）
+        · resolve_limits(...)              → 限速/超时越界 400（**只能收紧**，不夹到边界）；
+                                             details["field"] 指到具体那一项
+        · normalize_operator(...)          → 空值退化 local-admin；非法形状/超长 400
         · load_tools(tools)                → 逗号拆分/去重（normalize_tool_names）；不在 RUNNER_REGISTRY 一律 400
                                              **空选择（[]/""/不给）→ 400，绝不回落到 SCAN_CONFIG["enabled_runners"]**
         · 超过 SCAN_LIMITS["max_targets_per_job"]（20）→ 400
         · validate_job_targets(scope_id, ...) → 缺失 400 / Scope 不存在 403 / 任一越界 403（整体拒绝）
         · resolve_mode(mode)               → real 需 GEF_ALLOW_REAL_SCAN=true，否则 403
         · mode == real → scope.require_active_scan()   ← 第二道开关
-        · jobs_store.create_job_with_status() → 落 jobs + 展开 job_steps 快照（BEGIN IMMEDIATE）
+        · jobs_store.create_job_with_status() → 落 jobs + 展开 job_steps 快照（BEGIN IMMEDIATE）；
+                                              pace / operator / project_id / strategy /
+                                              authorization_* / limits **全部写进
+                                              job.created 事件的 detail，不加列**（见 §11 与
+                                              CODEBASE_MAP §9.23.3 / §9.26.1）
         · audit.record(job.created) + observability.log_event(job_created)
    c. 返回 202 {ok, job_id, status:"queued", mode, total_steps, scope_id, reused}
-   ※ 到这里为止**从未执行任何工具**
+      ※ 到这里为止**从未执行任何工具**
 4. worker 进程（另一个操作系统进程）：
    jobs/worker.py:Worker.tick()
    → jobs_store.claim_next_job(worker_id)   → BEGIN IMMEDIATE + UPDATE ... WHERE status='queued'
    → jobs/executor.py:execute_job(job_id)
        · observability.bind(job_id=...)     → 之后所有事件自动带 job_id
+       · 从 **事件 detail 读回** 节奏与限速/超时（`pace_of_job` / `limits_of_job`）：
+         任务自己的属性，不靠某次调用的参数（worker 是独立进程、任务会 retry / 换 worker）
        · 逐步：bind(step_id=...)
            mock → core/mock.py:run_mock()   （确定性假数据，绝不调用真实工具）
            real → validate_step_target() 复检 Scope
                   → modules.registry.build_runner() → BaseRunner.run(target)
+                  → pace.apply_to_runner() 先降速 → job_limits.apply_to_runner() 再**收紧**
+                    （都是写 config 副本；合并用 min，绝不原地改模块级配置对象）
                   → 落 artifact（stdout/stderr/output）
                   → 写 observations_json
        · 每步 renew_lease + 刷心跳文件
@@ -216,6 +228,16 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
 
 新库：`PRAGMA journal_mode=WAL` + `busy_timeout=5000` + `BEGIN IMMEDIATE`。
 旧库：连接显式关闭（`storage.py:_connect()`）+ 连接级 `busy_timeout=5000`，但**仍无 WAL**。
+
+> **任务级设置的持久化路径：`job_events` 的 `job.created` detail，不加列。**
+> `pace` / `operator` / `project_id` / `strategy` / `authorization_*` / `rate_limit` /
+> `timeout_seconds` 七类事实**全部**写在同一条事件里，由 `core/jobs.py` 的
+> `*_of_job()` 读回（唯一取数点是 `created_detail_of_job()`）。
+> 理由见 [`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.23.3 与 §9.26.1：worker 是**独立进程**、
+> 任务会被 retry 或换 worker，这些必须是**任务自身的属性**而不是某次调用的参数；
+> 而加列属于 DB 结构变更（[`DECISIONS.md`](DECISIONS.md) §1 E 限纯增量）。
+> 有一条反向守卫测试断言 `PRAGMA table_info(jobs)` 里**没有**这些列名
+> （`test_phase3_context_does_not_add_columns_to_jobs`）。
 
 ### 8.2 任务状态机
 
@@ -343,9 +365,10 @@ Diff 只看 `DIFFABLE_ATTRIBUTES`，且比较的是**归一化后的 canonical k
    （由 `test_api_auth_contract.py` / `test_export_contract.py` 锁定）。
 3. `README.md` 的常见问题 Q6 仍在说「`/` 报 `TemplateNotFound`，index.html 是占位文件」——
    该问题已在 M1 修复，模板与静态资源都在，`GET /` 返回 200。
-4. ~~`README.md` 的测试基线写 `759 passed`~~ ▶ **已修**：当时基线为 826，现为
-   **1149 passed / 2 skipped**（[`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.8 同源；
-   仍以 `PROJECT_STATE.md` 的「最近一次验证」为准）。
+4. ~~`README.md` 的测试基线写 `759 passed`~~ ▶ **已修**：当时基线为 826，
+   现为 **1288 passed / 2 skipped**（[`CODEBASE_MAP.md`](CODEBASE_MAP.md) §9.26.7 同源；
+   仍以 `PROJECT_STATE.md` 的「最近一次验证」为准）。**这一行本身就是「基线容易过期」的
+   例证**：它是 P1 §14 那轮写下的 `1149`，之后每一轮都前移，而文档里的数字不会自己更新。
 5. `docs/SECURITY.md` **不存在**——方案建议的四份文档里，安全文档实际位于仓库根
    [`SECURITY.md`](../SECURITY.md)。
 6. `api/scopes.py` 注释称 404 会被转成 `error_code=bad_request`，实测为 `not_found`

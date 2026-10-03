@@ -72,6 +72,12 @@ from typing import Any
 from config import SCAN_LIMITS
 from core import audit, jobs as jobs_store, observability, projects, uploads
 from core.errors import BadRequestError
+from core.job_limits import (
+    FIELD_RATE_LIMIT,
+    FIELD_TIMEOUT_SECONDS,
+    JobLimits,
+    resolve_limits,
+)
 from core.mock import SCENARIOS, normalize_scenario
 from core.pace import DEFAULT_PACE, PACE_LABELS, PACE_LEVELS, coerce_pace, resolve_pace
 from core.policy import validate_job_targets
@@ -147,6 +153,17 @@ class JobSubmission:
         reused: 是否命中幂等键（``True`` 表示没有新建任务）。
         idempotency_key: 规范化后的幂等键，未提供时为 ``None``。
         pace: 最终生效的扫描节奏（``light`` / ``normal``，见 :mod:`core.pace`）。
+        operator: 最终生效的操作者标识（Phase 3，空值退化为 ``local-admin``）。
+        strategy: 生效的策略模板 key（仅公网入口会给，老入口为 ``None``）。
+        project_id: 该任务依据的授权项目 ID（仅公网入口会给）。
+        authorization_note: 授权说明快照（仅公网入口会给）。
+        authorization_confirmed: 使用者是否勾选过授权确认（仅公网入口会给）。
+        limits: 单任务的限速 / 超时（``core.job_limits.JobLimits``）。
+
+    ``to_dict()`` **刻意只回 job 本身那几项**：``operator`` / ``limits`` /
+    ``authorization_note`` 属于审计上下文，由 ``GET /api/jobs/<id>`` 提供。
+    ``POST /api/jobs`` 的响应形状是既有调用方的契约（``test_public_scan_mode.py``
+    明确断言旧响应里不得出现公网专属字段），所以新增上下文一律**不进**这里。
     """
 
     job: dict
@@ -157,6 +174,12 @@ class JobSubmission:
     reused: bool
     idempotency_key: str | None = None
     pace: str = DEFAULT_PACE
+    operator: str = jobs_store.DEFAULT_OPERATOR
+    strategy: str | None = None
+    project_id: str | None = None
+    authorization_note: str | None = None
+    authorization_confirmed: bool | None = None
+    limits: JobLimits = JobLimits()
 
     def to_dict(self) -> dict:
         """``POST /api/jobs`` 的响应体（202 Accepted）。"""
@@ -187,12 +210,20 @@ def create_scan_job(
     idempotency_key: Any = None,
     created_by: str = "local-admin",
     pace: Any = None,
+    operator: Any = None,
+    project_id: str | None = None,
+    strategy: str | None = None,
+    authorization_note: str | None = None,
+    authorization_confirmed: bool | None = None,
+    rate_limit: Any = None,
+    timeout_seconds: Any = None,
 ) -> JobSubmission:
     """创建扫描任务的**唯一**编排入口。
 
     校验顺序（与历史上 ``api/jobs.py:create_job`` 逐条一致，不重排）：
-    目标非空 → 工具非空 → 幂等键合法 → 工具受支持 → 目标数上限 →
-    Scope/Policy → 模式开关 → mock 场景名 → 落库 → 审计 + 结构化日志。
+    目标非空 → 工具非空 → 幂等键合法 → 节奏合法 → 限速/超时合法 →
+    工具受支持 → 目标数上限 → Scope/Policy → 模式开关 → mock 场景名 →
+    落库 → 审计 + 结构化日志。
 
     Scope 判定**只发生一次**，且发生在这里：调用方（HTTP / 页面 / Agent）
     一律不得自己实现或跳过它。
@@ -205,16 +236,24 @@ def create_scan_job(
         mode: ``mock`` / ``real``，缺省 ``mock``；``real`` 需双开关。
         scenario: 仅 mock 有效的场景名。
         idempotency_key: 可选幂等键（同一键只允许一个未终结任务）。
-        created_by: 创建者标识。
+        created_by: 创建者标识（``jobs`` 表的列）。
         pace: 扫描节奏（``light`` / ``normal``）。缺省 ``normal``，即与引入
             Scan Profile 之前**逐字节一致**的历史行为；调用方若传非法值则
             400（不静默回退 —— 写了拼错的档位却拿到常规档是最危险的错法）。
+        operator: 操作者标识（Phase 3）。空值由 ``core.jobs`` 退化为
+            ``local-admin``；它不是权限开关，只是问责留痕。
+        project_id: 该任务依据的授权项目 ID（只有公网入口会给）。
+        strategy: 生效的策略模板 key（只有公网入口会给）。
+        authorization_note: 授权说明快照（只有公网入口会给）。
+        authorization_confirmed: 使用者是否勾选过授权确认（只有公网入口会给）。
+        rate_limit: 每秒请求上限（可选，只能收紧）。见 :mod:`core.job_limits`。
+        timeout_seconds: 单步超时秒数（可选，只能收紧）。
 
     Returns:
         JobSubmission: 含 job / scope / 实际入库的 tools 与 targets。
 
     Raises:
-        BadRequestError: 参数缺失或格式非法。
+        BadRequestError: 参数缺失或格式非法（含非法档位、越界限速/超时）。
         InvalidTargetError: 目标既不是合法域名也不是 IP/CIDR。
         ScopeViolationError: Scope 缺失、不存在、目标越界，或 real 模式未开开关。
     """
@@ -247,6 +286,26 @@ def create_scan_job(
             str(exc),
             details={"field": "pace", "supported": list(PACE_LEVELS)},
         ) from exc
+
+    # 限速 / 超时：与档位同一个位置判，理由相同 —— 参数写错必须先报出来，
+    # 不能静默夹到边界（写了 rate_limit=99999 却拿到 100，与写了拼错的档位
+    # 却拿到常规档是同一种危险错法）。见 core/job_limits.py。
+    try:
+        resolved_limits = resolve_limits(rate_limit=rate_limit, timeout_seconds=timeout_seconds)
+    except ValueError as exc:
+        # ``core.job_limits`` 的报错文案**一定带字段名**（两种错误都是），
+        # 因此这里按文案定位：定位不到时归给 ``rate_limit`` 只是兜底，
+        # 正常路径不会走到（那条不变量有单测锁着，见 test_format_errors_name_the_offending_field）。
+        message = str(exc)
+        field = FIELD_TIMEOUT_SECONDS if FIELD_TIMEOUT_SECONDS in message else FIELD_RATE_LIMIT
+        raise BadRequestError(message, details={"field": field}) from exc
+
+    # 操作者：空值退化为缺省标识（不留 ``null``），非法长度 400。
+    # 与 ``idempotency_key`` 一样是「格式错误」，因此同样放在工具校验之前。
+    try:
+        resolved_operator = jobs_store.normalize_operator(operator)
+    except ValueError as exc:
+        raise BadRequestError(str(exc), details={"field": "operator"}) from exc
 
     # 延迟导入：``core/`` 是纯领域层，不在 import 期依赖顶层编排模块
     # （``tool_runner`` → ``modules/`` → ``core.errors``，避免潜在环）。
@@ -291,8 +350,18 @@ def create_scan_job(
         created_by=created_by,
         idempotency_key=key,
         pace=resolved_pace,
+        operator=resolved_operator,
+        project_id=project_id,
+        strategy=strategy,
+        authorization_note=authorization_note,
+        authorization_confirmed=authorization_confirmed,
+        limits=resolved_limits,
     )
 
+    # 审计 detail：与 ``job.created`` 事件同源的「谁、依据什么、跑了什么」。
+    # 规划方案第 7 节点名的四要素 —— ``operator`` · ``target`` · ``timestamp`` ·
+    # ``scope_id`` —— 全部落在这里：``target`` 是 ``targets``（完整清单，审计
+    # 数据有意留存），``timestamp`` 由 ``audit_events.created_at`` 提供。
     detail: dict = {
         "scope_id": scope.id,
         "mode": resolved_mode,
@@ -300,7 +369,18 @@ def create_scan_job(
         "targets": validated_targets,
         "total_steps": job["total_steps"],
         "pace": resolved_pace,
+        "operator": resolved_operator,
     }
+    if project_id:
+        # 只有公网入口会给项目：老入口的审计记录里不该凭空多出一个 null 键。
+        detail["project_id"] = project_id
+    if strategy:
+        detail["strategy"] = strategy
+    if authorization_note:
+        detail["authorization_note"] = authorization_note
+    if authorization_confirmed is not None:
+        detail["authorization_confirmed"] = bool(authorization_confirmed)
+    detail.update(resolved_limits.to_detail())
     if reused:
         # 命中已有任务不是一次「新建」：只记一条「重复请求被折叠」的可追溯记录
         # （事件类型仍是 job_created，target_id 指向那个已存在的任务）。
@@ -311,6 +391,9 @@ def create_scan_job(
     # 方案第 19 节：任务创建也进结构化日志。request_id 由 app.py 的
     # before_request 绑定（服务层不感知 Flask）；**只记工具名与数量，不记目标列表**
     # （完整目标在 audit_events 与 job 快照里，那是有意留存的审计数据）。
+    # ``operator`` 是标识而不是自由文本，允许进日志；授权说明与限速值不进
+    # （前者可能是敏感凭据描述，后者在审计表里可查）。见
+    # tests/integration/test_observability_chain.py 的反向守卫。
     observability.log_event(
         observability.EVENT_JOB_CREATED,
         job_id=job["id"],
@@ -320,6 +403,7 @@ def create_scan_job(
         target_count=len(validated_targets),
         total_steps=job["total_steps"],
         reused=reused,
+        operator=resolved_operator,
     )
 
     return JobSubmission(
@@ -331,6 +415,12 @@ def create_scan_job(
         reused=reused,
         idempotency_key=key,
         pace=resolved_pace,
+        operator=resolved_operator,
+        strategy=strategy,
+        project_id=project_id,
+        authorization_note=authorization_note,
+        authorization_confirmed=authorization_confirmed,
+        limits=resolved_limits,
     )
 
 
@@ -361,7 +451,13 @@ class AuthorizedJobSubmission:
     pace: str = DEFAULT_PACE
 
     def to_dict(self) -> dict:
-        """``POST /api/public-jobs`` 的响应体（沿用 202 Accepted）。"""
+        """``POST /api/public-jobs`` 的响应体（沿用 202 Accepted）。
+
+        在 :meth:`JobSubmission.to_dict` 的基础上追加公网专属字段。
+        ``authorization`` 只回**是否确认过**与备注长度级别的元数据，
+        不回备注原文：原文在 ``GET /api/jobs/<id>`` 与审计里可查，没有必要
+        在每次提交的响应里再散一份。
+        """
         payload = self.submission.to_dict()
         payload.update(
             {
@@ -369,6 +465,9 @@ class AuthorizedJobSubmission:
                 "project_name": self.project.name,
                 "strategy": self.strategy,
                 "authorized_public": True,
+                "operator": self.submission.operator,
+                "authorization_confirmed": self.submission.authorization_confirmed,
+                "limits": self.submission.limits.to_dict(),
             }
         )
         return payload
@@ -387,6 +486,10 @@ def create_authorized_public_job(
     scenario: str | None = None,
     idempotency_key: Any = None,
     created_by: str = "local-admin",
+    operator: Any = None,
+    authorization_confirmed: Any = None,
+    rate_limit: Any = None,
+    timeout_seconds: Any = None,
 ) -> AuthorizedJobSubmission:
     """创建「授权公网测试」任务 —— 公网模式下创建任务的**唯一**入口。
 
@@ -403,6 +506,11 @@ def create_authorized_public_job(
     4. 节奏档位由模板缺省与请求合并得出，且**只能收紧**
        （:func:`core.tool_registry.resolve_strategy_pace`）。
        「低频资产发现」因此不会被一次请求改回常规档。
+
+    Phase 3 增补的审计上下文（第 14 节：操作者记录 / 授权备注 / 扫描策略 /
+    限速配置 / 超时配置）：``operator`` 与 ``authorization_confirmed`` 透传下去，
+    授权备注取**项目上那一份的当前值**作为快照 —— 项目说明事后被改，
+    这条任务的依据仍是创建当时那一份。
 
     模式语义（刻意如此，不要改成「静默降级」）：缺省 ``real``。
     如果环境开关 ``GEF_ALLOW_REAL_SCAN`` 没开，这里会**明确报 403**，
@@ -421,13 +529,20 @@ def create_authorized_public_job(
         mode: ``real`` / ``mock``；缺省 ``real``。
         scenario: 仅 mock 有效的场景名。
         idempotency_key: 可选幂等键。
-        created_by: 创建者标识。
+        created_by: 创建者标识（``jobs`` 表的列）。
+        operator: 操作者标识（Phase 3）。空值退化为 ``local-admin``。
+        authorization_confirmed: 页面上的授权确认复选框。**如实记录**是否
+            勾选，但**不作为闸门** —— 授权由 Scope / Policy / 环境开关判定，
+            一个可被脚本置真的复选框不该成为安全边界。
+        rate_limit: 每秒请求上限（可选，只能收紧）。
+        timeout_seconds: 单步超时秒数（可选，只能收紧）。
 
     Returns:
         AuthorizedJobSubmission: 含 job / project / strategy / tools / targets。
 
     Raises:
-        BadRequestError: 项目或 Scope 相关参数缺失、策略非法、工具越权。
+        BadRequestError: 项目或 Scope 相关参数缺失、策略非法、工具越权、
+            ``rate_limit`` / ``timeout_seconds`` 越界。
         NotFoundError: 项目不存在。
         ScopeViolationError: 环境开关未开，或目标越界。
     """
@@ -461,6 +576,12 @@ def create_authorized_public_job(
     # 放在工具闸门之后：工具越权是更根本的问题，应当先报出来。
     resolved_pace = resolve_strategy_pace(resolved_strategy, pace)
 
+    # 授权确认：如实**记录**，但不作为闸门。理由写在参数文档里 ——
+    # 一个 JSON 布尔值不构成安全边界，把它当闸门只会制造「已授权」的错觉。
+    confirmed: bool | None = None
+    if authorization_confirmed is not None:
+        confirmed = bool(authorization_confirmed)
+
     # 缺省 real：公网授权测试的语义就是真实扫描，不静默降级。
     submission = create_scan_job(
         scope_id=scope_ref,
@@ -472,6 +593,17 @@ def create_authorized_public_job(
         idempotency_key=idempotency_key,
         created_by=created_by,
         pace=resolved_pace,
+        operator=operator,
+        # 项目与策略在这里落成审计上下文：它们是「公网入口」独有的信息，
+        # 因此只有这条链会传（老入口 ``POST /api/jobs`` 传的是 ``None``）。
+        project_id=project.id,
+        strategy=resolved_strategy or STRATEGY_ASSET_DISCOVERY,
+        # 授权说明取**项目上那一份的当前值**当快照：项目说明事后被改，
+        # 这条任务所依据的仍然是创建当时那一份原文。
+        authorization_note=project.authorization_note,
+        authorization_confirmed=confirmed,
+        rate_limit=rate_limit,
+        timeout_seconds=timeout_seconds,
     )
 
     return AuthorizedJobSubmission(

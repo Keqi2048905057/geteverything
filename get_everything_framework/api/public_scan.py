@@ -32,6 +32,7 @@ from core import authorization, projects
 from core.application import create_authorized_public_job, split_str_list
 from core.auth import require_admin
 from core.errors import BadRequestError
+from core.job_limits import describe_limits
 from core.pace import list_paces
 from core.tool_registry import (
     KNOWN_UNAVAILABLE_TOOLS,
@@ -56,15 +57,27 @@ def create_public_job():
           "tools": ["httpx"],             // 仅 strategy=custom 时使用
           "pace": "light",                // 可选，只能收紧到 light，不能放松
           "mode": "real",                 // 可选，缺省 real
+          "operator": "张三",             // 可选，操作者标识（审计留痕）
+          "authorization_confirmed": true, // 可选，页面上的授权确认复选框
+          "rate_limit": 2,                // 可选，每秒请求上限（只能收紧）
+          "timeout_seconds": 30,          // 可选，单步超时秒数（只能收紧）
           "idempotency_key": "..."        // 可选
         }
 
+    ``operator`` / ``authorization_confirmed`` / ``rate_limit`` /
+    ``timeout_seconds`` 是 Phase 3（规划方案第 14 节「公网授权测试完善」）的
+    五项之二：它们只被**记录**与**收紧**，不构成任何权限判定。
+    ``authorization_confirmed`` 尤其不是闸门 —— 授权由 Scope / Policy /
+    环境开关决定，一个可被脚本置真的复选框不该成为安全边界。
+
     Returns:
         202 + 与 ``POST /api/jobs`` 同形状的响应，外加 ``project_id`` /
-        ``strategy`` / ``authorized_public`` / ``pace``。
+        ``project_name`` / ``strategy`` / ``authorized_public`` / ``pace`` /
+        ``operator`` / ``authorization_confirmed`` / ``limits``。
 
     Raises:
-        BadRequestError: 参数缺失、策略非法、工具不在公网白名单、``pace`` 非法。
+        BadRequestError: 参数缺失、策略非法、工具不在公网白名单、``pace`` 非法、
+            ``rate_limit`` / ``timeout_seconds`` 越界。
         NotFoundError: 项目不存在。
         ScopeViolationError: Scope 未开 ``active_scan``，或环境开关未开，或目标越界。
     """
@@ -85,6 +98,12 @@ def create_public_job():
         mode=payload.get("mode"),
         scenario=payload.get("scenario"),
         idempotency_key=payload.get("idempotency_key"),
+        # Phase 3：操作者 / 授权确认 / 限速 / 超时。视图层只做取值，
+        # 解析、校验与落库全部在 Application Service 里（有测试守卫这条边界）。
+        operator=payload.get("operator"),
+        authorization_confirmed=payload.get("authorization_confirmed"),
+        rate_limit=payload.get("rate_limit"),
+        timeout_seconds=payload.get("timeout_seconds"),
     )
     return jsonify(submission.to_dict()), 202
 
@@ -171,6 +190,9 @@ def scan_center_metadata():
     * ``tool_groups``    —— **能力分组本身**（``key`` / 中文名 / 这一栏的说明 /
       本栏工具）。有了它前端才不必写死「资产发现」「服务识别」这些栏位名；
       空分组照样返回，界面据此如实显示「本阶段暂无可用工具」；
+    * ``limits``         —— 限速 / 超时的可填范围与中文说明（Phase 3）。同一份
+      文案由 :func:`core.job_limits.describe_limits` 维护，因此前端不必抄一遍
+      上下界，也不会出现「界面写 100、后端只收 50」这种漂移；
     * ``internet_allowed_tools`` —— 第一阶段公网白名单，便于前端把禁用项置灰。
 
     字段单一来源（方案第 9 节 Tool Registry）：``tools`` 与 ``tool_groups`` 里的
@@ -195,6 +217,7 @@ def scan_center_metadata():
             "tools": [item.to_dict() for item in list_tool_policies()],
             "tool_groups": group_tool_policies(list_tool_policies()),
             "restricted_tools": [item.to_dict() for item in KNOWN_UNAVAILABLE_TOOLS.values()],
+            "limits": describe_limits(),
             "internet_allowed_tools": internet_allowed_tools(),
         }
     )

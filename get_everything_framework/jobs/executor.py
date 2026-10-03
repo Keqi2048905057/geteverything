@@ -28,6 +28,7 @@ from core import assets as assets_store
 from core import jobs as jobs_store
 from core import observability
 from core.errors import ErrorCode
+from core.job_limits import JobLimits, apply_to_runner as apply_limits_to_runner
 from core.mock import run_mock
 from core.pace import DEFAULT_PACE, apply_to_runner, step_delay_for
 from core.runner_result import PARSER_VERSION
@@ -83,7 +84,12 @@ def _failed_outcome(error_code: str, message: str) -> dict:
     }
 
 
-def _execute_real_step(step: dict, scope_id: str | None = None, pace: str = DEFAULT_PACE) -> dict:
+def _execute_real_step(
+    step: dict,
+    scope_id: str | None = None,
+    pace: str = DEFAULT_PACE,
+    limits: JobLimits | None = None,
+) -> dict:
     """real 步骤：调用真实 runner 的统一入口 ``run()``。
 
     真实执行前由 API 层完成 Scope 与环境开关校验；这里在执行**之前**再复检一次
@@ -93,6 +99,15 @@ def _execute_real_step(step: dict, scope_id: str | None = None, pace: str = DEFA
     ``pace``（见 :mod:`core.pace`）在**构造之后**写进 runner 的 ``config`` 副本
     （:func:`core.pace.apply_to_runner`）：低频档因此真的会变成 ``-t 5 -rl 3``
     这样的命令行参数，而不是页面上的一个标签。
+
+    ``limits``（见 :mod:`core.job_limits`）是 Phase 3 的「限速配置 / 超时配置」，
+    在 **``pace`` 之后**用 ``min`` 合并，因此它的方向只能是更保守：
+
+    * 低频档已经写下 ``rate_limit=10`` 时，请求里写 ``rate_limit=50`` 不会把它
+      顶回去（:func:`core.job_limits.apply_to_runner` 取较小值）；
+    * ``timeout_seconds`` 映射到工具配置的 ``process_timeout``，
+      ``modules/base.py:_timeout_seconds()`` 最后还会与
+      ``SCAN_LIMITS["process_timeout"]`` 取一次较小值。
 
     为什么覆盖 ``config`` 而不是换一条构造路径：``build_runner(tool_name)``
     是测试替换真实 Runner 的接缝（``monkeypatch.setattr``）。改成
@@ -132,6 +147,13 @@ def _execute_real_step(step: dict, scope_id: str | None = None, pace: str = DEFA
         try:
             apply_to_runner(runner, pace)
         except Exception:  # noqa: BLE001 - 降速是策略，不是执行前提
+            pass
+        # Phase 3：单任务的限速 / 超时（只能收紧）。放在 ``pace`` 之后 ——
+        # 两者都是「更保守者胜」，顺序不影响结果，但读起来是「先按档位、
+        # 再按本次任务的显式数字」，与页面上的呈现顺序一致。
+        try:
+            apply_limits_to_runner(runner, limits)
+        except Exception:  # noqa: BLE001 - 收紧是策略，不是执行前提
             pass
         result = runner.run(target)
     except Exception as exc:  # noqa: BLE001 - 兜底：任何异常都不能带走 worker
@@ -283,6 +305,9 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
     # 拿不到那次请求的任何内存状态；而且任务被 retry / worker 重启后，
     # 节奏必须仍然是原来那一档（审计与复现都要求它是可查的事实）。
     pace = jobs_store.pace_of_job(job_id)
+    # Phase 3「限速配置 / 超时配置」：与 pace 同一个理由从库里读回 —— worker 是
+    # 另一个进程，重启后仍必须按同一条任务当时的数字跑。
+    limits = jobs_store.limits_of_job(job_id)
     # 低频档的「礼貌间隔」只发生在**真实**步骤之间。mock 不产生任何外部流量，
     # 对它等待只会让演练变慢，不会让任何人少收到一个请求。
     #
@@ -349,7 +374,7 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         with observability.bind(step_id=step["id"]):
             if mode == "real":
                 # real 步骤在执行前重新读一次 Scope 并复检目标（方案第 5.3 节）。
-                outcome = _execute_real_step(step, scope_id, pace)
+                outcome = _execute_real_step(step, scope_id, pace, limits)
             else:
                 outcome = _execute_mock_step(step, scenario)
 

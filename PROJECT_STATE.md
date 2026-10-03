@@ -685,46 +685,42 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-03（下一阶段规划方案 Phase 2：Tool Registry）
+验证时间：2026-10-03（下一阶段规划方案 Phase 3：公网授权测试完善）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1189 collected / 1187 passed / 2 skipped / 0 failures / 0 errors
-        ← 本轮全量 --junitxml 解析（tests="1189" failures="0" errors="0" skipped="2"）
+pytest: 1290 collected / 1288 passed / 2 skipped / 0 failures / 0 errors
         （逐文件 --collect-only -q 汇总复核一致）
-mypy:   Success: no issues found in 71 source files        ← 未新增/删除源文件（71 不变）
-node --check web/static/scan_center.js: 语法检查通过（本轮改的就是它）
-git diff --check: 退出码 0
-本轮前端另做了一次**一次性 DOM 桩人工核对**（项目没有浏览器测试）：
-        在 Node 里用最小 document/fetch 桩加载真实的 web/static/scan_center.js，
-        喂服务端真实形状的 /api/scan-center（含 tool_groups）+ /api/scopes
-        + /api/public-jobs/check 响应，走真实的渲染路径，实测输出：
-          分组顺序     recon → service → tech → content → vuln → assist（全部来自服务端）
-          资产发现     1 个 | 被动收集子域与 URL，不发主动探测。 | 条目 1
-          服务识别     2 个 | 探测存活、端口与响应特征。 | 条目 2
-          技术识别     本阶段暂无可用工具 | …
-          漏洞检测     本阶段暂无可用工具（仅列出未开放项） | … | 条目 1（nuclei 归位）
-          工具清单     subfinder ✓ · httpx ✓ · nmap · nuclei（4/4 全部来自服务端）
-          切自定义     subfinder / httpx 变可勾选，nmap / nuclei 仍禁用
-        探针文件跑完即移出仓库，不入库。
-本轮新增 30 项：tests/unit/test_tool_parameters.py（新）17 +
-        test_tool_registry.py 34 → 41（+7）+ test_public_scan_mode.py 83 → 89（+6）
-        逐文件差额用 git worktree 检出规划方案 Phase 1（548d196）后两树对跑
-        --collect-only 求差（1159 → 1189，差额恰好只有这三行）
-业务 .py 92 个被测试提及 82 个（本轮未新增业务模块，比例不变）
+mypy:   Success: no issues found in 72 source files        ← 新增 core/job_limits.py（71 → 72）
+node --check web/static/scan_center.js / app.js: 两个前端脚本语法检查通过（本轮改的就是它们）
+路由计数：48 规则 / 50 绑定 / 42 个 /api/*（本轮只给既有接口加字段，未新增/删除路由）
+本轮新增 101 项：
+        tests/unit/test_job_limits.py（新文件）59
+        tests/unit/test_jobs_store.py 72 → 90（+18）
+        tests/integration/test_public_scan_mode.py 89 → 113（+24）
+        逐文件差额用 git worktree 检出规划方案 Phase 2（ce0ef22）后两树对跑
+        --collect-only 求差（1189 → 1290，差额恰好只有这三行）
+零 DDL 复核：本轮新增的六个字段（operator / project_id / strategy /
+        authorization_note / authorization_confirmed / rate_limit /
+        timeout_seconds）**都不是** jobs 表的列，全部写在 job.created 事件 detail 里；
+        有一条反向守卫用例锁着这件事（jobs 表里出现这些列名就红）
+业务 .py 93 个被测试提及 83 个（新增 core/job_limits.py，已直接覆盖 59 条用例）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → **Phase 2 Tool Registry `1189`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → **Phase 3 公网授权测试完善 `1290`**
 
-> 本轮 +30 = 一个新文件（17）+ 两处既有测试文件补用例（+7、+6）。
-> 逐文件差额**实测**得出：`git worktree add --detach <tmp> 548d196` 检出规划方案 Phase 1 后，
+> 本轮 +101 = 一个新文件（59）+ 两处既有测试文件补用例（+18、+24）。
+> 逐文件差额**实测**得出：`git worktree add --detach <tmp> ce0ef22` 检出规划方案 Phase 2 后，
 > 两个工作树各跑一遍 `--collect-only -q` 求差，差额恰好只有这三行 ——
 > 即没有任何既有用例被删改，也**没有任何一条既有断言被放松**
-> （`test_split_str_list_rejects_non_list`、`test_create_scan_job_requires_tools`
+> （`test_normal_pace_leaves_the_runner_config_untouched`、
+> `test_public_job_request_cannot_relax_the_template_pace`、
+> `test_legacy_job_api_still_works`、`test_service_delegates_to_single_job_entry`
 > 等原样保留并通过）。
 >
-> 本轮**未新增路由、未新增业务模块、未改表结构**：`/api/tools` 与 `/api/scan-center`
-> 只是加了字段，路由计数仍为 **48 规则 / 50 绑定 / 42 个 `/api/*`**。
+> 本轮**未新增路由、未改表结构**：路由计数仍为 **48 规则 / 50 绑定 / 42 个 `/api/*`**；
+> `POST /api/public-jobs`、`GET /api/scan-center`、`GET /api/jobs/<id>` 都只是加了字段。
+> 老入口 `POST /api/jobs` 的响应形状**一字未改**（仍不出现 `project_id` 等公网专属字段）。
 
 ---
 
@@ -735,12 +731,11 @@ git diff --check: 退出码 0
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-f88dd57   ← 最近一次不含本文件改动的提交（Phase 4 结果体验：代码 + 测试）
-f88dd57  feat(results): Phase 4 结果体验 —— 从 Job 导向结果，四段派生成结论
-5960bc0  docs: 同步下一阶段体验优化 Phase 1～3（决策单 / 代码地图 / API / 部署 / 测试报告 / 变更日志 / 状态板）
-59047ee  feat(pace): Phase 3 Scan Profile —— 工具组合 + 节奏，低频是可执行约束
-510fa41  feat(public-scan): Phase 2 公网授权测试入口 —— 只读试算 + 四步流程
-e94b180  feat(scan-center): Phase 1 UI 清理 —— 隐藏内部 ID、去后台术语、简化流程
+ce0ef22   ← 最近一次不含本文件改动的提交（规划方案 Phase 2：Tool Registry）
+ce0ef22  feat(tool-registry): 规划方案 Phase 2 —— 工具能力平台化，空选择不再回落到默认工具
+548d196  feat(scan-center): Phase 1 前端体验重构 —— 授权资产可见、Scope 退到后台、四步流程
+ef33ab6  docs(decisions): 记录本轮五项答复与推送结果，并补记 fork 已删除的复核
+b47fb1d  docs(state): Phase 4 落地后回填状态板（旧覆盖率快照加口径说明 + 三条基线命令）
 ```
 
 自检：

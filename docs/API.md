@@ -377,8 +377,8 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 | GET | `/api/projects` | — | `{"ok":true,"projects":[{...,"scope_ids","scope_count"}]}` | — |
 | GET | `/api/projects/<project_id>` | — | `{"ok":true,"project":{...}}` | 404 `not_found` |
 | POST | `/api/projects/<project_id>/scopes` | JSON `{scope_id}` | **201** `{"ok":true,"project":{...}}`（幂等） | 400 缺 `scope_id` 或 Scope 不存在；404 项目不存在 |
-| POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, pace?, mode?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","pace","pace_label","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限 / `pace` 非法；403 越界或真实扫描开关未开；404 项目不存在 |
-| GET | `/api/scan-center` | — | `{"ok":true,"projects","strategies","paces","tools","restricted_tools","internet_allowed_tools"}` | 401 |
+| POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, pace?, mode?, operator?, authorization_confirmed?, rate_limit?, timeout_seconds?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","pace","pace_label","operator","authorization_confirmed","limits","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限 / `pace` 非法 / `operator` 非法 / `rate_limit` / `timeout_seconds` 越界；403 越界或真实扫描开关未开；404 项目不存在 |
+| GET | `/api/scan-center` | — | `{"ok":true,"projects","strategies","paces","tools","tool_groups","restricted_tools","limits","internet_allowed_tools"}` | 401 |
 
 `strategy` 合法值 = `core/tool_registry.py:STRATEGIES`：`asset_discovery`（默认，= `subfinder` + `httpx`）、
 `web_fingerprint`（= `httpx`，`nuclei` 只作「受限未开放」展示）、`custom`（**必须**显式给 `tools`）。
@@ -404,6 +404,39 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > 它写进 `job.created` 事件的 `detail` 与审计 detail，执行期由
 > `core/jobs.py:pace_of_job(job_id)` 读回 —— worker 是**独立进程**，且任务可能被 retry
 > 或换一个 worker 重启，节奏必须是任务自身的属性而不是某次调用的参数。
+
+### 6.3 Phase 3：操作者 / 授权备注 / 限速 / 超时（规划方案第 14 节）
+
+四个新请求字段，**全部只被记录或只被收紧，不构成任何权限判定**：
+
+| 字段 | 取值范围 | 落点 | 语义 |
+|---|---|---|---|
+| `operator` | 字符串，≤ 120 字符；缺省/空 → `local-admin` | `job.created` detail + 审计 detail + 结构化日志 | **自称**，不是已验证身份（本仓无身份体系）。非法形状（`true` / 数组 / 对象）→ 400 `details.field = "operator"` |
+| `authorization_confirmed` | 布尔；不给 → `null` | `job.created` detail | 页面上的授权确认复选框。**刻意不是闸门** —— 授权由 Scope / Policy / 环境开关判定 |
+| `rate_limit` | 整数 `1 ~ 100` | `job.created` detail + 执行期 `Runner.config["rate_limit"]` | 每秒请求上限。**只能收紧** |
+| `timeout_seconds` | 整数 `1 ~ SCAN_LIMITS["process_timeout"]`（本机默认 120） | 同上，映射为 `Runner.config["process_timeout"]` | 单步超时秒数。**只能收紧** |
+
+`limits` 出参恒有两个键（`{"rate_limit": null, "timeout_seconds": null}` 表示没指定），
+`GET /api/scan-center` 的 `limits` 给出可填范围与中文说明（前端据此生成输入框，
+不写死上下界）。
+
+> **`rate_limit` / `timeout_seconds` 只能收紧，不能放松**：合并规则是 `min` 而不是覆盖
+> （`core/job_limits.py:apply_to_runner`），且发生在 `pace` **之后** —— 因此低频档已经压下来的
+> 速率（`httpx -rl 10`）不会被请求里的 `rate_limit=50` 顶回去。
+> 越界一律 **400**，不静默夹到边界：写了 `100000` 却拿到 `100`，与拼错的档位拿到常规档
+> 是同一种危险错法。`details.field` 指到具体那一项。
+>
+> **这四项同样不落成 `jobs` 表的列**：写在同一条 `job.created` 事件 detail 里，
+> 由 `operator_of_job` / `project_id_of_job` / `strategy_of_job` / `authorization_of_job` /
+> `limits_of_job` 读回，`GET /api/jobs/<id>` 把它们平铺在 `job` 上
+> （`operator` / `strategy` / `project_id` / `authorization` / `limits`）。
+> 有一条反向守卫测试锁着「`jobs` 表里不得出现这六个列名」。
+>
+> **`authorization_note` 是项目授权说明的**快照**：项目说明事后被改，历史任务的授权依据
+> 仍是创建当时那一份原文（`job.authorization.note`）。
+>
+> **老入口 `POST /api/jobs` 也接受 `operator` / `rate_limit` / `timeout_seconds`**，
+> 口径完全相同；它的响应形状**未变**（不出现 `project_id` 等公网专属字段）。
 
 > **公网白名单恰好是 `{httpx, subfinder}`**（方案第 8 节），是代码常量而非运行期配置。
 > 核心不变量是「**没登记 = 禁止公网**」：`assert_tools_internet_allowed()` 对未登记工具

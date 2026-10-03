@@ -1384,3 +1384,377 @@ def test_pace_of_job_falls_back_for_legacy_rows(app_module):
     from core import pace as pace_module
 
     assert jobs_store.pace_of_job("job_does_not_exist") == pace_module.DEFAULT_PACE
+
+
+# ── Phase 3：公网授权测试完善（规划方案第 14 节 Phase 3，五项） ──
+#
+# 五项 = 操作者记录 / 授权备注 / 扫描策略 / 限速配置 / 超时配置。
+# 前四项的落库位置都是 ``job.created`` 事件 detail（**零 schema 变更**，见
+# ``core/jobs.py:_created_detail``）；限速与超时额外要在**真正发请求的那一层**
+# 生效，因此这一节最后几条直接检查 Runner 拿到的 ``config``。
+#
+# 与上一节同一条纪律：所有 real 用例都把 ``build_runner`` 换成假 runner，
+# 因此整节没有任何外部流量。
+
+
+def test_public_job_records_the_operator(admin_client, fake_real_runner):
+    """操作者要写进创建事件**与**审计 —— 事后能回答「这条任务是谁提交的」。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, operator="张三")
+    assert resp.status_code == 202, resp.get_json()
+    job_id = resp.get_json()["job_id"]
+    assert resp.get_json()["operator"] == "张三"
+
+    created = next(
+        event for event in jobs_store.list_events(job_id) if event["event_type"] == jobs_store.EVENT_JOB_CREATED
+    )
+    assert created["detail"]["operator"] == "张三"
+    assert jobs_store.operator_of_job(job_id) == "张三"
+
+    audited = [
+        event for event in audit.list_events(limit=50) if event["event_type"] == audit.EVENT_JOB_CREATED
+    ]
+    entry = next(event for event in audited if event["target_id"] == job_id)
+    # 方案第 7 节的四要素：operator · target · timestamp · scope_id。
+    assert entry["detail"]["operator"] == "张三"
+    assert entry["detail"]["targets"] == ["www.example.test"]
+    assert entry["detail"]["scope_id"] == scope_id
+    assert entry["created_at"], "审计记录必须带时间戳"
+
+
+def test_public_job_without_operator_falls_back_to_the_default(admin_client, fake_real_runner):
+    """不填操作者时留下缺省标识，**不留空值** —— 审计里必须有答案。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    job_id = _public_job(admin_client, project["id"], scope_id).get_json()["job_id"]
+    assert jobs_store.operator_of_job(job_id) == jobs_store.DEFAULT_OPERATOR
+    detail = admin_client.get(f"/api/jobs/{job_id}").get_json()["job"]
+    assert detail["operator"] == jobs_store.DEFAULT_OPERATOR
+
+
+@pytest.mark.parametrize("bad", [True, ["张三"], {"name": "张三"}])
+def test_public_job_rejects_a_bad_operator(admin_client, fake_real_runner, bad):
+    """操作者形状非法 → 400，且**不落库**（不能留下一条来历不明的任务）。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, operator=bad)
+    assert resp.status_code == 400
+    assert resp.get_json()["details"]["field"] == "operator"
+    assert jobs_store.list_jobs() == []
+
+
+def test_public_job_snapshots_the_project_authorization_note(admin_client, fake_real_runner):
+    """授权备注取项目上那一份的**当前值**当快照，事后改项目不影响历史任务。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+    note = project["authorization_note"]
+
+    job_id = _public_job(admin_client, project["id"], scope_id).get_json()["job_id"]
+
+    detail = admin_client.get(f"/api/jobs/{job_id}").get_json()["job"]
+    assert detail["authorization"]["note"] == note
+    assert jobs_store.created_detail_of_job(job_id)["authorization_note"] == note
+
+
+def test_public_job_records_the_strategy(admin_client, fake_real_runner):
+    """扫描策略要留在任务上：不能只知道跑了哪些工具，还得知道用哪个模板跑的。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, strategy="web_fingerprint")
+    assert resp.status_code == 202, resp.get_json()
+    job_id = resp.get_json()["job_id"]
+    assert resp.get_json()["strategy"] == "web_fingerprint"
+
+    assert jobs_store.strategy_of_job(job_id) == "web_fingerprint"
+    detail = admin_client.get(f"/api/jobs/{job_id}").get_json()["job"]
+    assert detail["strategy"] == "web_fingerprint"
+    # 项目也要读得回来：审计上下文是「依据哪份授权」，光有 scope 不够。
+    assert detail["project_id"] == project["id"]
+
+
+def test_authorization_confirmation_is_recorded_but_is_not_a_gate(admin_client, fake_real_runner):
+    """授权确认复选框**只被记录**，不是闸门 —— 两种取值都必须建得出任务。
+
+    这条守的是一个刻意的设计决定：本仓库的授权由 Scope / Policy / 环境开关判定，
+    一个可被脚本置真的 JSON 布尔值不构成安全边界。把它当闸门只会制造
+    「勾了就等于放行」的错觉（页面上也明写了「不是安全边界」）。
+    """
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    unchecked = _public_job(admin_client, project["id"], scope_id, authorization_confirmed=False)
+    assert unchecked.status_code == 202, unchecked.get_json()
+    assert unchecked.get_json()["authorization_confirmed"] is False
+    assert jobs_store.authorization_of_job(unchecked.get_json()["job_id"])["confirmed"] is False
+
+    checked = _public_job(admin_client, project["id"], scope_id, authorization_confirmed=True)
+    assert checked.status_code == 202, checked.get_json()
+    assert checked.get_json()["authorization_confirmed"] is True
+    assert jobs_store.authorization_of_job(checked.get_json()["job_id"])["confirmed"] is True
+
+    # 完全不给这个字段时如实记 ``None``，而不是替用户假定「已确认」。
+    omitted = _public_job(admin_client, project["id"], scope_id)
+    assert omitted.status_code == 202
+    assert omitted.get_json()["authorization_confirmed"] is None
+    assert jobs_store.authorization_of_job(omitted.get_json()["job_id"])["confirmed"] is None
+
+
+def test_public_job_records_the_limits(admin_client, fake_real_runner):
+    """限速 / 超时写进创建事件，并原样回给调用方与详情页。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, rate_limit=2, timeout_seconds=30)
+    assert resp.status_code == 202, resp.get_json()
+    body = resp.get_json()
+    assert body["limits"] == {"rate_limit": 2, "timeout_seconds": 30}
+
+    job_id = body["job_id"]
+    limits = jobs_store.limits_of_job(job_id)
+    assert (limits.rate_limit, limits.timeout_seconds) == (2, 30)
+    detail = admin_client.get(f"/api/jobs/{job_id}").get_json()["job"]
+    assert detail["limits"] == {"rate_limit": 2, "timeout_seconds": 30}
+
+    created = next(
+        event for event in jobs_store.list_events(job_id) if event["event_type"] == jobs_store.EVENT_JOB_CREATED
+    )
+    assert created["detail"]["rate_limit"] == 2
+    assert created["detail"]["timeout_seconds"] == 30
+
+
+def test_public_job_without_limits_leaves_them_unset(admin_client, fake_real_runner):
+    """不填限速/超时时，事件 detail 里**不出现**这两个键（没指定就是没指定）。"""
+    from core import job_limits
+
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    job_id = _public_job(admin_client, project["id"], scope_id).get_json()["job_id"]
+
+    assert jobs_store.limits_of_job(job_id).is_empty is True
+    created = next(
+        event for event in jobs_store.list_events(job_id) if event["event_type"] == jobs_store.EVENT_JOB_CREATED
+    )
+    assert job_limits.FIELD_RATE_LIMIT not in created["detail"]
+    assert job_limits.FIELD_TIMEOUT_SECONDS not in created["detail"]
+
+
+@pytest.mark.parametrize(
+    "overrides,field",
+    [
+        ({"rate_limit": "abc"}, "rate_limit"),
+        ({"rate_limit": 0}, "rate_limit"),
+        ({"rate_limit": 100000}, "rate_limit"),
+        ({"timeout_seconds": "abc"}, "timeout_seconds"),
+        ({"timeout_seconds": 0}, "timeout_seconds"),
+        ({"timeout_seconds": 100000}, "timeout_seconds"),
+    ],
+)
+def test_public_job_rejects_out_of_range_limits(admin_client, fake_real_runner, overrides, field):
+    """越界一律 400，**不静默夹到边界**：写了 100000 却拿到 100 是最危险的错法。"""
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+
+    resp = _public_job(admin_client, project["id"], scope_id, **overrides)
+    assert resp.status_code == 400, resp.get_json()
+    assert resp.get_json()["details"]["field"] == field
+    assert jobs_store.list_jobs() == []
+
+
+def test_limits_reach_the_runner_config_and_can_only_tighten(admin_client, monkeypatch):
+    """限速 / 超时必须在**真正发请求的那一层**生效，且不能放松低频档的预算。
+
+    只断言「接口返回了 rate_limit=2」是不够的 —— 那只能证明它被记录了。
+    这里检查 Runner 实际拿到的 ``config``，也就是 ``build_command`` 读的对象：
+
+    * 低频档（httpx 预算 ``rate_limit=10``）遇上请求里的 ``rate_limit=50``
+      必须仍是 ``10``：请求放松不了档位已经压下来的速率；
+    * 请求里的 ``rate_limit=2`` 才会真的把它收紧到 2；
+    * ``timeout_seconds`` 映射成 ``process_timeout``（``modules/base.py`` 读的键）。
+    """
+    from core import pace as pace_module
+    from jobs.executor import execute_job
+
+    seen = []
+    original_config = {"threads": 50, "timeout": 10}
+
+    class _RecordingRunner:
+        category = "web"
+        config = dict(original_config)
+        last_execution = {}
+
+        def __init__(self, tool_name):
+            self.tool_name = tool_name
+
+        def run(self, target):
+            seen.append(dict(self.config))
+            from core.runner_result import RunnerResult
+
+            return RunnerResult.ok([], exit_code=0)
+
+    monkeypatch.setattr("modules.registry.build_runner", lambda name: _RecordingRunner(name))
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+
+    scope_id = _make_scope(admin_client)
+    project = _make_project(admin_client, scope_ids=[scope_id])
+    budget = pace_module.LIGHT_TOOL_BUDGET["httpx"]
+
+    # 1) 请求想放松（50 > 低频档的 10）：只能收紧，因此仍是 10。
+    loose = _public_job(
+        admin_client, project["id"], scope_id, strategy="web_fingerprint", rate_limit=50
+    ).get_json()["job_id"]
+    jobs_store.claim_next_job("w-phase3", lease_seconds=300)
+    execute_job(loose)
+    assert seen[0]["rate_limit"] == budget["rate_limit"] == 10
+    assert seen[0]["threads"] == budget["threads"]
+
+    # 2) 请求真的收紧（2 < 10）：落到 runner.config 上。
+    # 3) 超时映射成 process_timeout（工具配置里原本没有这个键）。
+    seen.clear()
+    tight = _public_job(
+        admin_client,
+        project["id"],
+        scope_id,
+        strategy="web_fingerprint",
+        rate_limit=2,
+        timeout_seconds=1,
+    ).get_json()["job_id"]
+    jobs_store.claim_next_job("w-phase3", lease_seconds=300)
+    execute_job(tight)
+    assert seen[0]["rate_limit"] == 2
+    assert seen[0]["process_timeout"] == 1
+
+    # 覆盖写的是 Runner 实例上的副本，不是模块级配置对象本身。
+    assert _RecordingRunner.config == original_config
+
+
+def test_legacy_job_entry_accepts_operator_and_limits(admin_client):
+    """老入口同样接受这三个字段：同一份规则就该在同一层被接受。
+
+    否则「写了 operator 但那条入口没转发」会变成一个静默不生效的字段 ——
+    比报错更难排查。
+    """
+    scope_id = _make_scope(admin_client, active_scan=False)
+    resp = admin_client.post(
+        "/api/jobs",
+        json={
+            "scope_id": scope_id,
+            "targets": ["www.example.test"],
+            "tools": ["subfinder"],
+            "operator": "李四",
+            "rate_limit": 3,
+            "timeout_seconds": 20,
+        },
+    )
+    assert resp.status_code == 202, resp.get_json()
+    job_id = resp.get_json()["job_id"]
+
+    assert jobs_store.operator_of_job(job_id) == "李四"
+    limits = jobs_store.limits_of_job(job_id)
+    assert (limits.rate_limit, limits.timeout_seconds) == (3, 20)
+    # 老入口没有项目，因此不该凭空多出一个 project_id（历史响应形状不变）。
+    assert jobs_store.project_id_of_job(job_id) is None
+    assert "project_id" not in resp.get_json()
+
+
+def test_legacy_job_entry_defaults_are_unchanged(admin_client):
+    """不带这三个字段时，老入口的行为与引入 Phase 3 之前逐字节一致。"""
+    scope_id = _make_scope(admin_client, active_scan=False)
+    resp = admin_client.post(
+        "/api/jobs",
+        json={"scope_id": scope_id, "targets": ["www.example.test"], "tools": ["subfinder"]},
+    )
+    assert resp.status_code == 202
+    job_id = resp.get_json()["job_id"]
+
+    assert jobs_store.operator_of_job(job_id) == jobs_store.DEFAULT_OPERATOR
+    assert jobs_store.strategy_of_job(job_id) is None
+    assert jobs_store.authorization_of_job(job_id) == {"note": None, "confirmed": None}
+    assert jobs_store.limits_of_job(job_id).is_empty is True
+
+
+def test_scan_center_metadata_exposes_the_limit_ranges(admin_client):
+    """上下界与中文说明由服务端下发 —— 否则前端只能抄一份会漂移的副本。"""
+    from core import job_limits
+
+    body = admin_client.get("/api/scan-center").get_json()
+    limits = body["limits"]
+    assert set(limits) == {"rate_limit", "timeout_seconds"}
+
+    assert limits["rate_limit"]["field"] == job_limits.FIELD_RATE_LIMIT
+    assert limits["rate_limit"]["min"] == job_limits.RATE_LIMIT_MIN
+    assert limits["rate_limit"]["max"] == job_limits.RATE_LIMIT_MAX
+    assert limits["rate_limit"]["label"] and limits["rate_limit"]["hint"]
+    assert limits["timeout_seconds"]["field"] == job_limits.FIELD_TIMEOUT_SECONDS
+    assert limits["timeout_seconds"]["max"] == job_limits.timeout_seconds_max()
+
+
+def test_scan_center_page_exposes_the_operator_field(admin_client):
+    """操作者输入框与「它是记录、不是权限」的说明必须在页面上（方案第 14 节）。"""
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    assert 'id="job-operator"' in body
+    assert 'name="operator"' in body
+    # 限速/超时的输入框由服务端元数据生成，页面上只留一个容器。
+    assert 'id="limits-fields"' in body
+    assert 'id="limits-config"' in body
+
+
+def test_scan_center_js_builds_limit_inputs_from_server_metadata():
+    """前端不得写死限速/超时的字段名与上下界，一律读服务端下发的 ``limits``。
+
+    与工具清单、分组、节奏同一条理由：写死就会漂移 —— 后端改了上下界，
+    页面还停在上一个版本，而且**不会报错**。
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    code_only = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith(("*", "//", "/*"))
+    )
+
+    assert "renderLimits(center.limits)" in source
+    assert "spec.field" in source, "输入框的字段名必须来自服务端元数据"
+    assert "spec.label" in source and "spec.min" in source and "spec.max" in source
+    # 字段名不得以字符串字面量出现在代码里（注释里出现是允许的 —— 那是设计说明）。
+    for hardcoded in ('"rate_limit"', '"timeout_seconds"', "'rate_limit'", "'timeout_seconds'"):
+        assert hardcoded not in code_only, f"scan_center.js 写死了限速字段名: {hardcoded}"
+    # 空值不拼进请求体：留空 = 不指定，而不是传 0 或 null 绕一圈。
+    assert "data-limit-field" in source
+    assert "collectLimits()" in source
+
+
+def test_scan_center_js_forwards_the_operator_and_limits():
+    """前端必须真的把操作者与限速转发出去（只显示不转发等于暗箱）。"""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    assert 'payload.operator = operatorName' in source
+    assert "Object.keys(limits).forEach" in source
+
+
+def test_job_detail_frontend_shows_the_phase3_context(admin_client):
+    """任务详情页要显示操作者 / 策略 / 授权依据 / 本次收紧（源码级守卫）。
+
+    读文件而不是 ``admin_client.get("/static/app.js")``：后者返回的是未关闭的
+    文件流，会给整个套件多挂一条 ``ResourceWarning``（实测确认）。
+    """
+    from pathlib import Path
+
+    script = (Path(__file__).resolve().parents[2] / "web" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    assert "job.operator" in script
+    assert "job.strategy" in script
+    assert "job.authorization" in script
+    assert "job.limits" in script
+    # 授权确认必须写明「使用者确认、不是安全边界」——与页面上的口径一致。
+    assert "不是安全边界" in script

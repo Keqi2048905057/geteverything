@@ -187,14 +187,14 @@ python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
 ### 测试与验收
 
 ```bash
-python -m pytest                                          # 1149 passed, 2 skipped
+python -m pytest                                          # 1288 passed, 2 skipped
 python -m ruff check .                                    # All checks passed!
-python -m mypy app.py core api jobs storage.py modules scripts  # Success: no issues found in 71 source files
+python -m mypy app.py core api jobs storage.py modules scripts  # Success: no issues found in 72 source files
 python scripts/check_env.py                               # 环境自检（只读）
 ```
 
 > 这三个数字以仓库根的 [`PROJECT_STATE.md`](../PROJECT_STATE.md)「最近一次验证」为准
-> （本节是 Phase 4 时的快照）。
+> （本节是规划方案 Phase 3 时的快照 —— **它是快照，会过期**，每次前移后都需要人来更新）。
 
 测试**从不**触碰仓库的 `results/`：`tests/conftest.py` 会把两个数据库、上传目录、
 产物目录、导出目录全部指向临时目录。

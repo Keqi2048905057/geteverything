@@ -58,9 +58,17 @@ def create_job():
           "tools": ["subfinder"],
           "mode": "mock",
           "pace": "normal",          // 可选，见下
+          "operator": "张三",         // 可选，操作者标识（审计留痕）
+          "rate_limit": 2,           // 可选，每秒请求上限（只能收紧）
+          "timeout_seconds": 30,     // 可选，单步超时秒数（只能收紧）
           "scenario": "success",     // 可选，仅 mock
           "idempotency_key": "..."   // 可选，见下
         }
+
+    ``operator`` / ``rate_limit`` / ``timeout_seconds`` 与公网入口
+    （``POST /api/public-jobs``）同一口径：**只记录、只收紧**，不是权限开关。
+    它们之所以也出现在这条老入口上，是因为「某个字段只在某一条入口生效」
+    会让使用者以为另一条入口上写了也管用 —— 同一份规则就该在同一层被接受。
 
     ``pace``（可选，``light`` / ``normal``，见 ``core/pace.py``）：这是
     「这条任务按多快的节奏跑」的**收紧**开关，不是权限开关 —— 它不能放开
@@ -101,6 +109,13 @@ def create_job():
         scenario=payload.get("scenario"),
         idempotency_key=payload.get("idempotency_key"),
         pace=payload.get("pace"),
+        # Phase 3「操作者记录 / 限速配置 / 超时配置」：这条历史入口同样接受
+        # 这三个字段。它们**只记录、只收紧**（见上方 docstring），因此在这一层
+        # 转发它们不会放松任何一道闸门；不转发反而会造成「同一个字段在两条
+        # 入口上一个生效一个被忽略」这种更难排查的不一致。
+        operator=payload.get("operator"),
+        rate_limit=payload.get("rate_limit"),
+        timeout_seconds=payload.get("timeout_seconds"),
     )
 
     return jsonify(submission.to_dict()), 202
