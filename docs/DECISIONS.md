@@ -838,7 +838,7 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
      它的 `mode="real"` 一直要求三道闸门齐全；要不要在它上面再叠一层公网白名单，
      等价于「要不要让老入口也变成公网入口」。
    * 三种可选口径，请你选一个（**不选就保持现状**，现状已在
-     `docs/API.md` §6 与 `docs/CODEBASE_MAP.md` §9.11.1 如实写明）：
+     `docs/API.md` §6 与 `docs/CODEBASE_MAP.md` §9.11.1（已加注指向 §9.29.6）如实写明）：
      **(a) 保持现状**：老入口是内网联调入口，白名单只在公网入口生效（文档已写明）；
      **(b) 老入口也装白名单**：`api/jobs.py` / `api/scan.py` 加
      `assert_tools_internet_allowed()`，代价是既有契约测试要改、老入口的重工具在

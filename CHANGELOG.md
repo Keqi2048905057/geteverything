@@ -1509,7 +1509,7 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
   这是「老入口要不要也变成公网入口」的产品口径问题，加上它会改变既有 API 可用行为
   （`test_legacy_job_api_still_works` 契约要跟着动），属**破坏性变更**而非收口，
   故如实登记在 `docs/DECISIONS.md` §3.11.5 第 1 条（含三种可选口径）等你拍板。
-  现状已在 `docs/API.md` §6 与 `docs/CODEBASE_MAP.md` §9.11.1 / §9.29.6 写明。
+  现状已在 `docs/API.md` §6 与 `docs/CODEBASE_MAP.md` §9.29.6（§9.11.1 已加注指向它）写明。
 - **执行期复检的错误码是步骤级、不是任务级**：`jobs/executor.py` 复检 Scope /
   环境开关 / `active_scan` 失败时，**该步骤**记 `scope_violation`，但全部步骤都失败时
   `aggregate_status()` 给的是 `unknown_error`。这是既有聚合语义（本轮刻意没有顺手改它，
