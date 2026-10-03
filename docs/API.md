@@ -221,8 +221,18 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 * `scope_id` **必填**：缺失 → 400 `bad_request`；不存在或目标越界 → 403 `scope_violation`（整体拒绝）。
 * `mode` 默认 `mock`；`real` 需要 `GEF_ALLOW_REAL_SCAN=true` **且** `scope.active_scan=true`。
 * `tools`（或历史别名 `tool`）接受**字符串数组**或**逗号分隔字符串**，两者等价；
-  逐项去空白、丢空项、**去重保序**（`tool_runner.normalize_tool_names()`，全仓唯一一份实现）。
-  工具名逐一过 `get_supported_runners()`，未登记者 → 400。
+  逐项去空白、丢空项、**去重保序**（`tool_runner.normalize_tool_names()`）。
+  > **口径校正**：这里此前写「全仓唯一一份实现」是**过头话** ——
+  > `core/application.py:95 split_str_list()` 是另一份（服务对象是请求字段），
+  > 且与它不是同一个函数（不去重、非法类型抛 `BadRequestError`）。端到端一致靠的是
+  > **去重与 registry 校验只有一个收口点**（`load_tools`），不是实现唯一。
+  > 见 `docs/CODEBASE_MAP.md` §9.30.4。
+* **同时给了 `tools` 与别名 `tool` 时以 `tools` 为准**，且判据是「**键在不在**」而不是
+  「值真不真」：`{"tools": [], "tool": "subfinder"}` 是**明确的空选择** → 400，
+  不会拿别名去建任务。`/api/run`、`/api/jobs`、`/api/public-jobs` 三条链现在同口径
+  （此前 `/api/jobs` 与 `/api/public-jobs` 用 `or` 折叠，会返回 202 并真的扫别名那个工具，
+  见 `docs/CODEBASE_MAP.md` §9.30.1）。
+* 工具名逐一过 `get_supported_runners()`，未登记者 → 400。
 * **空 `tools`（`[]` / `""` / 不给）一律 400 `bad_request`**，绝不回落到
   `SCAN_CONFIG["enabled_runners"]`。回落等于「用户没选工具，系统自己挑一个去扫」——
   这条路径在 `docs/CODEBASE_MAP.md` BUG 索引第 7 条里记过，已修。
@@ -264,6 +274,9 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 * **202 而不是 200**：请求已接受但**尚未执行**。这里不执行任何工具。
 * `targets` 支持数组或逗号分隔字符串；也能用 `upload_id` 追加目标；两者可叠加。
 * `tools` 也可写作 `tool`；单个字符串会按逗号切分。任一工具名不在 `RUNNER_REGISTRY` → 400。
+  **同时给了两者时以 `tools` 为准，且判据是「键在不在」**：`{"tools": [], "tool": "subfinder"}`
+  → 400（明确的空选择），不会回落别名。见 §6.3 的同一段说明与
+  `docs/CODEBASE_MAP.md` §9.30.1。
 * 单任务目标数上限 `SCAN_LIMITS["max_targets_per_job"] = 20`（`config.py`，可由 `GEF_*` 调）→ 超限 400。
 * `idempotency_key`（≤200 字符，非法直接 400 不静默截断）：同键任务**尚在 `queued`/`running`** 时
   重复提交 → 返回同一个 `job_id` 且 `reused=true`。语义是「防重复提交」，不是「永久只跑一次」。
@@ -398,7 +411,7 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 | GET | `/api/projects/<project_id>` | — | `{"ok":true,"project":{...}}` | 404 `not_found` |
 | POST | `/api/projects/<project_id>/scopes` | JSON `{scope_id}` | **201** `{"ok":true,"project":{...}}`（幂等） | 400 缺 `scope_id` 或 Scope 不存在；404 项目不存在 |
 | POST | `/api/public-jobs/check` | JSON `{targets, project_id?}` | **200** `{"ok":true,"checks":[{raw,normalized,kind,valid,error_message,matches,eligible_scope_ids,candidates,real_scan_enabled,resolved_check_deferred,ready,blocker}],"summary":{"total","ready","blocked"},"suggested_mode","project_id"}` | 400 缺 `targets` / 请求体不是 JSON 对象 |
-| POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, pace?, mode?, operator?, authorization_confirmed?, rate_limit?, timeout_seconds?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","pace","pace_label","operator","authorization_confirmed","limits","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限 / `pace` 非法 / `operator` 非法 / `rate_limit` / `timeout_seconds` 越界；403 越界或真实扫描开关未开；404 项目不存在 |
+| POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, pace?, mode?, operator?, authorization_confirmed?, rate_limit?, timeout_seconds?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","pace","pace_label","operator","authorization_confirmed","limits","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限 / `pace` 非法 / `operator` 非法 / `rate_limit` / `timeout_seconds` 越界 / **`tools` 与别名 `tool` 同时给出且 `tools` 为空**；403 越界或真实扫描开关未开；404 项目不存在 |
 | GET | `/api/scan-center` | — | `{"ok":true,"projects","strategies","paces","tools","tool_groups","restricted_tools","limits","internet_allowed_tools"}` | 401 |
 
 `strategy` 合法值 = `core/tool_registry.py:STRATEGIES`：`asset_discovery`（默认，= `subfinder` + `httpx`）、
@@ -461,6 +474,23 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > 速率（`httpx -rl 10`）不会被请求里的 `rate_limit=50` 顶回去。
 > 越界一律 **400**，不静默夹到边界：写了 `100000` 却拿到 `100`，与拼错的档位拿到常规档
 > 是同一种危险错法。`details.field` 指到具体那一项。
+>
+> ⚠️ **两项的「生效面」差得很远，必须分开说**（实测，2026-10-03）：
+>
+> | 字段 | 真的变成命令行参数的 runner | 覆盖率 |
+> |---|---|---|
+> | `timeout_seconds` | 全部 | **17 / 17** —— 唯一读取点是 `modules/base.py:425 _timeout_seconds()`，所有 runner 都从它取超时 |
+> | `rate_limit` | `modules/subfinder.py:64`、`modules/httpx.py:212` | **2 / 17** —— 只有这两个 runner 的 `build_command()` 会追加 `-rl` |
+>
+> 关键在于：**公网白名单恰好就是这两个**（`{httpx, subfinder}`），所以公网授权测试
+> 这条链上 `rate_limit` 是 **2/2 全覆盖**的。但白名单**之外**的 15 个 runner 拿到
+> `rate_limit` 后是**静默 no-op**：`apply_to_runner` 会如实把值写进 `Runner.config`
+> 并返回 `True`，`build_command()` 里却没有任何对应参数 —— 从调用方看不出它没生效。
+> 老入口 `POST /api/jobs` 的 real 模式**可以**走到这些工具（见上一条 ⚠️），
+> 因此「给 nmap 设了 `rate_limit=5`」这件事目前只改了库里的记录，没有改命令。
+> 本轮**未改**这个覆盖面（给 15 个 runner 各加一个限速参数是独立工作，且部分工具
+> 根本没有对应开关）；如实记在这里，避免把「记录了」读成「限速了」。
+> 详见 `docs/CODEBASE_MAP.md` §9.30.5。
 >
 > **这四项同样不落成 `jobs` 表的列**：写在同一条 `job.created` 事件 detail 里，
 > 由 `operator_of_job` / `project_id_of_job` / `strategy_of_job` / `authorization_of_job` /

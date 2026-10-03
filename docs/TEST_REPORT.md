@@ -1499,3 +1499,190 @@ node --check web/static/app.js                        # 通过（本轮未改）
 | Agent 边界（方案第 12/16 节③） | §3.9 已挂「先不开工」，本轮**未触碰** `agent/` 任何文件。 |
 | 同轮审计判定为「设计取舍」的五条（两级选择 / `resolve_scope` 函数名 / 旧步骤名 / 「无法选工具」的前提 / `#job-consent` 的表单归属） | 逐条实测核对后判定**不是行为缺陷**，完整核对表与实测依据在 `docs/DECISIONS.md` §3.11.6。写下来是为了让下一个人不必重新推一遍，**不是**把它们当待办留着。 |
 
+### 13.5 补记（同一轮补跑）：执行期复检的**真实子进程端到端**验证
+
+§13.1～§13.3 的证据都停在**单元层**：`tests/unit/test_jobs_executor.py` 直接调
+`execute_job()`，用 `monkeypatch` 注入假 runner。它证明了「执行期会复检」，
+但**没有**证明「真的起 web + 真的起 `python -m jobs.worker` 子进程时，
+那条缝也堵上了」—— 创建期与执行期**分属两个进程**，正是这条缝的现场。
+
+因此本轮补跑了一次真实两进程验证（一次性脚本，跑完即删，**不入库**；
+口径与 §6.5 / §11.4 的一次性桩一致）：
+
+```text
+起 web（python app.py，独立临时库，GEF_ALLOW_REAL_SCAN=true）
+  → POST /api/public-jobs  mode=real targets=["www.example.test"]  → 202
+
+场景 A：任务落库后，直接 UPDATE scopes SET active_scan=0
+        再起子进程 python -m jobs.worker --once
+        结果 step=subfinder status=failed error_code=scope_violation
+             message=执行前 Scope 复检失败：该 Scope 未开启 active_scan，禁止执行真实外部扫描
+场景 B：Scope 保持 active_scan=1，但子进程带 GEF_ALLOW_REAL_SCAN=false 启动
+        结果 step=subfinder status=failed error_code=scope_violation
+             message=执行前真实扫描开关复检失败：GEF_ALLOW_REAL_SCAN 未开启，禁止执行真实外部扫描
+```
+
+正在补的 `tests/unit/test_jobs_executor.py::test_real_step_rechecks_*` 覆盖的是
+**同进程**；本节覆盖的是**跨进程**（web 创建 → worker 执行）。两者都过，
+才能说「开关只管下单不管出餐」这条缝真的没了。
+
+| 项 | 结果 |
+|---|---|
+| 真起 `app.py` + 真起 `python -m jobs.worker --once` | 通过（独立临时库 `/tmp/gef_e2e_f1d`，用完即弃） |
+| 场景 A（执行前收紧 `active_scan`） | 步骤 `scope_violation`，Runner **未被调用** |
+| 场景 B（worker 进程开关关闭） | 步骤 `scope_violation`，消息**点名** `GEF_ALLOW_REAL_SCAN` |
+| 目标 | `www.example.test`（RFC 6761 保留域）——即便闸门失效也不会碰真实外部资产 |
+| 真实外部流量 | **0**（两次都被拦在 Runner 之前；未开启任何真实扫描） |
+
+> 顺带证实一个**只在跨进程时才会暴露**的事实：场景 A / B 里**任务级**终态都是
+> `unknown_error`，而**步骤级**是 `scope_violation` —— 这正是 §3.11.1 第 3 条
+> 「步骤级 ≠ 任务级」的实际观感，本轮如实记录、**未**顺手改聚合语义。
+
+**验收探针也复跑了一遍**（`scripts/verify_public_scan.py`，走的是入库脚本而非临时脚本）：
+未授权目标 403 `scope_violation` / 禁工具 `nmap` 400 `bad_request` /
+项目外 Scope 400 / mock 演练 202，七步全过，退出码 0。
+
+---
+
+## 14. 第二轮只读审计：四处守卫/口径缺口收口（1311）
+
+> 本轮依据同一份工作单第 8/9 节（`:274-318`）、第 14 节 Phase 2/3（`:417-436`）、
+> 第 4 节原则 2（`:158-191`）、第 16 节①（`:462-468`）。
+> 审计方式是**三条独立子代理视角**（Phase 1 / 2 / 3 各一条，彼此不共享上下文）。
+> 设计判断记在 `docs/DECISIONS.md` §3.12，代码地图记在 `docs/CODEBASE_MAP.md` §9.30。
+
+### 14.1 实测结果
+
+```powershell
+cd get_everything_framework
+$env:PYTHONIOENCODING="utf-8"; python -m pytest -o addopts="" -q
+                                    # 1315 collected / 1313 passed, 2 skipped, 0 failures / 0 errors
+ruff check .                        # All checks passed!
+mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
+node --check web/static/scan_center.js                # 通过（本轮改过，用于变异验证）
+node --check web/static/assets.js                     # 通过（本轮改动）
+node --check web/static/app.js                        # 通过（本轮未改）
+```
+
+| 项 | §13（`8e7b8ba`…`d057a18`） | 本轮 |
+|---|---|---|
+| 用例总数（`--collect-only -q` 汇总） | 1307 | **1315**（+8） |
+| 其中「修复既有用例」 | — | 0 |
+| `test_*.py` 文件 | 40 | 40（未新增文件） |
+| mypy 源文件 | 72 | **72**（未新增源文件） |
+| `app.url_map` 规则 / 方法绑定 / `/api/*` | 48 / 50 / 42 | **48 / 50 / 42**（**未新增路由**） |
+
+**+8 的构成**（逐文件 `--collect-only -q` 实测，不是推算）：
+
+| 文件 | 用例 | 守什么 |
+|---|---|---|
+| `tests/unit/test_tool_parameters.py`（17 → **21**） | `test_jobs_does_not_fold_an_explicit_empty_selection_into_the_alias`（参数化 3 例） | 明确给了空选择时别名 `tool` 不得顶上来；并断言 `list_jobs() == []` |
+| 同上 | `test_jobs_still_accepts_the_single_tool_alias` | 修 `or` 折叠**不得**顺手删掉别名 |
+| `tests/integration/test_public_scan_mode.py`（122 → **125**） | `test_custom_strategy_does_not_fall_back_to_the_tool_alias` | 公网入口 `custom` 模板下同一处折叠（这是**真的会执行**的那一格） |
+| 同上 | `test_custom_strategy_still_accepts_the_single_tool_alias` | 公网入口的别名同样不许被顺手删掉 |
+| 同上 | `test_scan_center_page_does_not_copy_any_strategy_description` | 服务端下发的每段策略描述逐字都不得出现在 HTML 里 |
+| `tests/integration/test_assets_api.py`（29 → **30**） | `test_assets_js_keeps_internal_ids_and_db_columns_off_the_screen` | 详情标题不出现 `asset_<32hex>`；摘要不铺开 `canonical_key` |
+
+另有 **2 条既有用例被加强**（函数数不变，断言变严）：
+
+| 用例 | 改前 | 改后 |
+|---|---|---|
+| `test_scan_center_js_never_hardcodes_tool_names` | 手写 7 个工具名的黑名单 | 黑名单**从注册表派生**（17 + 1），并自检读出点 ≥ 18 |
+| `test_assets_js_never_renders_a_raw_scope_id_as_text` | 只守 `scope_id` | 拆出新的 UUID/列值守卫（见上表） |
+
+### 14.1.1 新增用例「在修复前是红的」（不是恰好也绿）
+
+把只改测试、不改实现的文件复制进 `c2a83b1`（修复前）的独立工作树跑，实测：
+
+```text
+$ python -m pytest -o addopts="" -q tests/integration/test_public_scan_mode.py -k custom_strategy
+1 failed, 2 passed
+  test_custom_strategy_does_not_fall_back_to_the_tool_alias
+    E  assert 202 == 400   ← 修复前真的拿别名建了任务
+
+$ python -m pytest -o addopts="" -q tests/unit/test_tool_parameters.py -k "fold or alias"
+3 failed, ...
+  test_jobs_does_not_fold_an_explicit_empty_selection_into_the_alias[empty-list]
+  test_jobs_does_not_fold_an_explicit_empty_selection_into_the_alias[empty-string]
+  （"blank-string" 那例改前也是 400 —— 与 §9.30.1 表里「巧合一致」那一格对上）
+```
+
+两条「别名仍然可用」的反向用例在**修复前后都通过**，这正是它们的作用：
+证明收口没有顺手把别名删掉。用完的工作树已删除。
+
+### 14.2 变异验证（守卫强度不是「看起来在守」）
+
+§14.1 那条加强后的守卫必须证明它真的会红 —— 报告里写「覆盖面从 7 扩到 18」不足以说明问题：
+
+```text
+变异：在 web/static/scan_center.js 里插一行 ``var MUTATION_PROBE = "dnsx";``
+      （"dnsx" 恰好**不在**旧黑名单的 7 个名字里，正是原先漏过的那一类）
+结果：test_scan_center_js_never_hardcodes_tool_names   FAILED
+还原：删掉该行 → 同一用例 PASSED
+复核：git diff / git status 确认工作树里没有残留变异
+```
+
+这条变异是**上一轮守卫会放过**的形态 —— 旧黑名单里没有 `dnsx`，注入后旧版仍绿。
+「加强前的守卫会放过、加强后会红」这一点本身就是收口的证据。
+
+### 14.2.1 行为类改动的改前 / 改后对照（跨提交实测，不是推理）
+
+§14.1 里那条 `tools` / `tool` 的收口改了**可用行为**，因此不能只给「改后是 400」：
+
+```text
+基线：git worktree add --detach <tmp> c2a83b1     # 修复前的那一个提交
+探针：同一份脚本，两种库（LOCAL_DB_PATH / GEF_OUTPUT_DIR 指向各自的临时目录），
+      GEF_ALLOW_REAL_SCAN=false，全部走 mock，目标 example.test
+
+                            /api/jobs 改前 → 改后      /api/run（两侧一致）
+{"tools": []}               400 → 400                  400
+{"tools": [], "tool": "subfinder"}    202 → 400        400
+{"tools": "", "tool": "subfinder"}    202 → 400        400
+{"tools": "  ,  ", "tool": "subfinder"}  400 → 400      400
+{"tool": "subfinder"}       202 → 202（**未变**）       200
+```
+
+改前那三行 202 不是只看状态码判定的：探针在同一进程里查了 `/api/jobs`，
+库里确实**多出**一条（`[] + tool`）与两条（`"" + tool`）`queued` 任务 ——
+即「明确说了不要工具，系统仍拿别名建了任务」是真的落库了。
+改后 `jobs_visible_after` 恒为 0，`test_jobs_does_not_fold_an_explicit_empty_selection_into_the_alias`
+里那句 `assert jobs_store.list_jobs() == []` 就是钉这一点的。
+
+**未发真实外部流量**：两次探针都钉死 `GEF_ALLOW_REAL_SCAN=false`，且工具链走的是
+`/api/jobs` 的默认 `mock`。用完的工作树与临时目录已删除（`git worktree remove --force`
++ `Remove-Item`），`git worktree list` 现在只剩主工作树。
+
+### 14.2.2 公网入口那条链的同一处折叠（**同一提交里一并补的**）
+
+`api/public_scan.py` 有同一行 `or`，但它的后果**与老入口不同** ——
+公网链多一层 `resolve_strategy_tools()`，所以必须分模板看（两侧都跨提交实测）：
+
+| 请求体（`mode=mock`，开关打开以便走到工具解析） | 模板 | 改前 | 改后 |
+|---|---|---|---|
+| `{"tools": []}` | `asset_discovery`（默认） | 202 `['subfinder','httpx']` | 202 `['subfinder','httpx']` |
+| `{"tools": [], "tool": "subfinder"}` | `asset_discovery` | **400**（模板工具是 `subfinder+httpx`，别名给出的 `subfinder` 与模板不一致） | 202 |
+| `{"tools": [], "tool": "subfinder"}` | `custom` | **202 `['subfinder']`，真的去扫** | **400** |
+| `{"tools": []}` | `custom` | 400「自定义模式必须显式选择至少一个工具」 | 400（未变） |
+| `{"tool": "subfinder"}` | `custom` | 202 `['subfinder']` | **202**（未变） |
+
+**关键的一格是 `custom` + `[]` + 别名**：同一件事（明确不要工具），
+**加一个别名就从「拒绝」变成「接受」**，而且真的落库执行。
+这不是「默认模板那条」的漏洞 —— 默认模板本来就要那两个工具，别名接不接管结果都一样；
+只有在「工具由请求体决定」的 `custom` 下，`or` 折叠才会把一个拒绝变成一次执行。
+本轮把两条链统一成同一判据后，`custom` + 空 `tools` 无论有没有别名都是 400。
+
+两条新用例（`test_custom_strategy_does_not_fall_back_to_the_tool_alias` /
+`test_custom_strategy_still_accepts_the_single_tool_alias`）**在修复前的代码上是红的** ——
+把测试文件复制进 `c2a83b1` 的工作树跑，实测 `1 failed`（`assert 202 == 400`），
+这是「这条用例真的在守」的证据，而不是「它恰好也是绿的」。
+
+### 14.3 本轮**没测**的东西（如实列出）
+
+| 没测的 | 为什么 |
+|---|---|
+| 浏览器里的真实交互 | 项目**没有浏览器测试**（无 `package.json`，`tests/` 下无 `.js`）。`test_scan_center_js_*` / `test_assets_js_*` 这 8 条全是**源码级守卫**：只能证明「代码里存在/不存在这些口径」，不能证明「浏览器里真的这么跑」。渲染路径另用一次性 DOM 桩人工核对过（§11.4），但那不是回归测试。 |
+| 真实外网目标 | 硬约束：不扫未授权目标。全部用例走 mock / 注入假 runner，目标是 `example.test` 与 RFC 5737 保留段。 |
+| `rate_limit` 对白名单外 15 个 runner 生效 | **未实现**，本轮只是**如实记录**了覆盖面（2/17）。给每个 runner 加限速参数是独立工作，且部分工具没有对应开关。见 §3.12.5 第 2 条与 `docs/API.md` §6.3。 |
+| Agent 边界（方案第 12/16 节③） | §3.9 已挂「先不开工」，本轮**未触碰** `agent/` 任何文件（`git diff HEAD --stat -- agent/` 为空）。 |
+| 老入口 `POST /api/jobs` 不装公网白名单 | 仍是**刻意不改**的产品口径问题，见 §13.4 与 §3.11.5 第 1 条。 |
+

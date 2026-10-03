@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）**（2026-10-03）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）**（2026-10-03）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -2552,8 +2552,13 @@ WHERE o.job_id = ?
 
 修法：
 
-- 新增 `tool_runner.normalize_tool_names()` 作为**全仓唯一一份**参数规范化实现
+- 新增 `tool_runner.normalize_tool_names()` 作为**工具参数**的规范化实现
   （逗号拆分、逐项去空白、丢空项、去重保序、非字符串非数组 → `ValueError`）；
+  > **口径校正（§9.30.4）**：此前这里写「全仓唯一一份参数规范化实现」是**过头话**。
+  > `core/application.py:95 split_str_list()` 是另一份，服务对象是请求字段；
+  > 两者不是同一个函数（它不去重、非法类型抛 `BadRequestError`）。端到端一致
+  > 靠的不是「只有一份实现」，而是**去重与 registry 校验只有一个收口点**
+  > （`load_tools`）。改一处时别忘了另一处，详见 §9.30.4。
 - `load_tools(None)` 与 `load_tools([])` **严格分开**：前者是 CLI 语义（未指定 → 回落
   配置），后者是「明确不要」（→ 空列表，由调用方拒绝）。HTTP 侧一律传 `[]` 而不是
   `None`，因此**回落路径在 Web 上不可达**；
@@ -3092,6 +3097,16 @@ app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
 > 「唯一没被任何用例走到的是 `GET /api/tool/<tool_name>/results`」这句
 > 在第七轮之后依然成立。
 
+**跨进程补验**（本轮补跑，一次性脚本不入库）：§9.29.1 那条缝的现场是
+**创建期与执行期分属两个进程**（web 落库 → worker 执行），而
+`tests/unit/test_jobs_executor.py` 的两条新用例是**同进程**调 `execute_job()`。
+因此另起了一次真实两进程验证：`python app.py` 建 real 任务 → `UPDATE scopes SET active_scan=0`
+→ 子进程 `python -m jobs.worker --once`，得到 `scope_violation`
+「执行前 Scope 复检失败」；再把子进程的 `GEF_ALLOW_REAL_SCAN=false` 跑一遍，
+得到「执行前真实扫描开关复检失败」并点名该变量。目标用 RFC 6761 的
+`www.example.test`，真实外部流量 0。详细记录（含「任务级 `unknown_error`
+而步骤级 `scope_violation`」这条跨进程才看得见的观感）在 `docs/TEST_REPORT.md` §13.5。
+
 #### 9.29.6 本节**没有**收口的一条（老入口不装公网白名单）
 
 实测：老入口 `POST /api/jobs` 用 `tools=["nmap"]` + `mode="real"`（开关开 +
@@ -3117,4 +3132,130 @@ app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
 
 另两条（第 8 节「用户无法主动选择工具」这个前提当时已不成立、方案里
 `resolve_scope(target)` 这个函数名不存在）见 `docs/DECISIONS.md` §3.11.6。
+
+### 9.30 Phase 1～3 的**第二轮**只读对照审计：四处守卫/口径缺口收口（一轮跨 `api/` + `web/`）
+
+> §9.29 那轮之后又做了一次对 Phase 1 / 2 / 3 的只读对照审计（**三条独立子代理视角**，
+> 各自未改文件）。三条里报出来的问题分两类：**守卫强度不足**（看着在守、实际漏守）
+> 与**口径不一致**（同一个请求体从两条链进来得到两种解释）。本节记录本轮收口的部分，
+> 以及判定为「如实登记、不改行为」的部分。
+
+#### 9.30.1 `/api/jobs` 与 `/api/public-jobs` 的 tools/tool 折叠（**已修**）
+
+`api/jobs.py:106` 与 `api/public_scan.py:96` 此前都写：
+
+```python
+tools=payload.get("tools") or payload.get("tool")
+```
+
+`or` 把「**明确给了空选择**」与「没给这个键」当成同一件事。后果（一次性探针实测，
+读库不读响应体）：
+
+| 请求体 | `POST /api/run` | `POST /api/jobs`（改前） | `POST /api/jobs`（改后） |
+|---|---|---|---|
+| `{"tools": []}` | 400 | 400（`or` → `None` → 下游空 → 400，**巧合**一致） | 400 |
+| `{"tools": [], "tool": "subfinder"}` | **400** | **202，落库 `tools=['subfinder']`、`total_steps=1`** | **400** |
+| `{"tools": "", "tool": "subfinder"}` | **400** | **202，落库 `tools=['subfinder']`** | **400** |
+| `{"tools": "  ,  ", "tool": "subfinder"}` | 400 | 400（**巧合**一致：该串非空，`or` 不折叠） | 400 |
+| `{"tool": "subfinder"}` | 200 | 202（别名正常路径，**不能**一起删） | **202**（未变） |
+
+**「改前」那一列不是推理出来的**：`git worktree add --detach <tmp> c2a83b1` 检出修复前
+的提交，在**同一份探针脚本**上跑出 `202 / 202 / 400` 的行（并确认库里真的多出
+1 条与 2 条 `queued` 任务），改后同一脚本给 `400 / 400 / 400`。两次都是
+`GEF_ALLOW_REAL_SCAN=false` + mock，未发任何外部流量。
+
+这与 §9.25.3 记的老毛病**同因不同向**：那一次是「空选择被折叠成 `None` 后回落配置默认值」，
+这一次是「空选择被折叠成 `None` 后让**别名**顶上来」。两者都是「用值的真假代替键的存在」。
+修法与 `api/scan.py:168-171` 逐字一致：
+
+```python
+tools=payload.get("tools") if "tools" in payload else payload.get("tool")
+```
+
+**判据是「有没有给这个键」，不是「这个键的值真不真」。** 别名本身保留
+（`test_jobs_still_accepts_the_single_tool_alias` 守着别把它一起删了）。
+
+#### 9.30.2 前端「工具名不写死」的守卫只覆盖 7/18（**已修**，守卫强度问题）
+
+`test_scan_center_js_never_hardcodes_tool_names` 里的字面量黑名单此前是**手写的 7 个**
+（`subfinder` / `httpx` / `nmap` / `naabu` / `nuclei` / `katana` / `feroxbuster`）。
+探针复刻该守卫逻辑后往 `scan_center.js` 注入 `var HARDCODED = "dnsx";` → **守卫放行**；
+`amass` / `gospider` / `waybackurls` / `dirsearch` / `alterx` / `assetfinder` / `enscan` /
+`oneforall` / `shuffledns` / `amass_intel` 同样全部漏过 —— 17 个 runner 里 **11 个不在
+黑名单上**。这不是「前端写死了」的实现缺陷，而是**守卫形同虚设**：它看起来在守方案第 9 节，
+实际只守住三分之一，以后有人写死 `dnsx` 不会有任何红灯。
+
+收口：黑名单改为**从注册表派生**，并加一条「读出点数不得少于 18」的自检（防止派生源
+自身坏掉让守卫静默变成空循环）：
+
+```python
+registry_tools = sorted(set(get_supported_runners()) | set(KNOWN_UNAVAILABLE_TOOLS))
+assert len(registry_tools) >= 18, f"注册表读出点异常，守卫会形同虚设: {registry_tools}"
+for name in registry_tools:
+    assert f'"{name}"' not in code_only, ...
+```
+
+**变异验证**：往 `scan_center.js` 插一行 `var MUTATION_PROBE = "dnsx";` → 该用例
+**FAILED**；删掉还原 → **PASSED**；工作树无残留变异。注册表以后加一个工具，
+这条守卫自动覆盖它，不再需要有人记得手写进黑名单。
+
+#### 9.30.3 首屏兜底文案是后端描述的**逐字副本**（**已修**）
+
+`web/templates/scan_center.html:164` 的 `#strategy-note` 初始文本此前逐字抄了
+`core/tool_registry.py:557` 里 `asset_discovery` 那一档的 `description`。它会在
+`scan_center.js:466` 拉到元数据后被覆盖，所以肉眼几乎看不见 —— 但后端一改描述，
+这段 HTML 就**静默过期**，而当时**没有任何守卫**盯着它（节奏说明有
+`test_scan_center_js_does_not_hardcode_pace_wording`，策略说明没有）。
+
+收口：HTML 里只留中性占位（「正在加载策略说明…」），并新增守卫
+`test_scan_center_page_does_not_copy_any_strategy_description` —— 判据不是
+「有没有这句话」，而是**服务端当前下发的每一段 `description` 逐字都不在页面里**：
+
+```python
+for strategy in list_strategies():
+    assert strategy.description not in body
+```
+
+后端改描述，这条仍然成立；谁再抄一份，它立刻红。**是「唯一来源」的可执行版本**。
+
+#### 9.30.4 「全仓唯一一份参数规范化实现」是过头话（**已改措辞**，非行为改动）
+
+`tool_runner.normalize_tool_names()` 的 docstring 与 §9.25.3 都写着「全仓唯一一份」。
+实测打脸：`core/application.py:95 split_str_list()` 是**另一份**，服务对象是请求字段，
+且两者不是同一个函数（`split_str_list is normalize_tool_names == False`）：
+
+| | `normalize_tool_names` | `split_str_list` |
+|---|---|---|
+| 去重 | 去重保序 | **不去重** |
+| 非法类型 | `ValueError` | `BadRequestError` |
+| 位置 | `tool_runner.py:60` | `core/application.py:95` |
+
+端到端行为一致的原因**不是**「只有一份实现」，而是**去重与 registry 校验只有一个收口点**
+（`load_tools`，`tool_runner.py:107`）。也就是说：这个不变量是真的，但它靠的是收口点唯一，
+不是实现唯一。改一处时必须记得另一处 —— 按原文理解会以为改 `normalize_tool_names` 就够了。
+
+#### 9.30.5 `rate_limit` 与 `timeout_seconds` 的**生效面差得很远**（如实记录，未改）
+
+Phase 3 把这两个字段都写进 `Runner.config`（`core/job_limits.py:apply_to_runner`），
+但**真的把它变成命令行参数**的 runner 数完全不同（grep + 逐类内省双口径实测）：
+
+| 字段 | 读取点 | 覆盖率 |
+|---|---|---|
+| `process_timeout` | `modules/base.py:425 _timeout_seconds()`（唯一读取点） | **17 / 17** |
+| `rate_limit` | `modules/subfinder.py:64`、`modules/httpx.py:212` | **2 / 17** |
+
+关键事实：**公网白名单恰好就是这两个**（`internet_allowed_tools() == ['httpx','subfinder']`），
+所以公网授权测试这条链上 `rate_limit` 是 **2/2 全覆盖**。但白名单外的 15 个 runner
+拿到 `rate_limit` 后是**静默 no-op**：`apply_to_runner(rate_limit=5)` 返回 `True` 且
+`config` 里确实写进 `5`，而 `build_command()` 里没有 `-rl`。老入口 `POST /api/jobs`
+的 real 模式可以走到这些工具（§9.29.6），因此「给 nmap 设了限速」目前只改了记录、
+没有改命令。本轮**未改覆盖面**（给 15 个 runner 各加限速参数是独立工作，部分工具
+根本没有对应开关），只在 `docs/API.md` §6.3 与本节如实写明。
+
+#### 9.30.6 本节改动**不涉及**的地方
+
+`agent/`（一行未动，Agent 直调 Runner 的缺口仍在，见 §3.9 的「先不开工」）、
+全部数据库表结构与数据（**零 DDL**）、`core/policy.py`、`core/scope.py`（本轮未改它）、
+认证授权、审计字段集合、公网工具白名单（仍是 `subfinder` + `httpx`，`nuclei` 仍
+`internet_allowed=false`）、路由总数（**48 规则 / 50 绑定 / 42 个 `/api/*`，未新增未删除**）。
 

@@ -1397,11 +1397,94 @@ real 任务入队（三道闸门全过）
 **未对任何真实外部目标发起扫描** —— 全部用例走 mock / 注入假 runner，
 目标是 `example.test` 与 RFC 5737 保留段。
 
+#### 第二轮只读审计：四处守卫 / 口径缺口收口
+
+§3.11 之后又做了一次对 Phase 1～3 的只读对照审计，这次是**三条独立子代理视角**
+（Phase 1 / Phase 2 / Phase 3 各一条，彼此不共享上下文）。三条都给出了判定表与
+可复现证据，报出来的问题分两类：**守卫强度不足**（看着在守、实际漏守）与
+**口径不一致**（同一个请求体从两条链进来得到两种解释）。本轮收口四处：
+
+- **`tools` / `tool` 的 `or` 折叠**（`api/jobs.py:106`、`api/public_scan.py:96`）：
+  原先写 `payload.get("tools") or payload.get("tool")`，`or` 把「**明确给了空选择**」
+  与「没给这个键」当成同一件事。实测（探针读库不读响应体）：
+  `{"tools": [], "tool": "subfinder"}` 从 `/api/run` 进来是 **400**，
+  从 `/api/jobs` 进来是 **202 且落库 `tools=['subfinder']`、真的去扫**；
+  `{"tools": ""}` 同样。这与 §9.25.3 记的老毛病**同因不同向**
+  （那次是空选择被折叠后回落配置默认值，这次是让**别名**顶上来）。
+  修法与 `api/scan.py:168-171` 逐字一致：`payload.get("tools") if "tools" in payload
+  else payload.get("tool")` —— **判据是「有没有给这个键」，不是「这个键的值真不真」**。
+  别名本身保留（有反向用例守着别一起删掉）。新增 4 条用例，
+  且每条都同时断言 `list_jobs() == []`：只看状态码不够，「400 但留下一条 queued 任务」
+  同样是越权执行。
+  **改前 / 改后是跨提交实测的，不是推理**：`git worktree add --detach <tmp> c2a83b1`
+  检出修复前的提交，同一份探针在两种库上跑 —— 改前
+  `{"tools": [], "tool": "subfinder"}` 与 `{"tools": "", "tool": "subfinder"}` 都是
+  **202 且库里真的多出 queued 任务**，改后同一脚本给 400、库为零；
+  `{"tool": "subfinder"}` 两侧都是 202（别名未受影响）。两次探针都钉死
+  `GEF_ALLOW_REAL_SCAN=false` 且走 mock，用完的工作树与临时目录已删除。
+  详录 `docs/TEST_REPORT.md` §14.2.1。
+
+- **前端「工具名不写死」的守卫只覆盖 7/18**：`test_scan_center_js_never_hardcodes_tool_names`
+  的字面量黑名单此前是**手写的 7 个**。探针复刻该守卫逻辑后往 `scan_center.js` 注入
+  `var HARDCODED = "dnsx";` → **守卫放行**；`amass` / `gospider` / `waybackurls` /
+  `dirsearch` 等 **11 个**同样全部漏过。这不是实现缺陷，而是**守卫形同虚设** ——
+  它看起来在守方案第 9 节，实际只守住三分之一。现在黑名单**从注册表派生**
+  （`get_supported_runners() | KNOWN_UNAVAILABLE_TOOLS`），并自检读出点 ≥ 18，
+  防止派生源坏掉让守卫静默变成空循环。注册表以后加一个工具，守卫自动覆盖它。
+
+- **首屏兜底文案是后端描述的逐字副本**：`scan_center.html:164` 的 `#strategy-note`
+  初始文本逐字抄了 `core/tool_registry.py:557` 的 `description`。它会被 JS 覆盖，
+  肉眼几乎看不见；但后端改描述它就**静默过期**，而当时**没有任何守卫**盯着它
+  （节奏说明有守卫，策略说明没有）。现在 HTML 只留中性占位，新增守卫按
+  「服务端当前下发的每一段描述逐字都不在页面里」判定 —— 后端改描述它仍成立，
+  谁再抄一份它立刻红。
+
+- **资产详情的 UUID 与数据库字段**：方案第 4 节原则 2 点名的三样里，`scope_id`
+  上一轮已收口，本轮补后两样 —— `assets.js` 详情标题此前写
+  `idEl.textContent = asset.id`（上屏 `asset_3f9c…`），摘要此前有一行「规范化键」
+  铺开 `host|example.com` 这种**列值**。现在标题给「类型 · 值」，摘要不再铺开；
+  实体 ID 仍留在 `data-asset-id` 与接口里供脚本定位，只是不上屏。
+
+**另两项如实登记、未改行为**：① `normalize_tool_names()` 的 docstring 与 §9.25.3
+此前称「全仓唯一一份参数规范化实现」，实测 `core/application.py:95 split_str_list()`
+是另一份且不是同一个函数 —— 端到端一致靠的是**去重与 registry 校验只有一个收口点**
+（`load_tools`），不是实现唯一，措辞已校正；② `rate_limit` 的**生效面**实测只覆盖
+**2/17** runner（`subfinder` / `httpx` 的 `build_command()` 才会追加 `-rl`），
+而 `timeout_seconds` 是 **17/17**（唯一读取点 `modules/base.py:425`）——
+公网白名单**恰好就是那两个**，所以公网链上是 2/2 全覆盖，但白名单外是**静默 no-op**
+（`config` 写了、命令行里没有），而老入口的 real 模式可以走到那些工具。
+未改覆盖面（属独立工作），只在 `docs/API.md` §6.3 与 `docs/CODEBASE_MAP.md` §9.30.5
+写明，避免把「记录了限速」读成「限速了」。
+
+**本轮新增 8 条 / 加强 2 条**（`tests/unit/test_tool_parameters.py` 17 → 21、
+`tests/integration/test_public_scan_mode.py` 122 → 125、
+`tests/integration/test_assets_api.py` 29 → 30）。其中公网入口那 2 条是**同一处折叠的另一格**：
+`api/public_scan.py` 有同一行 `or`，但它的后果与老入口不同 —— 公网链多一层
+`resolve_strategy_tools()`，默认模板下别名接不接管结果都一样（模板本来就要那两个工具），
+**只有在 `custom` 模板下**（工具由请求体决定）`{"tools": [], "tool": "subfinder"}`
+才会从 400「自定义模式必须显式选择至少一个工具」变成 **202 并真的去扫**
+（跨提交实测，见 `docs/TEST_REPORT.md` §14.2.2）。
+
+**「新增用例在修复前是红的」已实测**：把只改测试的文件复制进 `c2a83b1` 的独立工作树跑 ——
+`test_custom_strategy_does_not_fall_back_to_the_tool_alias` → `assert 202 == 400` 失败；
+`test_jobs_does_not_fold_...` 的 empty-list / empty-string 两例同样失败
+（第三例 `"  ,  "` 改前也通过，与 §9.30.1 表里「巧合一致」那一格对得上）；
+两条「别名仍可用」的反向用例修复前后都通过 —— 证明收口没有顺手删掉别名。
+
+**变异验证**：在 `scan_center.js` 里插一行 `var MUTATION_PROBE = "dnsx";`
+（恰是**旧黑名单漏过**的那一类）→ 加强后的守卫 **FAILED**；删掉还原 → **PASSED**；
+工作树无残留变异。「加强前会放过、加强后会红」本身就是收口的证据。
+
+**未动**：`agent/`（一行未改）、全部数据库表结构与数据（**零 DDL**）、
+`core/policy.py`、`core/scope.py`（本轮未改它）、认证授权、审计字段集合、
+公网工具白名单（**仍是 `subfinder` + `httpx`**）、路由总数（48 规则 / 50 绑定 /
+42 个 `/api/*`，未新增未删除）。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1293 passed, 2 skipped, 0 failures
+$ python -m pytest           # 1313 passed, 2 skipped, 0 failures
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
@@ -1413,10 +1496,14 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 基线演进：公网体验版 `1004` → Phase 1 UI 清理 `1009` → Phase 2 `1036` → Phase 3 `1091`
 → Phase 4 `1149` → 规划方案 Phase 1 `1159` → 规划方案 Phase 2 `1189`
 → 规划方案 Phase 3 `1290` → 第 6 节自动匹配授权资产 `1293`
-→ 规划方案第 13 节缺口回填 `1296`
-→ **本轮（执行期双开关复检 + Phase 1 四处审计缺口收口）`1307`**。
+→ 规划方案第 13 节缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处缺口 `1307`
+→ **本轮（第二轮只读审计：四处守卫/口径缺口收口）`1315`**。
 
-本轮的 +11 里，**5 条是新增、1 条是「修复一条此前依赖缺陷才通过的既有用例」**。
+本轮 +8（`tests/unit/test_tool_parameters.py` 17 → 21、`test_public_scan_mode.py`
+122 → 125、`test_assets_api.py` 29 → 30），另有 **2 条既有用例被加强**（函数数不变、
+断言变严：工具名守卫改为从注册表派生、资产页 UUID/列值拆出独立守卫）。
+
+上一轮（§13）的 +11 里，**5 条是新增、1 条是「修复一条此前依赖缺陷才通过的既有用例」**。
 逐文件差额由 `git worktree add --detach <tmp> 1746f41` 检出基线后两个工作树各跑一遍
 `--collect-only -q` 求差得到（1296 → 1307），不是推算：
 
@@ -1514,4 +1601,21 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
   环境开关 / `active_scan` 失败时，**该步骤**记 `scope_violation`，但全部步骤都失败时
   `aggregate_status()` 给的是 `unknown_error`。这是既有聚合语义（本轮刻意没有顺手改它，
   改了会影响所有既有任务的终态判定），已在 `docs/CODEBASE_MAP.md` §9.29.3 写明。
+- **`rate_limit` 只对 2 / 17 个 runner 真的生效**（实测，2026-10-03）：
+  读 `self.config.get("rate_limit")` 并把它变成命令行参数的只有
+  `modules/subfinder.py:64` 与 `modules/httpx.py:212`（各自的 `-rl`）。
+  `timeout_seconds` 则是 **17 / 17**（唯一读取点 `modules/base.py:425`）。
+  公网白名单**恰好就是那两个**，所以公网链上是 2/2 全覆盖；但白名单外的 15 个
+  runner 拿到它是**静默 no-op** —— `core/job_limits.apply_to_runner()` 返回 `True`
+  且 `config` 里确实写进了值，`build_command()` 里却没有任何对应参数，
+  从调用方看不出它没生效。老入口 `POST /api/jobs` 的 real 模式**可以**走到那些工具
+  （见上一条），因此「给 nmap 设了 `rate_limit=5`」目前只改了记录、没有改命令。
+  本轮**未改覆盖面**（给 15 个 runner 各加限速参数是独立工作，部分工具根本没有对应开关），
+  只在 `docs/API.md` §6.3 与 `docs/CODEBASE_MAP.md` §9.30.5 如实写明，
+  避免把「记录了限速」读成「限速了」。
+- **`normalize_tool_names()` 不是「全仓唯一一份参数规范化实现」**（措辞已校正）：
+  `core/application.py:95 split_str_list()` 是另一份，服务对象是请求字段，
+  且与它不是同一个函数（`split_str_list` 不去重、非法类型抛 `BadRequestError`）。
+  端到端行为一致靠的是**去重与 registry 校验只有一个收口点**（`load_tools`），
+  不是实现唯一 —— 改一处时必须记得另一处。见 `docs/CODEBASE_MAP.md` §9.30.4。
 

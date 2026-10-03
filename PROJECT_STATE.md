@@ -685,48 +685,52 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-03（执行期双开关复检 + Phase 1 四处审计缺口收口）
+验证时间：2026-10-03（第二轮只读审计：四处守卫 / 口径缺口收口）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1307 collected / 1305 passed / 2 skipped / 0 failures / 0 errors
+pytest: 1315 collected / 1313 passed / 2 skipped / 0 failures / 0 errors
 mypy:   Success: no issues found in 72 source files        ← 本轮未新增源文件
 node --check web/static/{scan_center.js,assets.js,app.js}: 均通过（本轮改前两个）
 路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
-路由覆盖：declared 50 / hit 49 —— 唯一没被走到的仍是 GET /api/tool/<tool_name>/results
-        （第七轮重跑，算法同 §3.1 / §6.4 / §9.2 / §9.26.7 / §9.27.5 / §9.28.6）
-本轮新增 9 个用例函数 / 修复 1 个既有用例：1296 → 1307 collected（参数化算 3 / 2）
-        test_real_step_rechecks_env_switch_at_execution_time（执行期复检 GEF_ALLOW_REAL_SCAN）
-        test_real_step_rechecks_active_scan_at_execution_time（执行期复检 Scope.active_scan）
-        test_normalize_target_accepts_schemeless_url（无协议 URL 归一，参数化 3 例）
-        test_normalize_target_still_reports_a_broken_cidr_as_cidr（坏网段不许修成域名）
-        test_public_url_target_is_normalized_to_its_host（三种写法 → 同一个主机）
-        test_scan_center_js_submits_the_current_target_input_not_a_stale_snapshot（四条口径）
-        test_scan_center_target_label_mentions_url（标签如实写 URL）
-        test_assets_js_never_renders_a_raw_scope_id_as_text（scope_id 不进文案）
-        test_page_has_no_dead_scan_report_block（摸不到的模板分支不再回来）
-        修复 test_real_step_rechecks_target_still_in_scope（它此前依赖缺陷才通过）
-零 DDL 复核：本轮**没有**任何 schema 变更；core/policy.py 一行未改（scope.py 只改输入归一化）
-变异验证：把新增的开关检查与 require_active_scan() 复检改成 `if False:` → 两条新用例同时 FAILED；
-        还原 → PASSED；工作树无残留变异
-独立审计：三条只读对照视角，四条真实缺口已收口；一条（老入口不装公网白名单）判定为
-        产品口径问题，如实登记 docs/DECISIONS.md §3.11.5 等你拍板，未擅自改行为
+本轮新增 8 条 / 加强 2 条：1307 → 1315 collected
+        test_jobs_does_not_fold_an_explicit_empty_selection_into_the_alias（参数化 3 例）
+        test_jobs_still_accepts_the_single_tool_alias（别名不许被顺手删掉）
+        test_custom_strategy_does_not_fall_back_to_the_tool_alias（公网入口 custom 那一格）
+        test_custom_strategy_still_accepts_the_single_tool_alias（公网入口别名不许删）
+        test_scan_center_page_does_not_copy_any_strategy_description（说明只能有一份）
+        test_assets_js_keeps_internal_ids_and_db_columns_off_the_screen（UUID / 列值不上屏）
+        加强 test_scan_center_js_never_hardcodes_tool_names（黑名单 7 → 从注册表派生 18）
+        加强 test_assets_js_never_renders_a_raw_scope_id_as_text（拆出 UUID/列值守卫）
+零 DDL 复核：本轮**没有**任何 schema 变更；core/policy.py / core/scope.py 一行未改
+变异验证：① 往 scan_center.js 插 `var MUTATION_PROBE = "dnsx";`（旧黑名单漏过的那一类）
+        → 加强后的守卫 FAILED；删掉还原 → PASSED；工作树无残留变异
+        ② 新增用例跑在**修复前**的 c2a83b1 工作树上（只复制测试文件、不改实现）：
+        custom_strategy 那条 `1 failed`（assert 202 == 400）、empty-list / empty-string
+        两条同样失败、两条别名反向用例两侧都通过；用完的工作树已删除
+独立审计：三条独立子代理视角（Phase 1 / 2 / 3），四处真实缺口已收口；
+        `rate_limit` 只覆盖 2/17 runner（timeout 17/17）如实登记，未改覆盖面
+未动：agent/（一行未改）、数据库结构与数据、认证授权、审计字段集合、
+        公网白名单（仍是 subfinder + httpx）、路由总数
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → **执行期双开关复检 + Phase 1 四处审计缺口收口 `1307`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → **第二轮只读审计：四处守卫/口径缺口收口 `1315`**
 
-> 本轮 +11 = 五个既有测试文件补用例（+2 / +4 / +3 / +1 / +1），其中 **1 条是「修复一条
-> 此前依赖缺陷才通过的既有用例」**。逐文件差额由 `git worktree add --detach <tmp> 1746f41`
-> 检出基线后两个工作树各跑一遍 `--collect-only -q` 求差得到（1296 → 1307），不是推算 ——
-> 除下表那 5 个文件外，**没有任何既有用例被删改，也没有任何一条既有断言被放松**。
+> 本轮 +8（`test_tool_parameters.py` 17 → 21、`test_public_scan_mode.py` 122 → 125、
+> `test_assets_api.py` 29 → 30），另有 **2 条既有用例被加强**（函数数不变、断言变严）：
+> 前端工具名守卫的黑名单**从注册表派生**（原先手写 7 个，实测 11 个工具名写死也不会红），
+> 资产页的 UUID / 数据库列值拆出独立守卫。**没有任何一条既有断言被放松。**
 >
-> 本轮**新增了执行期的第二道与第三道复检**（此前执行期只查 Scope 成员资格）：
-> `jobs/executor.py` 现在在调用 Runner 之前按创建期的**同一顺序**再读一次
-> `GEF_ALLOW_REAL_SCAN` 与 `Scope.active_scan` —— 补上「任务落库那一刻之后
-> 开关被关掉 / 范围被收紧」这条缝。顺序、错误码与「步骤级 ≠ 任务级」三条判断
-> 写在 `docs/CODEBASE_MAP.md` §9.29 与 `docs/DECISIONS.md` §3.11.1。
+> 本轮**未新增路由、未改表结构**：路由计数仍为 **48 规则 / 50 绑定 / 42 个 `/api/*`**；
+> 老入口 `POST /api/jobs` 的响应形状**一字未改**（仍不出现 `project_id` 等公网专属字段）。
 >
-> 本轮**未新增路由、未改表结构**：路由计数仍为 **48 规则 / 50 绑定 / 42 个 `/api/*`**。
+> 一处**行为**变化（很窄、有 6 条用例守着）：`tools` 与别名 `tool` **同时出现**且
+> `tools` 是空选择时，此前会拿别名去建任务（202 + 真的扫），现在与 `/api/run` 一致报 400。
+> 只给 `tool` 的正常用法不受影响（两条反向用例守着）。
+> **公网入口能真正执行的那一格只有 `custom` 模板**（默认模板本来就要那两个工具，
+> 别名接不接管结果都一样），详见 `docs/DECISIONS.md` §3.12.1 与
+> `docs/TEST_REPORT.md` §14.2.2。
+>
 > 老入口 `POST /api/jobs` 的响应形状**一字未改**（仍不出现 `project_id` 等公网专属字段）；
 > 它的 `mode="real"` 不装公网白名单这条**刻意没改**，实测证据与三种口径记在
 > `docs/DECISIONS.md` §3.11.5 第 1 条。
@@ -742,6 +746,7 @@ node --check web/static/{scan_center.js,assets.js,app.js}: 均通过（本轮改
 
 ```text
 （本次提交）  ← 本轮文档回填；上一批不含本文件改动的提交见下一行
+890e600  fix(api,web): 第二轮只读审计收口 —— tools/tool 折叠 + 两条守卫加强 + 说明副本
 c2a83b1  fix(web): 不再把 scope_id 渲染成文案 + 清掉三处死代码（Phase 1 审计缺口 ③⑤⑥⑦）
 0f5422d  fix(scan-center): 提交当前输入而不是上一次试算的快照（Phase 1 审计缺口 ①）
 1a53b4f  fix(scope): 无协议 URL 归一为它的主机（方案第 6 节「域名、IP、URL」）
@@ -768,13 +773,14 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 > **判断待推送量一律用 `git rev-list --count origin/main..HEAD`，不要抄本节数字。**
 > 下面表格只列**不含**本文件改动的那些提交（即 `docs: 状态板…` / `docs(state):…` 之外的全部）。
 
-与 `origin/main` 的关系：**本轮四个代码提交 + 上一批六个尚未推送**（用户原话「有需要我确认的
+与 `origin/main` 的关系：**本轮待推送的提交仍未推送**（用户原话「有需要我确认的
 等我起床找你的时候再让我确认」，推送属需确认项，本轮不推）。
-`git rev-list --count origin/main..HEAD` 当前为 **11**（`548d196` / `ce0ef22` / `8e94662` /
-`9224bc3` / `5417b4a` / `1746f41` / `8e7b8ba` / `1a53b4f` / `0f5422d` / `c2a83b1`，
+`git rev-list --count origin/main..HEAD` 的**实际值以命令输出为准**：写这段时代码提交
+（`890e600`）已落地、命令给的是 **15**（本次文档回填提交一提交就是 16）。
 按「规划方案 Phase 1 → Phase 2 → Phase 3 → 第 6 节自动匹配 → 其文档回填 →
 第 13 节缺口回填 → 执行期双开关复检 → 无协议 URL 归一 → 提交当前输入 →
-死代码清理」顺序，每个都可独立回滚；第 11 个是本次文档回填提交）。
+死代码清理 → 三份文档回填 → 第二轮审计收口（`890e600`）→ 本次文档回填」顺序，
+每个都可独立回滚。
 **只认命令输出**：本节写死的任何数字在提交那一刻就已经比实际少 1 或更多，
 判断待推送量一律用 `git rev-list --count origin/main..HEAD`。
 **推送前必须先跑七项安全审计**（口径见 `docs/DECISIONS.md` §3.4 / §3.6.1），
@@ -798,7 +804,7 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 **本批 23 个提交已于 2026-10-02 经你确认后推送完毕**（`a2389e8..b47fb1d`，无 force）。
 
 **本轮待推送的提交**（规划方案 Phase 1～3 + 第 6 节自动匹配 + 第 13 节缺口回填 +
-执行期双开关复检 + Phase 1 审计缺口收口，各自独立可回滚）：
+执行期双开关复检 + Phase 1 审计缺口收口 + 第二轮只读审计收口，各自独立可回滚）：
 
 | 提交 | 说明 | 变更规模 |
 |---|---|---|
@@ -812,7 +818,8 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 | `1a53b4f` | `fix(scope)`: 无协议 URL 归一为它的主机（方案第 6 节「域名、IP、URL」） | 3 文件 +86 |
 | `0f5422d` | `fix(scan-center)`: 提交当前输入而不是上一次试算的快照（Phase 1 审计缺口 ①） | 3 文件 +105/−6 |
 | `c2a83b1` | `fix(web)`: 不再把 `scope_id` 渲染成文案 + 清掉三处死代码（缺口 ③⑤⑥⑦） | 6 文件 +78/−21 |
-| （本次） | `docs`: 回填执行期双开关复检与 Phase 1 缺口收口的决策单 / 地图 / 测试报告 / 变更日志 | 6 文档 |
+| `890e600` | `fix(api,web)`: 第二轮只读审计收口 —— `tools`/`tool` 的 `or` 折叠（行为）、工具名守卫 7→18、策略说明副本、资产页 UUID/列值 | 8 文件 +186/−9 |
+| （本次） | `docs`: 回填第二轮只读审计的决策单 / 地图 / 测试报告 / 变更日志 / 状态板 / API 说明 | 6 文档 |
 
 > 这些提交**都不改数据库结构**、不新增/删除路由、不放宽 Scope / Policy /
 > 认证 / 审计 / 公网白名单中的任何一条。推送前请先跑七项安全审计。
@@ -821,6 +828,14 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 > `Scope.active_scan` 的复检补进 `jobs/executor.py`。推送后如果有人拿旧版
 > worker 跑新版任务，语义差异是「旧 worker 不复检这两件事」——
 > 复检只可能让执行**更严**，不会让任何原本被拒的任务变通过。
+>
+> ⚠️ **`890e600` 是本批唯一改动「老入口可用行为」的提交**：`POST /api/jobs` 与
+> `POST /api/public-jobs` 的工具参数判据从「值的真假」改成「键在不在」，于是
+> `{"tools": [], "tool": "subfinder"}` 这种畸形请求体从 202（真的扫）变为 400。
+> 方向同样是**更严**：只影响「同时给了 `tools` 与 `tool` 且 `tools` 为空」这一种请求体，
+> 只给 `tool` 的正常用法一字未变。公网入口真正会执行的那一格是 `custom` 模板
+> （见 `docs/TEST_REPORT.md` §14.2.2）。如果你依赖旧行为，`git revert 890e600` 即可 ——
+> 它不与其他提交耦合。
 
 > **推送前安全审计已跑（2026-10-02，只读，完整表格见 `docs/DECISIONS.md` §3.4 与本轮 §3.6.1）**：
 > 变更文件与已跟踪文件均无运行期产物、数据库、密钥、二进制；
