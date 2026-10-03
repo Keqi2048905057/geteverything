@@ -161,7 +161,15 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 | 方法 | 路径 | 认证 | 请求 | 成功响应 | 主要错误 |
 |---|---|---|---|---|---|
 | GET | `/api/tools` | 匿名 | — | `{"tools":[{"name","tool_name","category","description","tool_group","tool_group_label","risk_level","risk_label","internet_allowed","default_enabled","reason","database"}],"groups":[...]}` | — |
-| GET | `/api/databases` | 匿名 | — | `{"databases":[{"tool_name","table","result_column","category"}]}` | — |
+| GET | `/api/databases` | 匿名 | — | `{"databases":[{"tool_name","table","result_column","category"}]}` —— **不含任何计数** | — |
+
+> `/api/databases` 的 `category` 是 **`storage.TOOL_DATABASES` 里的「观测类别」**
+> （`subdomain` / `url` / `web` / …），与 `/api/tools` 的 `tool_group`（能力分组）
+> **同名不同义**，两者都不是方案 §9 示例里的那个 `category`；对照关系见本节下方
+> 的逐字段表。想拿「记录数 / 域名数 / 最近扫描时间」的是
+> `storage.ScanResultStore.get_tool_database_overview()` —— 它**当前没有任何 API 出口**
+> （全仓只有测试直接调它），所以这里**没有** `record_count` 这类字段。
+> 该方法的「无出口」现状同时写在 `api/tools.py` 的模块 docstring 里。
 
 > **Tool Registry（下一阶段规划方案 §9）**：工具能力元数据的**唯一来源**是
 > `core/tool_registry.py`；`/api/tools` 与 `/api/scan-center` 是它的**两个读出点**。

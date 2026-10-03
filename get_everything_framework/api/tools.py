@@ -4,7 +4,11 @@
 
 路由:
   GET /api/tools      — 工具注册表（Tool Registry）+ 关联数据库表信息
-  GET /api/databases  — 获取所有工具数据库表的元信息（表名、记录数等）
+  GET /api/databases  — 获取所有工具数据库表的元信息（工具名 / 表名 / 结果列 / 分类）
+
+      **不含任何计数**。想拿「记录数 / 域名数 / 最近扫描时间」的是
+      ``storage.ScanResultStore.get_tool_database_overview()``，它**当前没有任何
+      API 出口**（既不在本模块也不在别处被调用，只有测试直接调它）。
 
 **Tool Registry（下一阶段方案第 9 节）**
     工具能力元数据的**唯一来源**是 :mod:`core.tool_registry`；本接口与

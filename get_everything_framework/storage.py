@@ -702,7 +702,12 @@ class ScanResultStore:
         Args:
             domain: 可选，按域名筛选。
             tool_name: 可选，按工具名筛选。
-            category: 可选，按分类筛选（暂未在专属表查询中使用）。
+            category: **形参保留但当前不生效**（历史签名，调用方可能仍在传）。
+                指定了已注册的 ``tool_name`` 时，分类由 ``TOOL_DATABASES`` 反查得出
+                （专属表没有 ``category`` 列，见 §5.2 硬约束 1），传进来的值被忽略；
+                未指定 ``tool_name`` 时走 ``_get_tool_results_fallback``，它同样不读
+                这个形参。**「按 category 过滤」在这条链上从未生效过**，需要按分类
+                过滤请用 ``get_view_results(category=...)``。
             limit: 最大返回数量，默认 200。
 
         Returns:

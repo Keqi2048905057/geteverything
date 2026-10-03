@@ -10,7 +10,7 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · 下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅ · **下一阶段规划方案：Phase 1 前端体验重构 ✅（`548d196`）/ Phase 2 Tool Registry ✅（`ce0ef22`）/ Phase 3 公网授权测试完善 ✅（`8e94662`）/ 第 6 节目标自动匹配授权资产 ✅（`9224bc3`）/ 第 13 节后端安全边界缺口回填 ✅（本轮补测）** · M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · 下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅ · **下一阶段规划方案：Phase 1 前端体验重构 ✅（`548d196`）/ Phase 2 Tool Registry ✅（`ce0ef22`）/ Phase 3 公网授权测试完善 ✅（`8e94662`）/ 第 6 节目标自动匹配授权资产 ✅（`9224bc3`）/ 第 13 节后端安全边界缺口回填 ✅（本轮补测）/ 第二轮只读审计四处守卫收口 ✅（`890e600`）/ **规划方案 §1～§18 逐节对照审计 ✅ + 第 6 节 BUG 索引表 29 条行号全量刷新 ✅（本轮，纯文档 + 两处 docstring）** · M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
@@ -685,39 +685,28 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-03（第二轮只读审计：四处守卫 / 口径缺口收口）
+验证时间：2026-10-03（规划方案 §1～§18 逐节对照审计 + 第 6 节 BUG 索引表行号全量刷新）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1315 collected / 1313 passed / 2 skipped / 0 failures / 0 errors
+pytest: 1315 collected / 1313 passed / 2 skipped / 0 failures / 0 errors（157.13s）
 mypy:   Success: no issues found in 72 source files        ← 本轮未新增源文件
-node --check web/static/{scan_center.js,assets.js,app.js}: 均通过（本轮改前两个）
 路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
-本轮新增 8 条 / 加强 2 条：1307 → 1315 collected
-        test_jobs_does_not_fold_an_explicit_empty_selection_into_the_alias（参数化 3 例）
-        test_jobs_still_accepts_the_single_tool_alias（别名不许被顺手删掉）
-        test_custom_strategy_does_not_fall_back_to_the_tool_alias（公网入口 custom 那一格）
-        test_custom_strategy_still_accepts_the_single_tool_alias（公网入口别名不许删）
-        test_scan_center_page_does_not_copy_any_strategy_description（说明只能有一份）
-        test_assets_js_keeps_internal_ids_and_db_columns_off_the_screen（UUID / 列值不上屏）
-        加强 test_scan_center_js_never_hardcodes_tool_names（黑名单 7 → 从注册表派生 18）
-        加强 test_assets_js_never_renders_a_raw_scope_id_as_text（拆出 UUID/列值守卫）
-零 DDL 复核：本轮**没有**任何 schema 变更；core/policy.py / core/scope.py 一行未改
-变异验证：① 往 scan_center.js 插 `var MUTATION_PROBE = "dnsx";`（旧黑名单漏过的那一类）
-        → 加强后的守卫 FAILED；删掉还原 → PASSED；工作树无残留变异
-        ② 新增用例跑在**修复前**的 c2a83b1 工作树上（只复制测试文件、不改实现）：
-        custom_strategy 那条 `1 failed`（assert 202 == 400）、empty-list / empty-string
-        两条同样失败、两条别名反向用例两侧都通过；用完的工作树已删除
-独立审计：三条独立子代理视角（Phase 1 / 2 / 3），四处真实缺口已收口；
-        `rate_limit` 只覆盖 2/17 runner（timeout 17/17）如实登记，未改覆盖面
-真起实例：临时库起了一次 waitress，核对「服务端发出的字节」而不是只看源码 ——
-        /health 200（17/17 工具可用）、scripts/verify_public_scan.py 七步全过（退出码 0）、
-        /api/jobs 三形态 400 / 400 / 202、/scan-center HTML 无策略描述副本、
-        assets.js 无 asset.canonical_key 与 textContent = asset.id、/assets 200；
-        未开浏览器（DOM 上的表现仍未验证）；实例已停、临时目录已删。
-        明细见 docs/TEST_REPORT.md §14.4
+本轮用例数不变（1313 passed / 2 skipped）：改动是**文档 + 两处 docstring**，零行为变化
+本轮源码改动（仅此两处，都是注释）：
+        storage.py:702-711   Args.category 改写成「形参保留但当前不生效」+ 指明替代入口
+        api/tools.py:7-11    模块 docstring 的 /api/databases 去掉「记录数等」错误描述
+零 DDL 复核：本轮**没有**任何 schema 变更；core/ policy / scope / jobs 一行未改
+文档校正：docs/CODEBASE_MAP.md 第 6 节 29 条行号逐条按当前 LF 行号改写
+        （22 条漂移、其中 9 处落进别的函数体；3 条说法已不成立改为现状）
+        同文件 §7.2 / §7.3 / §8 / §9.9 同类漂移一并校正；新增 §9.31 全节记录本轮
+        docs/DECISIONS.md 新增 §3.13（对照结论、行号刷新、验证结果、操作纪律）
+行号口径：一律 LF。实测 Get-Content 默认编码给出偏小的假行号
+        （api/scan.py：默认 267 行 vs -Encoding UTF8 320 行，偏差 16.6%）
+BOM 修复：storage.py 原本带 UTF-8 BOM，本轮一次整文件改写曾吃掉它，
+        已恢复并复核 HEAD blob 与工作树前三字节一致（ef bb bf）
 未动：agent/（一行未改）、数据库结构与数据、认证授权、审计字段集合、
-        公网白名单（仍是 subfinder + httpx）、路由总数
+        公网白名单（仍是 subfinder + httpx）、路由总数、`.env`（LastWriteTime 未变）
 ```
 
 **基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → **第二轮只读审计：四处守卫/口径缺口收口 `1315`**
@@ -810,7 +799,8 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 **本批 23 个提交已于 2026-10-02 经你确认后推送完毕**（`a2389e8..b47fb1d`，无 force）。
 
 **本轮待推送的提交**（规划方案 Phase 1～3 + 第 6 节自动匹配 + 第 13 节缺口回填 +
-执行期双开关复检 + Phase 1 审计缺口收口 + 第二轮只读审计收口，各自独立可回滚）：
+执行期双开关复检 + Phase 1 审计缺口收口 + 第二轮只读审计收口 +
+§1～§18 逐节对照审计与第 6 节行号刷新，各自独立可回滚）：
 
 | 提交 | 说明 | 变更规模 |
 |---|---|---|
@@ -825,7 +815,10 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 | `0f5422d` | `fix(scan-center)`: 提交当前输入而不是上一次试算的快照（Phase 1 审计缺口 ①） | 3 文件 +105/−6 |
 | `c2a83b1` | `fix(web)`: 不再把 `scope_id` 渲染成文案 + 清掉三处死代码（缺口 ③⑤⑥⑦） | 6 文件 +78/−21 |
 | `890e600` | `fix(api,web)`: 第二轮只读审计收口 —— `tools`/`tool` 的 `or` 折叠（行为）、工具名守卫 7→18、策略说明副本、资产页 UUID/列值 | 8 文件 +186/−9 |
-| （本次） | `docs`: 回填第二轮只读审计的决策单 / 地图 / 测试报告 / 变更日志 / 状态板 / API 说明 | 6 文档 |
+| `3146fb4` | `docs`: 回填第二轮只读审计的决策单 / 地图 / 测试报告 / 变更日志 / 状态板 / API 说明 | 6 文件 +665/−49 |
+| `fb2493e` | `docs`: 补记「真起实例」这一层验证（源码守卫之外的服务端字节核对） | 5 文件 +99/−1 |
+| `d603334` | `docs(state)`: 状态板对齐本轮实际（待推送数按命令口径、验证块补真起实例） | 1 文件 +4/−4 |
+| （本次） | `docs`: 规划方案 §1～§18 逐节对照审计 + 第 6 节 BUG 索引表 29 条行号全量刷新 + 两处 docstring 校正 | 8 文件 +471/−68（其中源码仅 2 处 docstring） |
 
 > 这些提交**都不改数据库结构**、不新增/删除路由、不放宽 Scope / Policy /
 > 认证 / 审计 / 公网白名单中的任何一条。推送前请先跑七项安全审计。
