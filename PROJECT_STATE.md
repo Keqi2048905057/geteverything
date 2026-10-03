@@ -731,7 +731,8 @@ node --check web/static/scan_center.js / app.js: 两个前端脚本语法检查�
 > 提交表里**不含**更新本文件的那些 `docs: 状态板…` 提交 —— 它们只改这一个文件。
 
 ```text
-ce0ef22   ← 最近一次不含本文件改动的提交（规划方案 Phase 2：Tool Registry）
+8e94662   ← 最近一次不含本文件改动的提交（规划方案 Phase 3：公网授权测试完善）
+8e94662  feat(public-scan): 规划方案 Phase 3 —— 公网授权测试完善，五项全走事件 detail（零 DDL）
 ce0ef22  feat(tool-registry): 规划方案 Phase 2 —— 工具能力平台化，空选择不再回落到默认工具
 548d196  feat(scan-center): Phase 1 前端体验重构 —— 授权资产可见、Scope 退到后台、四步流程
 ef33ab6  docs(decisions): 记录本轮五项答复与推送结果，并补记 fork 已删除的复核
@@ -752,16 +753,17 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 > **判断待推送量一律用 `git rev-list --count origin/main..HEAD`，不要抄本节数字。**
 > 下面表格只列**不含**本文件改动的那些提交（即 `docs: 状态板…` / `docs(state):…` 之外的全部）。
 
-与 `origin/main` 的关系：**已推送** —— `git log -1 origin/main` 当前为 `b47fb1d`，
-本地 `git status -sb` 为 `## main...origin/main`（**无 ahead**），
-`git rev-list --count origin/main..HEAD` = **0**。
-推送命令是显式的 `git push origin main`（**刻意不带 `--tags` / `--follow-tags`**），
-结果 `a2389e8..b47fb1d  main -> main`，快进无 force。
-推送后 `git ls-remote --tags origin` **返回空**，即**没有任何标签被推上去**；
-本地标签 `backup-before-secret-purge` 按你的答复「先不删除」**原样保留**
-（详见 `docs/DECISIONS.md` §3.6.1）。
-**本轮推送前的七项安全审计结论见 `docs/DECISIONS.md` §3.6.1**（49 个变更文件 / 179 个已跟踪文件 /
-9995 行新增，产物与密钥 0 命中；纯快进）。下表是**推送前**那一批提交的分类记录：
+与 `origin/main` 的关系：**本轮三个提交尚未推送**（用户原话「有需要我确认的等我起床找你
+的时候再让我确认」，推送属需确认项，本轮不推）。`git log -1 origin/main` 当前为 `ef33ab6`，
+`git status -sb` 为 `## main...origin/main [ahead 3]`，
+`git rev-list --count origin/main..HEAD` = **3**（`548d196` / `ce0ef22` / `8e94662`，
+按「规划方案 Phase 1 → Phase 2 → Phase 3」顺序，每个都可独立回滚）。
+**推送前必须先跑七项安全审计**（口径见 `docs/DECISIONS.md` §3.4 / §3.6.1），
+且推送命令必须显式 `git push origin main`（**刻意不带 `--tags` / `--follow-tags`** ——
+本地标签 `backup-before-secret-purge` 仍指向重写前的旧提交，带上就会泄露明文 Token）。
+>
+> 上一批 23 个提交已于 2026-10-02 经你确认后推送完毕（`a2389e8..b47fb1d`，无 force），
+> 下表是**那一批**的分类记录，不含本轮规划的 Phase 1～3：
 
 | 类别 | 提交 |
 |---|---|
@@ -773,6 +775,17 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 
 **纯快进，无需 force** —— 已实测 `git merge-base --is-ancestor origin/main HEAD` 退出码 0。
 **本批 23 个提交已于 2026-10-02 经你确认后推送完毕**（`a2389e8..b47fb1d`，无 force）。
+
+**本轮待推送的三个提交**（规划方案 Phase 1～3，各自独立可回滚）：
+
+| 提交 | 说明 | 变更规模 |
+|---|---|---|
+| `548d196` | `feat(scan-center)`: 规划方案 Phase 1 —— 前端体验重构（授权资产可见 / Scope 退到后台 / 四步流程） | 8 文件 +538/−59 |
+| `ce0ef22` | `feat(tool-registry)`: 规划方案 Phase 2 —— 工具能力平台化，空选择不再回落到默认工具 | 18 文件 +1560/−149 |
+| `8e94662` | `feat(public-scan)`: 规划方案 Phase 3 —— 公网授权测试完善，五项全走事件 detail（**零 DDL**） | 20 文件 +2473/−107 |
+
+> 三个提交**都不改数据库结构**、不新增/删除路由、不放宽 Scope / Policy /
+> 认证 / 审计 / 公网白名单中的任何一条。推送前请先跑七项安全审计。
 
 > **推送前安全审计已跑（2026-10-02，只读，完整表格见 `docs/DECISIONS.md` §3.4 与本轮 §3.6.1）**：
 > 变更文件与已跟踪文件均无运行期产物、数据库、密钥、二进制；
