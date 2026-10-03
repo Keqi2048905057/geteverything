@@ -241,6 +241,7 @@ def test_real_step_rechecks_scope_before_calling_runner(scope_id, monkeypatch):
 def test_real_step_rechecks_target_still_in_scope(scope_id, monkeypatch):
     """执行期复检通过时，步骤照常执行（复检不能把正常路径也拦死）。"""
     import modules.registry as registry
+    from core import scope_store
     from core.runner_result import RunnerResult
 
     class _Runner:
@@ -252,12 +253,109 @@ def test_real_step_rechecks_target_still_in_scope(scope_id, monkeypatch):
             return RunnerResult.ok([], exit_code=0)
 
     monkeypatch.setattr(registry, "build_runner", lambda name: _Runner())
+    # real 模式的双开关（环境 + Scope.active_scan）都必须开着，否则拦下它的是
+    # 执行期复检而不是「复检把正常路径拦死了」—— 那样这条用例就没有意义了。
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    active_scope = scope_store.create(
+        name="执行器 real 范围", allowed_domains=["example.test"], active_scan=True
+    ).id
 
-    job = _make_job(scope_id, mode="real")
+    job = _make_job(active_scope, mode="real")
     jobs_store.claim_next_job("w1", lease_seconds=300)
 
     result = execute_job(job["id"])
     assert result["status"] == jobs_store.STATUS_SUCCEEDED
+
+
+# ── 执行期的「真实扫描」双开关复检（方案第 13 节 Real Mode 控制） ──
+#
+# 创建期的两道闸门（`core.safety.resolve_mode` / `Scope.require_active_scan`）都在
+# **任务落库那一刻**就结束了。任务在队列里排队、租约过期被重试、worker 重启补做
+# 的期间，环境开关可能被关掉、Scope 的 active_scan 可能被收紧。下面两条用例造出
+# 「下单时合规、出餐时不合规」的时间差，钉住执行期必须各自再读一次。
+
+
+def _real_runner_spy(monkeypatch, called):
+    """把 ``build_runner`` 换成「一被调用就失败」的探针。
+
+    Runner 被调用即断言失败 —— 复检失效时用例以「Runner 被调用了」这种最直白的
+    方式爆掉，而不是靠事后比对结果数量。
+    """
+    import modules.registry as registry
+
+    class _Runner:
+        tool_name = "subfinder"
+        category = "subdomain"
+        last_execution = {}
+
+        def run(self, target):  # pragma: no cover - 走到这里就说明复检失效了
+            called.append(target)
+            raise AssertionError("双开关已失效，Runner 不允许被调用")
+
+    monkeypatch.setattr(registry, "build_runner", lambda name: _Runner())
+
+
+def test_real_step_rechecks_env_switch_at_execution_time(monkeypatch, local_db):
+    """任务创建时开关是开的，执行前被关掉 → 必须拦下，绝不进入 Runner。
+
+    这是「开关只管下单、不管出餐」这个缺口的直接证法：创建期一切合规，
+    单靠创建期校验的话这次真实外网请求照样会发出去。
+    """
+    from core import scope_store
+
+    called = []
+    _real_runner_spy(monkeypatch, called)
+
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    active_scope = scope_store.create(
+        name="开关复检范围", allowed_domains=["example.test"], active_scan=True
+    ).id
+
+    job = _make_job(active_scope, mode="real")
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+
+    # 创建之后、执行之前：环境开关被关掉。
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "false")
+
+    result = execute_job(job["id"])
+
+    step = jobs_store.list_steps(job["id"])[0]
+    assert called == []
+    assert step["status"] == jobs_store.STEP_FAILED
+    assert step["error_code"] == "scope_violation"
+    # 理由必须点名是**哪一个**开关没开，否则用户只能靠猜。
+    assert "GEF_ALLOW_REAL_SCAN" in step["error_message"]
+    assert result["status"] == jobs_store.STATUS_FAILED
+
+
+def test_real_step_rechecks_active_scan_at_execution_time(monkeypatch, local_db):
+    """Scope 在执行前被收紧为 ``active_scan=0`` → 同样拦下。"""
+    import core.db as db
+    from core import scope_store
+
+    called = []
+    _real_runner_spy(monkeypatch, called)
+
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    active_scope = scope_store.create(
+        name="收紧范围", allowed_domains=["example.test"], active_scan=True
+    ).id
+
+    job = _make_job(active_scope, mode="real")
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+
+    # 创建之后、执行之前：这份授权被收回真实扫描许可（目标本身仍在范围内）。
+    with db.transaction() as conn:
+        conn.execute("UPDATE scopes SET active_scan = 0 WHERE id = ?", (active_scope,))
+
+    result = execute_job(job["id"])
+
+    step = jobs_store.list_steps(job["id"])[0]
+    assert called == []
+    assert step["status"] == jobs_store.STEP_FAILED
+    assert step["error_code"] == "scope_violation"
+    assert "active_scan" in step["error_message"]
+    assert result["status"] == jobs_store.STATUS_FAILED
 
 
 # ── cancel ────────────────────────────────────────────────

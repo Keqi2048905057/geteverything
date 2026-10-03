@@ -92,9 +92,17 @@ def _execute_real_step(
 ) -> dict:
     """real 步骤：调用真实 runner 的统一入口 ``run()``。
 
-    真实执行前由 API 层完成 Scope 与环境开关校验；这里在执行**之前**再复检一次
-    （方案第 5.3 节「每个 Step 执行前」），落盘原始证据并把结果归一化成
-    ``job_steps`` 的形状。
+    创建期的三道闸门（Policy 目标校验、环境开关、``Scope.active_scan``）在任务
+    落库那一刻就结束了。这里在真正调用 Runner **之前**把它们各自再读一次
+    （方案第 5.3 节「每个 Step 执行前」+ 第 13 节「Real Mode 控制」），落盘原始
+    证据并把结果归一化成 ``job_steps`` 的形状。
+
+    两道复检的**顺序是有意的**：先 Scope 成员资格、再环境开关、最后
+    ``active_scan``，与创建期（:func:`core.safety.resolve_mode` →
+    :meth:`core.scope.Scope.require_active_scan`）一致。越界的 target 连
+    「有没有开开关」都不该被回答；而已经删掉 Scope 的任务，报出的必须是
+    「越界 / 范围不存在」，不能被一句「开关没开」盖过去 —— 那会让人以为是环境
+    配置问题，而真正的变化是授权范围没了。
 
     ``pace``（见 :mod:`core.pace`）在**构造之后**写进 runner 的 ``config`` 副本
     （:func:`core.pace.apply_to_runner`）：低频档因此真的会变成 ``-t 5 -rl 3``
@@ -127,13 +135,39 @@ def _execute_real_step(
     # Job 创建到真正执行之间，Scope 可能已被删除或收紧。worker 必须重新读一次
     # Scope 并重校验，而不是相信创建时的快照；越界目标绝不允许进入 Runner。
     from core.errors import AppError
-    from core.policy import validate_step_target
+    from core.policy import require_scope, validate_step_target
 
     try:
         target = validate_step_target(scope_id, target)
     except AppError as exc:
         # Scope 缺失（400）与目标越界（403）在执行期同样是「不许执行」。
         return _failed_outcome(ErrorCode.SCOPE_VIOLATION, f"执行前 Scope 复检失败：{exc.message}")
+    except Exception as exc:  # noqa: BLE001 - 复检本身出错时按未知错误处理，不放行
+        return _failed_outcome(ErrorCode.UNKNOWN_ERROR, f"执行前 Scope 复检异常：{exc}")
+
+    # ── 执行前的「真实扫描」双开关复检（方案第 13 节「Real Mode 控制」） ──
+    # 创建期已经由 :func:`core.safety.resolve_mode` 与
+    # :meth:`core.scope.Scope.require_active_scan` 各把一道，但那两道闸门在
+    # **任务落库那一刻**就结束了：任务在队列里排队、失败重试、worker 重启补做的
+    # 期间，环境开关可能被关掉、Scope 的 ``active_scan`` 可能被收紧。
+    # 只查创建期就等于「开关只管下单，不管出餐」—— 一次已经没人愿意负责的真实
+    # 外网请求照样会发出去。因此这里在执行 Runner **之前**各自再读一次。
+    from core.safety import REAL_SCAN_ENV, real_scan_enabled
+
+    if not real_scan_enabled():
+        return _failed_outcome(
+            ErrorCode.SCOPE_VIOLATION,
+            f"执行前真实扫描开关复检失败：{REAL_SCAN_ENV} 未开启，禁止执行真实外部扫描",
+        )
+    try:
+        # 这里再读一次 Scope 只为拿 ``active_scan``（``validate_step_target``
+        # 内部那次读不返回 Scope 对象）。判定仍然只有 ``core/policy`` 一套，
+        # 不在这里复写匹配逻辑。
+        require_scope(scope_id).require_active_scan()
+    except AppError as exc:
+        return _failed_outcome(
+            ErrorCode.SCOPE_VIOLATION, f"执行前 Scope 复检失败：{exc.message}"
+        )
     except Exception as exc:  # noqa: BLE001 - 复检本身出错时按未知错误处理，不放行
         return _failed_outcome(ErrorCode.UNKNOWN_ERROR, f"执行前 Scope 复检异常：{exc}")
 
