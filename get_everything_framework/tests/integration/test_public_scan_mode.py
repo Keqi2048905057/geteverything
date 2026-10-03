@@ -853,6 +853,54 @@ def test_scan_center_page_hides_internal_ids_in_labels(admin_client):
     assert 'id.textContent = project.id' not in source
 
 
+def test_scan_center_target_label_mentions_url(admin_client):
+    """方案第 6 节：用户输入写成「域名、IP、URL」—— 页面标签必须如实照抄。
+
+    ``core/scope.py:normalize_target`` 一直支持 URL（``https://a.example.test/x``
+    会被规范化成 ``a.example.test``），但页面上只写了「域名 / IP / 网段」。
+    标签少写一种输入，用户就会以为贴 URL 会被拒 —— 而他手上正好只有 URL。
+    """
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    assert "域名 / IP / 网段 / URL" in body
+
+
+def test_scan_center_js_submits_the_current_target_input_not_a_stale_snapshot():
+    """目标改了但没重新检查授权时，提交的必须是**输入框此刻的内容**。
+
+    这是 Phase 1 审计发现的缺口：``bindJobForm`` 原来写的是
+    ``lastTargets.length ? lastTargets : splitList($("job-target").value)`` ——
+    「检查授权 → 改输入框 → 直接创建任务」会提交**改前**的目标，而页面上的
+    绿灯说的是改后的那个站。服务端按改前的判定，用户看到的是另一个结论，
+    这是最难排查的一类错（两边都没报错，只是说的不是同一件事）。
+
+    四条一起守：
+    ① 有 ``currentTargets()`` 这个唯一事实来源，且两次读的都不是快照；
+    ② 输入框有 ``input`` 监听，改了就让旧结论失效；
+    ③ 摘要里的「目标」一行显示当前输入（否则它还在说旧目标）；
+    ④ 旧结论没作废时（兜底路径）拒绝提交，而不是拿它当依据。
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    assert "function currentTargets()" in source
+    assert "function checkIsFresh()" in source
+    assert "function invalidateCheckResult()" in source
+
+    # ① 提交路径取当前输入，不再优先用上一次试算的快照。
+    assert "var targets = currentTargets();" in source
+    assert 'lastTargets.length ? lastTargets' not in source, "提交又回到快照了"
+    # ③ 摘要的目标行同样读当前输入。
+    assert "var shown = currentTargets();" in source
+
+    # ② 输入框上的监听器是「改了就让旧结论失效」的唯一入口。
+    assert 'input.addEventListener("input", function () {' in source
+    assert "invalidateCheckResult();" in source
+    # ④ 旧结论还在但已经对不上输入时，兜底拒绝提交。
+    assert "lastCheckPayload && !checkIsFresh()" in source
+
+
 def test_scan_center_frontend_shows_and_forwards_the_pace(admin_client):
     """前端必须**显示**节奏，并把选中的节奏**原样转发**。
 

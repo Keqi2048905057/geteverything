@@ -135,6 +135,35 @@
       .filter(Boolean);
   }
 
+  /** 目标输入框**此刻**的内容（用户可能刚改过，与上一次试算无关）。 */
+  function currentTargets() {
+    var input = $("job-target");
+    return splitList(input ? input.value : "");
+  }
+
+  /**
+   * 上一次试算结果是否仍然对应当前输入。
+   *
+   * 试算结论（能不能扫、命中哪份授权资产）是**针对某一组目标**算出来的；
+   * 用户改完输入框却没重新点「检查授权」时，那份结论就只是一段历史。
+   * 页面若继续拿它当依据，就会出现「摘要写着 A 已授权、实际提交的是 B」
+   * 这种最难排查的错 —— 用户看到的是绿灯，服务端按 B 判定。
+   */
+  function checkIsFresh() {
+    if (!lastCheckPayload || !lastTargets.length) return false;
+    return currentTargets().join("\u0000") === lastTargets.join("\u0000");
+  }
+
+  /** 输入变了：把上一次试算的结论作废，并如实告诉用户要重新检查。 */
+  function invalidateCheckResult() {
+    lastCheckPayload = null;
+    lastTargets = [];
+    var box = $("check-result");
+    if (box) box.textContent = "";
+    setText("check-summary", "目标已改动，请重新点「检查授权」再创建任务。", false);
+    renderConsentSummary();
+  }
+
   // ── 把内部 ID 翻译成用户能读的文案 ────────────────────────
 
   /** 某个范围的授权目标（域名 + 网段），只用于展示。 */
@@ -1008,7 +1037,10 @@
     var scopeBox = $("consent-scope");
 
     if (targetBox) {
-      targetBox.textContent = lastTargets.length ? lastTargets.join("、") : "（还没填）";
+      // 显示**当前输入框里的内容**，而不是上一次试算的那份快照 ——
+      // 摘要回答的是「我这次要提交什么」，输入框就是唯一事实来源。
+      var shown = currentTargets();
+      targetBox.textContent = shown.length ? shown.join("、") : "（还没填）";
     }
 
     var check = lastCheckPayload && (lastCheckPayload.checks || [])[0];
@@ -1090,6 +1122,16 @@
         renderCheckResults(result.data);
       });
     });
+
+    // 改了目标就让上一次的结论失效（见 checkIsFresh / invalidateCheckResult）。
+    // 没有这个监听器时，「检查授权 → 改输入框 → 直接创建任务」提交的是
+    // 改前的目标，而页面上的绿灯说的是改后的那个站 —— 服务端按改前的判。
+    var input = $("job-target");
+    if (input) {
+      input.addEventListener("input", function () {
+        if (lastCheckPayload || lastTargets.length) invalidateCheckResult();
+      });
+    }
   }
 
   // ── 步骤 2：创建项目 / 添加范围 ──────────────────────────
@@ -1208,9 +1250,11 @@
           form.active_scan.checked = true;
           // 范围变了，之前那次试算的结论就过期了 —— 自动重算一遍，
           // 让用户立刻看到「现在能不能扫」。
+          // 判据用**当前输入**而不是 lastTargets：输入框改过之后旧快照已被
+          // invalidateCheckResult() 清空，用快照判会在这时静默跳过重算。
           loadMetadata().then(function () {
             var checkForm = $("check-form");
-            if (checkForm && lastTargets.length) {
+            if (checkForm && currentTargets().length) {
               checkForm.dispatchEvent(new Event("submit", { cancelable: true }));
             }
           });
@@ -1252,9 +1296,18 @@
     if (!form) return;
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      var targets = lastTargets.length ? lastTargets : splitList($("job-target").value);
+      // 提交的永远是**输入框此刻的内容**，不是上一次试算的快照。
+      // 之前这里优先用 lastTargets，导致「检查授权 → 改输入框 → 创建任务」
+      // 提交的是改前的目标，而页面上的授权状态说的是改后的那个站。
+      var targets = currentTargets();
       if (!targets.length) {
         setText("job-feedback", "请先在步骤 1 填写目标。", true);
+        return;
+      }
+      // 有一份对不上当前输入的试算结论 → 让用户先重新检查（正常情况下
+      // input 监听器已经把旧结论作废，这里是兜底）。
+      if (lastCheckPayload && !checkIsFresh()) {
+        setText("job-feedback", "目标已改动，请先重新点「检查授权」再创建任务。", true);
         return;
       }
 

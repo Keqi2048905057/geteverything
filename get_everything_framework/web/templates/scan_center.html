@@ -53,7 +53,7 @@
       <div class="sc-step">
         <h3>步骤 1 · 输入目标</h3>
         <form class="form" id="check-form" autocomplete="off">
-          <label for="job-target">目标（域名 / IP / 网段，逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
+          <label for="job-target">目标（域名 / IP / 网段 / URL，逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
           <!-- placeholder 只是示例，浏览器不会把它当成值提交 —— 页面**没有默认目标**。 -->
           <input type="text" id="job-target" name="targets" placeholder="www.example.cn" required>
 
@@ -155,8 +155,6 @@
             </div>
           </details>
         </form>
-
-        <div id="scope-list"></div>
       </div>
 
       <!-- 步骤 3：选择工具 -->
