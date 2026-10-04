@@ -3780,13 +3780,13 @@ Token 在 `import app` 之后才设，而 `config` 导入期已跑完 `load_dote
 还有一处漏了判断：`build_page_context()` 当时**无任何登录态形参**，直接就调
 
 ```python
-summary = store.get_global_summary()                    # 旧 :151
-domain_results = store.get_results_by_domain(domain)    # 旧 :152
-domain_summary = store.get_domain_summary(domain)       # 旧 :153
+summary = store.get_global_summary()                                   # 旧 :146
+domain_results = store.get_results_by_domain(domain) if domain else [] # 旧 :147
+domain_summary = store.get_domain_summary(domain) if domain else None  # 旧 :148
 ```
 
-而**同一个文件**里的 `scopes`（`:304`）与 `recent_jobs`（`:307`，内部 `limit=0` 短路）
-都是带登录态的 —— 四处判断漏了一处，模板「汇总」面板（`index.html:169-189`）
+而**同一个文件**里的 `scopes`（旧 `:304`）与 `recent_jobs`（旧 `:307`，内部 `limit=0` 短路）
+都是带登录态的 —— 四处判断漏了一处，模板「汇总」面板（旧 `index.html:167-189`）
 也没有 `is_authenticated` 守卫。
 
 **实测（`%TEMP%\gef_summary_verify.py`，临时库，`leaktarget.test` 7 条子域名）**：

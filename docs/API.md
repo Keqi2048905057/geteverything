@@ -97,7 +97,7 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 
 | 方法 | 路径 | 认证 | 说明 |
 |---|---|---|---|
-| GET | `/` | 无 | 首页骨架：扫描表单 + Agent 对话 + 登录入口 + 任务列表。匿名可打开，但**不下发授权资产与任务列表**（只显示登录提示） |
+| GET | `/` | 无 | 首页骨架：扫描表单 + Agent 对话 + 登录入口 + 任务列表。匿名可打开，但**不下发任何数据** —— 授权资产、任务列表、**扫描汇总与目标明细**（`?domain=<目标>` 也不再回显目标名）都只对本地管理员可见，匿名只显示登录提示 |
 | POST | `/` | **所有动作都需登录** | 表单 `action=scan` 创建 mock 任务、`action=chat` 进 Agent；**两者未登录都 401**。chat 曾按「只读浏览」匿名放行，但 Agent 当前能绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope 直接执行（`docs/AGENT_ASYNC_IMPACT.md` I-5），故 2026-10-04 起与 scan 同级 |
 | GET | `/assets` | 无 | 资产页骨架。匿名可打开但只显示提示，**不下发 Scope 名称**；数据由 `static/assets.js` 调 `/api/assets` |
 | GET | `/scan-center` | 无 | 扫描中心页骨架（公网授权测试模式）。匿名可打开但只显示提示；数据由 `static/scan_center.js` 调 `/api/scan-center`。**页面上的一切提交都只是转发到 `/api/…`**，闸门全在服务端 |

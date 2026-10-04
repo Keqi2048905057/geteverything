@@ -1934,7 +1934,7 @@ argv 传进去 → `no tests ran`（**exit=4**）。而判据写的是「`exit !
 |---|---|---|
 | `app.py:build_page_context()` | 新增 `is_authenticated=False` 形参；三个取数点（`get_global_summary` / `get_results_by_domain` / `get_domain_summary`）按它短路 | 同一个函数里 `scopes` / `recent_jobs` 早就带判断，**四处漏了一处**。形参**默认 False** 是「失败关闭」：将来新加调用点忘了传时应当**不取数** |
 | `app.py:index()` | 把 `is_authenticated = local_auth.is_authenticated()` **提到 `build_page_context()` 之前**并传入 | 原先它排在后面 —— 漏判的**机制性**原因是「那个 `if` 写在了用不上的位置」，不是「忘了写」 |
-| `web/templates/index.html:166-191` | 「汇总」面板整块包进 `{% if is_authenticated %}`，未登录时改说「登录后可查看扫描汇总」 | 后端不再下发 + 前端不再裸渲染，两层都要 |
+| `web/templates/index.html:168-196` | 「汇总」面板整块包进 `{% if is_authenticated %}`（修复前是 `:166-190` 裸渲染），未登录时改说「登录后可查看扫描汇总」 | 后端不再下发 + 前端不再裸渲染，两层都要 |
 | `exporter.py:gather_export_rows()` | 按 `(domain, category, tool_name, value, created_at)` **整键去重** | 两条取数路径**重叠**：`get_view_results()` 只扫 8 张子域名专属表，`_get_tool_results_fallback()` **遍历全部 17 张表**，同一批记录被加两次 |
 
 ### 16.5 一个**被实测证伪**的子代理修法建议（记下来，省下后来者的时间）

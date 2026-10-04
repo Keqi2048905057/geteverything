@@ -1393,10 +1393,13 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 `3.14.2` 修掉的是「匿名首页下发**授权资产清单**」；本轮发现**同一类**问题在**另一个来源**上还在：
 
 - `app.py:build_page_context()` 当时**没有任何登录态判断**就调
-  `store.get_global_summary()`（`:146`）、`store.get_results_by_domain(domain)`（`:147`）、
-  `store.get_domain_summary(domain)`（`:148`）—— 而 `scopes`（`:304`）与
-  `recent_jobs`（`:307`）**是带 `if is_authenticated` 的**。四处判断三个有一个漏了。
-- 模板 `web/templates/index.html:166-190` 的「汇总」面板**也没有** `is_authenticated` 守卫，
+  `store.get_global_summary()`（修复前 `:146`）、
+  `store.get_results_by_domain(domain)`（修复前 `:147`）、
+  `store.get_domain_summary(domain)`（修复前 `:148`）—— 而 `scopes`
+  （修复前 `:304`，现 `:329`）与 `recent_jobs`（修复前 `:307`，现 `:332`）
+  **是带 `if is_authenticated` 的**。四处判断漏了一处。
+- 模板 `web/templates/index.html` 的「汇总」面板（修复前是 `:166-190` 的
+  `<section class="panel">` 整块裸渲染）**也没有** `is_authenticated` 守卫，
   直接把 `summary.total_runs` / `total_domains` / `total_subdomains` 渲染出来。
 
 **实测（`%TEMP%\gef_summary_verify.py`，临时库）**：写入 7 条子域名（目标 `leaktarget.test`）后，
@@ -1408,7 +1411,7 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 **为什么算「修」不算「改契约」**：`SECURITY.md:49` 与 `3.14.2` 已经把口径定成
 「匿名可以打开首页，但**不下发任何数据**」。汇总数字与目标明细**就是数据**，
 而且比资产清单更直接（资产清单说「能扫什么」，汇总说「已经扫出了多少」）。
-本轮只是把 `build_page_context()` 与模板补齐到与 `:304` / `:307` **同一个口径**。
+本轮只是把 `build_page_context()` 与模板补齐到与 `scopes` / `recent_jobs` **同一个口径**。
 
 **改了什么（三处，不新增/删除路由）**：
 
@@ -1416,7 +1419,7 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 |---|---|
 | `app.py:build_page_context()` | 新增 `is_authenticated=False` 形参（**默认 False 是刻意的失败关闭**）；三个取数点改为按该标志短路 |
 | `app.py:index()` | 把 `is_authenticated = local_auth.is_authenticated()` **提到取数之前**并传入；原先它排在 `build_page_context()` 之后，导致「取数」这一步根本不知道访客是否登录 |
-| `web/templates/index.html:166-190` | 汇总面板整块包进 `{% if is_authenticated %}`；未登录时改说「登录后可查看扫描汇总」 |
+| `web/templates/index.html:168-196` | 汇总面板整块包进 `{% if is_authenticated %}`（原先面板体是 `:167-190`，裸渲染）；未登录时改说「登录后可查看扫描汇总」 |
 
 #### 3.16.2 缺陷四：导出的结果行**重复计数**（**已修**，BUG 索引表第 9 条的另一半）
 

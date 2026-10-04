@@ -1644,7 +1644,8 @@ real 任务入队（三道闸门全过）
 `store.get_global_summary()` / `store.get_results_by_domain(domain)` /
 `store.get_domain_summary(domain)`；而**同一个函数**里的 `scopes`（`:304`）
 与 `recent_jobs`（`:307`，内部 `limit=0` 短路）**都带登录态判断** ——
-四处漏了一处；模板「汇总」面板（`index.html:169-189`）也没有 `is_authenticated` 守卫。
+四处漏了一处；模板「汇总」面板（修复前 `index.html:166-190`，`<section class="panel">`
+整块裸渲染）也没有 `is_authenticated` 守卫。
 
 实测（临时库，`leaktarget.test` 7 条子域名）：管理员首页汇总
 `{'扫描运行次数': 7, '已有目标数': 1, '结果总数': 7}`，**匿名首页完全相同**；

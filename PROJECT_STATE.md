@@ -717,7 +717,7 @@ git diff --check: 退出码 0
         app.py:index()                把 is_authenticated 提到 build_page_context() **之前**再传入
                                       —— 原先它排在后面，「取数」这一步根本不知道访客是否登录，
                                       这才是漏判的**机制性**原因（那个 if 写在了用不上的位置）
-        web/templates/index.html:166-191  汇总面板整块包进 {% if is_authenticated %}
+        web/templates/index.html:168-196  汇总面板整块包进 {% if is_authenticated %}（修复前 :166-190 裸渲染）
         exporter.py:gather_export_rows()  按 (domain, category, tool_name, value, created_at)
                                           **整键去重**（两条取数路径重叠：get_view_results 只扫
                                           8 张子域名专属表，_get_tool_results_fallback 遍历
