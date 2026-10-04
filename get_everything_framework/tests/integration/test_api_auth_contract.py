@@ -115,6 +115,23 @@ def test_page_chat_action_requires_login(client):
     assert resp.get_json()["error_code"] == "unauthenticated"
 
 
+def test_page_chat_action_still_works_when_logged_in(admin_client):
+    """反向守卫：加了认证之后，**管理员那条路必须还能走**。
+
+    只测「匿名 401」是不够的 —— 那种断言对「把整个 chat 分支删掉」也会通过。
+    这条用例钉住另一侧：管理员带 Token 提交同样的表单，必须拿到 200
+    （页面级 chat 是「重渲染首页 + 把回复写进 session」，成功即 200）。
+
+    ★ 实测提醒：这条用例会触发 werkzeug 的
+    ``The 'session' cookie is too large ...`` 告警（``agent_history``/``agent_steps``
+    把整段回复塞进签名 Cookie）。那是 `docs/CODEBASE_MAP.md` 第 6 节第 20 条
+    记录的既有坑，**不是本用例引入的失败**；用例只断言状态码，不依赖 Cookie 是否留存。
+    """
+    resp = admin_client.post("/", data={"action": "chat", "agent_message": "你好"})
+    assert resp.status_code == 200, "管理员走 chat 被误伤了：守卫不该连正路一起堵"
+    assert resp.get_json() is None, "页面路由应返回 HTML，不是 JSON"
+
+
 def test_anonymous_homepage_does_not_leak_authorized_assets(admin_client, client):
     """匿名首页**不得**下发授权资产（名称 / 目标 / 状态）。
 

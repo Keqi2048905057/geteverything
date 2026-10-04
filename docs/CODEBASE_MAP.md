@@ -3742,9 +3742,11 @@ if request.method == "POST":
 
 #### 9.33.4 验证
 
-`pytest -o addopts="" -q` → **1315 passed / 2 skipped**（`--collect-only` 1317）；
+`pytest -o addopts="" -q` → **1316 passed / 2 skipped**（`--collect-only` 1318）；
 `ruff` 全过；`mypy` 72 文件 0 error；三个 JS `node --check` 通过。
-此外做了两次**独立于测试**的复核（`test_client` 桩 + **真起 waitress** 桩），
-两次都在结论前先断言桩已装载（防上一轮那种「桩没装上却打印 0 次」的假阴性）。
-8 条断言级细节见 `docs/TEST_REPORT.md` §15.4。
+此外做了**三次独立于测试**的复核（`test_client` 桩 + **真起 waitress** 桩 +
+**登录态正路探针**），每次都**先断言前提**（桩已装载 / `get_admin_token()` 等于探针 Token
+且 `is_ephemeral_token()` 为 False）再采信数字 —— 本轮这条纪律一晚上救回两次假阴性
+（含一次「管理员也 401」：Token 在 `import app` 之后才设，而 `config` 导入期已跑完
+`load_dotenv()`）。新增 3 条用例（前 2 条修复前是红的），细节见 `docs/TEST_REPORT.md` §15。
 
