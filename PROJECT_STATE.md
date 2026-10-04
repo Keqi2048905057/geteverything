@@ -685,31 +685,39 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-03（规划方案 §1～§18 逐节对照审计 + 第 6 节 BUG 索引表行号全量刷新）
+验证时间：2026-10-04（页面级认证缺口收口：匿名 action=chat + 匿名首页资产泄漏）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1315 collected / 1313 passed / 2 skipped / 0 failures / 0 errors（157.13s）
+pytest: 1317 collected / 1315 passed / 2 skipped / 0 failures / 0 errors（148.02s）
 mypy:   Success: no issues found in 72 source files        ← 本轮未新增源文件
 路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
-本轮用例数不变（1313 passed / 2 skipped）：改动是**文档 + 两处 docstring**，零行为变化
-本轮源码改动（仅此两处，都是注释）：
-        storage.py:702-711   Args.category 改写成「形参保留但当前不生效」+ 指明替代入口
-        api/tools.py:7-11    模块 docstring 的 /api/databases 去掉「记录数等」错误描述
-零 DDL 复核：本轮**没有**任何 schema 变更；core/ policy / scope / jobs 一行未改
-文档校正：docs/CODEBASE_MAP.md 第 6 节 29 条行号逐条按当前 LF 行号改写
-        （22 条漂移、其中 9 处落进别的函数体；3 条说法已不成立改为现状）
-        同文件 §7.2 / §7.3 / §8 / §9.9 同类漂移一并校正；新增 §9.31 全节记录本轮
-        docs/DECISIONS.md 新增 §3.13（对照结论、行号刷新、验证结果、操作纪律）
-行号口径：一律 LF。实测 Get-Content 默认编码给出偏小的假行号
-        （api/scan.py：默认 267 行 vs -Encoding UTF8 320 行，偏差 16.6%）
-BOM 修复：storage.py 原本带 UTF-8 BOM，本轮一次整文件改写曾吃掉它，
-        已恢复并复核 HEAD blob 与工作树前三字节一致（ef bb bf）
-未动：agent/（一行未改）、数据库结构与数据、认证授权、审计字段集合、
-        公网白名单（仍是 subfinder + httpx）、路由总数、`.env`（LastWriteTime 未变）
+本轮用例数 +2（1313 → 1315 passed；1315 → 1317 collected）：
+        tests/integration/test_api_auth_contract.py  26 → 28
+        · test_page_chat_action_requires_login（匿名 POST / action=chat 必须 401）
+        · test_anonymous_homepage_does_not_leak_authorized_assets（匿名首页不下发授权资产）
+        **两条在修复前都是红的**（实测 assert 200 == 401 与
+        「匿名首页泄露了授权资产信息: 培正学院公网资产」，同次 2 failed / 26 passed）
+本轮源码改动三处（**收紧认证，方向与红线相反**）：
+        app.py:227           _require_admin_for_page() 提到 action 分支之前（所有 POST 一律认证）
+        app.py:304           context["scopes"] = _load_scope_options() if is_authenticated else []
+        web/templates/index.html:94-110  未登录文案不再说「还没有任何授权范围」
+实测证据（五个只读探针 + 真起 waitress 复核，全程 GEF_ALLOW_REAL_SCAN=false、
+        目标 example.test、BaseRunner._run_subprocess 被桩替换）：
+        修复前：匿名两步 chat → run_tools 1 次 / 子进程入口 1 次 / 真起实例 1 次
+        修复后：全部 0 次；匿名路由里未返回 401 的只剩 POST /login 与
+                POST /api/auth/logout（均为设计如此），**POST / 已从该名单消失**
+零 DDL 复核：本轮**没有**任何 schema 变更；core/policy.py / core/scope.py / core/jobs.py 一行未改
+未动：agent/（一行未改，「先不开工」未变）、数据库结构与数据、
+        认证授权机制本身、审计字段集合、公网白名单（仍是 subfinder + httpx）、
+        7 个已定的匿名只读 API（DECISIONS D 项）、路由总数、
+        `.env`（LastWriteTime 未变）
+文档校正：SECURITY.md / docs/{API,ARCHITECTURE,AGENT_ASYNC_IMPACT,CODEBASE_MAP,TEST_REPORT,DECISIONS}.md
+        新增 docs/CODEBASE_MAP.md §9.33 与第 6 节第 30 条症状；docs/TEST_REPORT.md §15；
+        docs/AGENT_ASYNC_IMPACT.md I-5 补记；docs/DECISIONS.md §3.14
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → **第二轮只读审计：四处守卫/口径缺口收口 `1315`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1317`**
 
 > 本轮 +8（`test_tool_parameters.py` 17 → 21、`test_public_scan_mode.py` 122 → 125、
 > `test_assets_api.py` 29 → 30），另有 **2 条既有用例被加强**（函数数不变、断言变严）：
@@ -741,6 +749,7 @@ BOM 修复：storage.py 原本带 UTF-8 BOM，本轮一次整文件改写曾吃�
 
 ```text
 （本次提交）  ← 本轮文档回填；上一批不含本文件改动的提交见下一行
+6c7b16d  fix(auth,web): 页面级认证缺口收口 —— action=chat 需登录 + 匿名首页不再下发授权资产
 890e600  fix(api,web): 第二轮只读审计收口 —— tools/tool 折叠 + 两条守卫加强 + 说明副本
 c2a83b1  fix(web): 不再把 scope_id 渲染成文案 + 清掉三处死代码（Phase 1 审计缺口 ③⑤⑥⑦）
 0f5422d  fix(scan-center): 提交当前输入而不是上一次试算的快照（Phase 1 审计缺口 ①）
@@ -803,7 +812,7 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 
 **本轮待推送的提交**（规划方案 Phase 1～3 + 第 6 节自动匹配 + 第 13 节缺口回填 +
 执行期双开关复检 + Phase 1 审计缺口收口 + 第二轮只读审计收口 +
-§1～§18 逐节对照审计与第 6 节行号刷新，各自独立可回滚）：
+§1～§18 逐节对照审计与第 6 节行号刷新 + **页面级认证缺口收口**，各自独立可回滚）：
 
 | 提交 | 说明 | 变更规模 |
 |---|---|---|
@@ -826,7 +835,8 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 | `cca156d` | `docs`: §17 九字段的**口径澄清**（四种读法差一倍）+ 改正被行首正则误判的条目 + 同步五份文档 | 5 文件 +190/−56 |
 | `b308a0b` | `docs(state)`: 状态板对齐本轮实际，§17 写死数字改为「时点表 + 现跑」 | 5 文件 +27/−17 |
 | `3c9e5ce` | `docs(decisions)`: 记录本轮**七项推送前安全审计**结果（只读，七项全过） | 1 文件 +29 |
-| （本次） | `docs`: 时点表补到 `3c9e5ce` 并**停在实测值**（刻意不推算下一个数）+ 同步四份文档 | 5 文件（待提交） |
+| `68ca159` | `docs`: 时点表补到 `3c9e5ce` 并**停在实测值**（刻意不推算下一个数）+ 同步四份文档 | 5 文件 +53/−31 |
+| `6c7b16d` | `fix(auth,web)`: **页面级认证缺口收口** —— `action=chat` 需登录 + 匿名首页不再下发授权资产（**本轮唯一的可用行为变化，方向是收紧**） | 10 文件 +407/−26 |
 
 > **关于 `3191a75` 之后为什么还有四个纯文档提交**：这一段是**自我修正的收敛过程** ——
 > ① 折回两个琐碎提交（`3191a75`）；② 发现 §17 的**判定口径本身是错的**

@@ -221,6 +221,11 @@ python scripts/check_env.py                               # 环境自检（只�
 
 **鉴权现状（重要）**：除 `/health` 外，**修改/执行类**接口都要求本地管理员
 身份（请求头 `X-Local-Token: <Token>`，或先 `POST /api/auth/login` 建立会话）。
+**页面路由同样分两层**：`GET /` 与 `GET /login` 匿名可开（但未登录时**不下发**
+授权资产与任务列表）；**`POST /` 的两个表单动作（`action=scan` 与 `action=chat`）
+都必须登录**——`action=chat` 会进 Agent，而 Agent 当前能绕过
+`GEF_ALLOW_REAL_SCAN` 与 Scope 直接执行（见 `docs/AGENT_ASYNC_IMPACT.md` I-5），
+故它不是只读动作。详见 [`docs/API.md`](../docs/API.md) §4。
 以下 **7 个只读**接口目前仍然**匿名可读**，这是有意保持的现状，属已知项：
 `GET /api/tools`、`GET /api/databases`、`GET /api/results`、`GET /api/tool/<n>/results`、
 `GET /api/export`、`GET /api/export/<id>/download`、`GET /api/exports`。

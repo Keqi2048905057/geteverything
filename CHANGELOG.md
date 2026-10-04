@@ -1562,11 +1562,70 @@ real 任务入队（三道闸门全过）
 **仍未推送**：等你确认后先跑七项推送前安全审计，再显式 `git push origin main`
 （**不加 `--tags` / `--follow-tags`**）。
 
+#### 页面级认证缺口收口：`action=chat` 需登录 + 匿名首页不再下发授权资产
+
+> **这是本夜唯一改了生产代码的一轮**，也是**唯一的可用行为变化**（方向是**收紧**）。
+> 它**不是**规划方案里的功能项，而是上面那轮逐节审计**顺手挖出来的既有缺陷** ——
+> 属于「按 `docs/DECISIONS.md` 第 2 节白名单可直接修」的 Bug 修复类。
+
+**缺陷一：未登录也能经 Agent 打到真实子进程。**
+`app.py:index()` 的认证守卫原本嵌在 `if action in _SCAN_ACTIONS:`
+（`_SCAN_ACTIONS = {"scan"}`）**内部**，而 `elif action == "chat":` 分支
+**没有任何认证调用**。chat 进 Agent 后，`_tool_subdomain` / `_tool_httpx` 直接调
+`tool_runner.run_tools()` 与 `HttpxRunner().run_scan()` —— 这两条路**都不查
+`GEF_ALLOW_REAL_SCAN`、也不查 Scope**（证据见 `docs/AGENT_ASYNC_IMPACT.md` I-5）。
+两者叠加 = **一个未登录的 HTTP 请求可以走到真实扫描**，且**不产生任何 `job.created` 审计**。
+
+五个只读探针实测（全程 `GEF_ALLOW_REAL_SCAN=false`、目标 `example.test`、
+`BaseRunner._run_subprocess` 被断言装载过的桩替换）：匿名两步 chat（带 cookie）→
+`run_tools` 调用 **1 次**；桩住子进程入口 → 触达 **1 次**（`subfinder -d example.test …`）；
+**真起 waitress 复核同样 1 次**；不带 cookie 的单请求 **0 次**
+（须走完「意图 → 确认执行」两步，故浏览器跨站表单直发打不通）；
+对照匿名 `POST /api/run`、`/api/tool/subfinder/run`、`/api/jobs` 全部 **401**。
+`tests/` 里 `action=chat` 命中 **0**，`ADMIN_ONLY` 从未列出 `("POST", "/")`；
+`git log -S` 复核该分支自初始提交 `61b0f9b` 起就是这个形状，**不是近期回归**。
+
+**修法（有意做成「默认安全」的形状）**：把守卫提到 `action` 分支**之前**，
+使**所有 POST 动作**一律先认证。原写法是「按动作名白名单护」，漏一个动作就漏一个洞；
+改后新增动作**默认是安全的**，要开匿名反而得显式写。
+
+**缺陷二：匿名 `GET /` 下发整份授权资产清单。**
+`app.py` 原先无条件 `context["scopes"] = _load_scope_options()`，而 Phase 1 又把
+`allowed_domains` / `allowed_cidrs` 渲染进首页资产卡片 → 匿名访客能看到
+**范围名 + 覆盖目标 + 是否开启真实扫描**。资产页（`app.py:382`）一直带
+`if is_authenticated else []`，**首页漏了同一个判断** —— 属不一致，不是设计。已统一。
+（未登录时的页面文案也改了：不再说「还没有任何授权范围」——那会让匿名访客
+误以为系统里没有授权资产，与「有但不给你看」是两码事。）
+
+**这是收紧，不是放宽**：未新增 / 未删除任何路由（仍 **48 规则 / 50 绑定 / 42 个 `/api/*`**），
+未动 7 个已定的匿名只读 API（`docs/DECISIONS.md` D 项），
+也未改 `GET /` 本身的匿名可读性（那是有意保持的只读契约）。
+
+**新增 2 条用例**（`tests/integration/test_api_auth_contract.py` 26 → 28）：
+`test_page_chat_action_requires_login`（匿名 chat 必须 401）、
+`test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现
+范围名 / 目标 / 资产卡片类名 / `id="scope_id"`，且已登录时全部照常下发）。
+**两条在修复前都是红的**（实测 `assert 200 == 401` 与
+`AssertionError: 匿名首页泄露了授权资产信息: 培正学院公网资产`，同一次 `2 failed, 26 passed`）；
+修复后 28 条全绿，**其余 26 条一条未改**（没有放松任何既有断言）。
+
+**验证**：`1317 collected / 1315 passed / 2 skipped`；`ruff` 全过；
+`mypy` 72 文件 0 error；三个 JS `node --check` 通过；`git diff --check` 退出码 0。
+另做两次**独立于测试**的复核（`test_client` 桩 + **真起 waitress** 桩），
+两次都**先断言桩已装载**再采信数字（防「桩没装上却打印 0 次」的假阴性）；
+修复后匿名路由里未返回 401 的只剩 `POST /login` 与 `POST /api/auth/logout`
+（均为设计如此）—— **`POST /` 已从该名单消失**。
+
+**仍未做**：P0-6 阶段二（Agent 改走 Job Service）—— 你已明确「**先不开工**」，
+所以**本轮只堵匿名入口，Agent 内部绕过双开关与 Scope 的行为原样保留**；
+也未给 Agent 补聊天框 UI（`web/` 里至今没有任何 chat 入口）。
+详见 `docs/CODEBASE_MAP.md` §9.33、`docs/TEST_REPORT.md` §15、`docs/DECISIONS.md` §3.14。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1313 passed, 2 skipped, 0 failures
+$ python -m pytest           # 1315 passed, 2 skipped, 0 failures（-o addopts=""，收集 1317）
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
@@ -1579,13 +1638,18 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 → Phase 4 `1149` → 规划方案 Phase 1 `1159` → 规划方案 Phase 2 `1189`
 → 规划方案 Phase 3 `1290` → 第 6 节自动匹配授权资产 `1293`
 → 规划方案第 13 节缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处缺口 `1307`
-→ **第二轮只读审计：四处守卫/口径缺口收口 `1315`** → **本轮（§1～§18 逐节对照审计 +
-第 6 节行号刷新 + 两处 docstring 校正）：仍是 `1315 collected / 1313 passed / 2 skipped`
-—— 本轮只改文档与注释，**不新增也不删除用例****。
+→ 第二轮只读审计：四处守卫/口径缺口收口 `1315`
+→ §1～§18 逐节对照审计 + 第 6 节行号刷新 + 两处 docstring 校正：**仍是 `1315`**
+（只改文档与注释，不新增也不删除用例）
+→ **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1317`**（+2 条用例）。
 
-本轮 +8（`tests/unit/test_tool_parameters.py` 17 → 21、`test_public_scan_mode.py`
-122 → 125、`test_assets_api.py` 29 → 30），另有 **2 条既有用例被加强**（函数数不变、
-断言变严：工具名守卫改为从注册表派生、资产页 UUID/列值拆出独立守卫）。
+本轮 +2 全部落在 `tests/integration/test_api_auth_contract.py`（26 → 28），
+且这 2 条在修复前是**红的** —— 属「回归用例」，不是「补登记既有接口」。
+
+本轮前段（§1～§18 逐节对照审计）的 +8（`tests/unit/test_tool_parameters.py` 17 → 21、
+`test_public_scan_mode.py` 122 → 125、`test_assets_api.py` 29 → 30），
+另有 **2 条既有用例被加强**（函数数不变、断言变严：工具名守卫改为从注册表派生、
+资产页 UUID/列值拆出独立守卫）。
 
 上一轮（§13）的 +11 里，**5 条是新增、1 条是「修复一条此前依赖缺陷才通过的既有用例」**。
 逐文件差额由 `git worktree add --detach <tmp> 1746f41` 检出基线后两个工作树各跑一遍

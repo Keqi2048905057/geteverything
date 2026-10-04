@@ -193,8 +193,15 @@ naabu nmap gospider katana waybackurls feroxbuster dirsearch enscan`。
 * **已做**：创建扫描任务的编排收拢到 `core/application.py:create_scan_job()`
   （`POST /api/jobs` 与首页表单共用），视图函数不再内联 Policy/落库/审计。
 * **未做**：Agent 依旧直接调 `tool_runner.run_tools` / `HttpxRunner.run_scan`，没有改走 Job Service。
-  也就是说「提出计划」与「发起执行」在 Agent 这条路上还没有彻底分离——目标仍然要过 Scope，
-  但绕过的是 Job/队列这一层。主链（`/api/jobs`）不受此影响。
+  也就是说「提出计划」与「发起执行」在 Agent 这条路上还没有彻底分离。
+  **两条边界它都没过**：既不过 `resolve_mode()`（`GEF_ALLOW_REAL_SCAN`），也不过 Scope ——
+  它只有 Agent 自己的域名正则 + 黑名单（第二套白名单，见 `docs/AGENT_ASYNC_IMPACT.md` I-7）。
+  实测证据见同文件 I-5。主链（`/api/jobs`）不受此影响。
+* **2026-10-04 已堵住入口，未修内部**：这条旁路的**认证**此前是缺的——
+  `app.py:index()` 的守卫只护 `action=scan`，`action=chat` 可匿名进入，等于
+  未登录也能打到真实子进程。现已把守卫提到 `action` 分支之前（**所有 POST 动作一律需登录**），
+  **但 Agent 内部绕过双开关与 Scope 的行为原样保留**（你已答「先不开工」）。
+  详见 `docs/CODEBASE_MAP.md` §9.33 与 `docs/DECISIONS.md` §3.14。
 * **阶段二的影响**（开工前需确认）：接上 Job 链意味着 **Agent 执行异步化** ——
   回复里给 `job_id` 而不是内联结果，`agent_cli.py` 与首页 `action=chat` 的交互语义随之改变，
   `tests/unit/test_agent_boundary.py`（现在 monkeypatch `agent.action.run_tools` /
