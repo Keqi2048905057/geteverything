@@ -689,17 +689,20 @@
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1318 collected / 1316 passed / 2 skipped / 0 failures / 0 errors（146.47s）
+pytest: 1323 collected / 1321 passed / 2 skipped / 0 failures / 0 errors（161.48s）
 mypy:   Success: no issues found in 72 source files        ← 本轮未新增源文件
 路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
-本轮用例数 +3（1313 → 1316 passed；1315 → 1318 collected）：
-        tests/integration/test_api_auth_contract.py  26 → 29
+本轮用例数 +8（1313 → 1321 passed；1315 → 1323 collected）：
+        tests/integration/test_api_auth_contract.py  26 → 34
         · test_page_chat_action_requires_login（匿名 POST / action=chat 必须 401）
+        · test_any_page_post_action_requires_login ×5（scan / chat / "" / unknown /
+          definitely-not-an-action）—— 取值里 3 个是**未知动作**，锁的是
+          「**动作名不是安全边界**」：旧代码下未知动作会落到 else 分支返回 200
         · test_anonymous_homepage_does_not_leak_authorized_assets（匿名首页不下发授权资产）
         · test_page_chat_action_still_works_when_logged_in（**反向守卫**：管理员走 chat 必须 200）
-        **前两条在修复前都是红的**（实测 assert 200 == 401 与
-        「匿名首页泄露了授权资产信息: 培正学院公网资产」，同次 2 failed / 26 passed）；
-        第 3 条两侧都绿，价值在将来（防「为了堵匿名把功能删掉」）。
+        **其中 6 条在修复前都是红的**（实测同一次 6 failed / 28 passed）；
+        **2 条是反向守卫、两侧都绿**（`…still_works_when_logged_in` 与参数化里的 `scan`），
+        价值在将来 —— 只测「匿名 401」对「把整个 chat 分支删掉」也会通过。
 本轮源码改动三处（**收紧认证，方向与红线相反**）：
         app.py:227           _require_admin_for_page() 提到 action 分支之前（所有 POST 一律认证）
         app.py:304           context["scopes"] = _load_scope_options() if is_authenticated else []
@@ -712,6 +715,7 @@ mypy:   Success: no issues found in 72 source files        ← 本轮未新增�
                 （均为设计如此），**POST / 已从该名单消失**
         ★ 纪律：每个探针都**先断言前提**（桩已装载 / Token 已生效且非临时）再采信结论 ——
           本轮这条纪律一晚上救回两次假阴性（含一次「管理员也 401」）。
+        ★ 数字口径：中途出现过 1317/1315 与 1318/1316（过程值），最终以 1323/1321 为准。
 零 DDL 复核：本轮**没有**任何 schema 变更；core/policy.py / core/scope.py / core/jobs.py 一行未改
 未动：agent/（一行未改，「先不开工」未变）、数据库结构与数据、
         认证授权机制本身、审计字段集合、公网白名单（仍是 subfinder + httpx）、
@@ -722,7 +726,7 @@ mypy:   Success: no issues found in 72 source files        ← 本轮未新增�
         docs/AGENT_ASYNC_IMPACT.md I-5 补记；docs/DECISIONS.md §3.14
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1318`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323`**
 
 > 本轮 +8（`test_tool_parameters.py` 17 → 21、`test_public_scan_mode.py` 122 → 125、
 > `test_assets_api.py` 29 → 30），另有 **2 条既有用例被加强**（函数数不变、断言变严）：

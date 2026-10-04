@@ -195,18 +195,21 @@ Linux CI runner 上会真跑。**它们不是「跑不了」，是「这条机�
   **解析后回环与私网地址默认拒绝**、重定向出界与危险 scheme。
 * `test_m2_security.py`（23）：上传大小/扩展名/空文件、失败时回收目录、
   **上传目录按 UUID 隔离且两次上传绝不碰撞**、任意 `file_path` 被拒、设置写入有审计。
-* `test_api_auth_contract.py`（29）：**逐条钉住匿名只读现状** —— 参数化覆盖
+* `test_api_auth_contract.py`（34）：**逐条钉住匿名只读现状** —— 参数化覆盖
   5 个匿名只读绑定（`ANONYMOUS_READABLE`）与 15 个写/执行绑定的匿名拒绝（`ADMIN_ONLY`）。
   **注意**：`SECURITY.md` 说匿名只读接口共 7 个，而这份清单只列了 5 个；
   差额的 2 条目前只有间接覆盖，见 §3.1。
-  **2026-10-04 新增 3 条**（`test_page_chat_action_requires_login`、
-  `test_anonymous_homepage_does_not_leak_authorized_assets`、
+  **2026-10-04 新增 8 条**（`test_page_chat_action_requires_login`、**5 条**参数化的
+  `test_any_page_post_action_requires_login`、`test_anonymous_homepage_does_not_leak_authorized_assets`、
   `test_page_chat_action_still_works_when_logged_in`）：把两条**页面级**的
   匿名缺口钉死 —— `POST /` 的 `action=chat` 必须与 `action=scan` 同级登录
   （它能经 Agent 直达真实扫描，见 `docs/AGENT_ASYNC_IMPACT.md` I-5），
-  且匿名首页不得渲染授权资产卡片与下拉框；第 3 条是**反向守卫**，
-  保证「加了守卫之后管理员那条路还能走」。**这是补既有边界，不是改契约**：
-  前两条在修复前都是红的（实测），第 3 条两侧都绿、价值在将来。
+  且匿名首页不得渲染授权资产卡片与下拉框。**这是补既有边界，不是改契约**：
+  其中 **6 条在修复前是红的**（实测 `6 failed, 28 passed`），
+  **2 条（`…still_works_when_logged_in` 与参数化里的 `scan`）是反向守卫**、
+  两侧都绿，价值在将来（防「为了堵匿名把功能删掉」）。
+  ★ 参数化那条的取值里**有 3 个是未知动作**（`""` / `unknown` / `definitely-not-an-action`）——
+  它锁的是「**动作名不是安全边界**」这个一般形状，而不是今天这两个动作名。
 * `test_export_contract.py`（30）：导出不返回服务器路径、`../` 穿越被拒、
   非法 `format` 返回 400 且校验清单与 `exporter.SUPPORTED_FORMATS` **同源**。
 * `test_security_baseline.py`（22）：弱 `SECRET_KEY` 检测、进程内密钥稳定、
@@ -1748,7 +1751,7 @@ python app.py                          # waitress 127.0.0.1:5000
 
 ---
 
-## 15. 页面级认证缺口收口：匿名 `action=chat` 与匿名首页资产泄漏（1318）
+## 15. 页面级认证缺口收口：匿名 `action=chat` 与匿名首页资产泄漏（1323）
 
 > 本轮**不是**按规划方案加功能，而是把上一轮只读审计里挖出的两处**既有**缺陷修掉。
 > 依据：`docs/AGENT_ASYNC_IMPACT.md` I-5 补记（越权通道）与之末尾的「顺带修掉的第二条」。
@@ -1757,9 +1760,9 @@ python app.py                          # waitress 127.0.0.1:5000
 
 ```text
 python -m pytest -o addopts="" -q
-  → 1316 passed, 2 skipped, 11 warnings in 146.47s
+  → 1321 passed, 2 skipped, 11 warnings in 161.48s
 python -m pytest -o addopts="" -q --collect-only | tail
-  → 1318 tests collected
+  → 1323 tests collected
 ruff check .                       → All checks passed!
 mypy app.py core api jobs storage.py modules scripts
                                    → Success: no issues found in 72 source files
@@ -1769,37 +1772,55 @@ node --check web/static/{scan_center,assets,app}.js → 均 exit 0
 
 | 项 | 上一轮 | 本轮 |
 |---|---|---|
-| 收集数 | 1315 | **1318**（+3） |
-| 通过 / 跳过 | 1313 / 2 | **1316 / 2** |
+| 收集数 | 1315 | **1323**（+8） |
+| 通过 / 跳过 | 1313 / 2 | **1321 / 2** |
 | mypy 源文件 | 72 | 72（本轮未新增模块） |
 | `app.url_map` 规则 / 绑定 | 48 / 50 | **48 / 50** |
-| `test_api_auth_contract.py` | 26 | **29** |
+| `test_api_auth_contract.py` | 26 | **34** |
 
-> `1315 passed` 那一版是**中途**的数字（当时只写了 2 条用例，且还没加反向守卫）。
-> 最终数字是 **1318 收集 / 1316 通过**，因为**又补了第 3 条**（见 15.2 的 ★）。
+> **数字演进（三个阶段，别混）**：先写 2 条具名用例 → `1317 收集 / 1315 通过`；
+> 再补第 3 条**反向守卫** → `1318 / 1316`；
+> 最后把「任意 action 都要登录」改成 **5 条参数化**（+5）→ **`1323 / 1321`**。
+> 中途那两版数字在别处出现过，**以本节为最终口径**。
 
-### 15.2 三条新用例：两条在修复前是**红的**，第三条是**反向守卫**
+### 15.2 八条新用例：六条在修复前是**红的**，两条是**反向守卫**
 
 先写用例、先看它红，再动实现。红的时候的真实输出：
 
 ```text
 FAILED tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login
   E  assert 200 == 401     ← 匿名 POST / action=chat 竟然是 200，且已写入 session
+FAILED tests/integration/test_api_auth_contract.py::test_any_page_post_action_requires_login[chat]
+FAILED tests/integration/test_api_auth_contract.py::test_any_page_post_action_requires_login[]
+FAILED tests/integration/test_api_auth_contract.py::test_any_page_post_action_requires_login[unknown]
+FAILED tests/integration/test_api_auth_contract.py::test_any_page_post_action_requires_login[definitely-not-an-action]
 FAILED tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does_not_leak_authorized_assets
   E  AssertionError: 匿名首页泄露了授权资产信息: 培正学院公网资产
   E  assert '培正学院公网资产' not in '...<strong>培正学院公网资产</strong>...'
-2 failed, 26 passed
+6 failed, 28 passed
 ```
 
-修复后同两条转绿，**其余 26 条一条未改**。
+修复后全部转绿，**其余原有用例一条未改**（没有放松任何既有断言）。
 
-★ **第 3 条是后来补的，而且它故意「两侧都绿」**：
-`test_page_chat_action_still_works_when_logged_in` 断言**管理员带 Token 走 chat 必须 200**。
-**只测「匿名 401」是不够的** —— 那种断言对「把整个 chat 分支删掉」也会通过，
-而删掉分支等于把一个功能悄悄废掉。这条反向守卫单独验了「没把正路一起堵死」。
-它的价值不在「现在红不红」，而在「将来有人删分支时它会红」。
-**它必须跑在修复后**（修复前也绿，因为那时根本不需要登录 —— 所以它不参与
-「修复前是红的」这个判据，如实说明）。
+★ **反向守卫两条：`test_page_chat_action_still_works_when_logged_in` 与参数化里的 `scan`**。
+前者断言**管理员带 Token 走 chat 必须 200**；后者断言 `action=scan` 匿名必须 401
+（这条在修复前后**都绿**）。**只测「匿名 401」是不够的** —— 那种断言对
+「把整个 chat 分支删掉」也会通过，而删掉分支等于把一个功能悄悄废掉。
+这两条**两侧都绿**，所以**不参与**「修复前是红的」这个判据；它们的价值在将来。
+如实写明，不拿它们充数。
+
+★ **`test_any_page_post_action_requires_login` 的 5 个取值里，3 个是「未知动作」**
+（`""` / `"unknown"` / `"definitely-not-an-action"`）。这是**刻意设计**：
+历史缺陷的根因是「守卫按**动作名白名单**护，漏一个动作就漏一个洞」。
+用未知动作取值，等于断言**「未来新增的动作默认也是安全的」**——
+只要有人把守卫塞回 `if action in _SCAN_ACTIONS:` 里面，这 3 条立刻变红
+（旧代码下它们会落到 `else: job_error = "未知操作"` 并返回 **200**）。
+
+> **为什么不用「断言 `_require_admin_for_page()` 出现在 `action` 分支之前」的源码字符串守卫**：
+> 那种守卫锚在**写法**上（谁重排一下代码就红，而且它不证明任何行为）；
+> 行为级参数化锚在**语义**上 —— 它不问守卫写在哪一行，只问「换一个 action 值，还拦不拦得住」。
+> 这与本仓既有的四条源码守卫（`api/jobs.py` 不得内联编排等）性质不同：那四条守的是
+> 「**唯一入口**」这种无法用行为穷举的形状，这里能用行为穷举，就优先用行为。
 
 ### 15.3 修复内容（两处，都是「补边界」而非「改契约」）
 
@@ -1809,7 +1830,7 @@ FAILED tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does
 | `app.py:304` | `context["scopes"] = _load_scope_options() if is_authenticated else []` | 与 `/assets`（`app.py:382`）**同一口径**；同时把 `local_auth.is_authenticated()` 提出为局部变量，避免重复比较 Token |
 | `web/templates/index.html:94-110` | 未登录时不再说「还没有任何授权范围」（那是**另一回事**），改说「登录后可见」 | 原文案会让匿名访客以为「系统里没有授权资产」，与「有但不给你看」是两码事 |
 
-### 15.4 修复后的**三次独立复核**（不止测试通过）
+### 15.4 修复后的**五次独立复核**（不止测试通过）
 
 | 复核方式 | 命令 / 探针 | 结果 |
 |---|---|---|
@@ -1835,4 +1856,5 @@ FAILED tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does
 | 收紧 `GET /` 本身（改为必须登录） | **不做**。匿名可打开首页是 `SECURITY.md` / `docs/API.md` 里**有意保持**的只读契约，本轮只让它**不再下发数据** |
 | 动 7 个匿名只读 API | 属 `docs/DECISIONS.md` D 项已定契约，改动需用户明确授权 |
 | `.env` / 真实扫描开关 | 一行未动（复核 `LastWriteTime` 未变）。所有探针的目标都是 `example.test`，桩拦在子进程入口之前 |
-| 修 `session cookie is too large` 告警 | 那是**既有**坑（`docs/CODEBASE_MAP.md` 第 6 节第 20 条），本轮只是**恰好触发**了它（第 3 条用例会让它打出来）。修它要改 `agent_history` 的存储方式，属独立改动，**未做**；已在该用例 docstring 里写明「这是既有告警、不是本用例引入的失败」 |
+| 修 `session cookie is too large` 告警 | 那是**既有**坑（`docs/CODEBASE_MAP.md` 第 6 节第 20 条），本轮只是**恰好触发**了它（带 Token 的正路用例会让它打出来）。修它要改 `agent_history` 的存储方式，属独立改动，**未做**；已在该用例 docstring 里写明「这是既有告警、不是本用例引入的失败」 |
+| 用**源码字符串守卫**钉「守卫在 `action` 分支之前」 | **刻意不用**。那种守卫锚在**写法**上，重排代码就红，且不证明任何行为。改用 `test_any_page_post_action_requires_login` 的 5 条**行为级**参数化（其中 3 条是未知动作）——见 §15.2 的说明 |

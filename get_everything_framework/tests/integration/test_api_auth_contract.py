@@ -132,6 +132,42 @@ def test_page_chat_action_still_works_when_logged_in(admin_client):
     assert resp.get_json() is None, "页面路由应返回 HTML，不是 JSON"
 
 
+@pytest.mark.parametrize(
+    "action",
+    [
+        "scan",  # 已知扫描动作
+        "chat",  # 已知 Agent 动作
+        "",  # 表单给了 action 但值为空（`request.form.get("action", "scan")` 返回空串）
+        "unknown",  # 从未登记的动作
+        "definitely-not-an-action",  # 未来可能出现的新动作名
+    ],
+)
+def test_any_page_post_action_requires_login(client, action):
+    """**任意** `action` 值都必须先登录 —— 这条锁的是「守卫在分发之前」这个形状。
+
+    ★ 为什么不用「断言 `_require_admin_for_page()` 出现在 `action` 分支之前」的
+    源码字符串守卫：那种守卫锚在**写法**上（谁重排一下代码就红），而这里锚在
+    **行为**上 —— 它不问守卫写在哪一行，只问「换一个 action 值，还拦不拦得住」。
+
+    ★ 为什么必须用**未知** action 值：`"scan"`/`"chat"` 只覆盖今天存在的动作。
+    历史缺陷正是「守卫按动作名白名单护，漏一个动作就漏一个洞」；用 `unknown`
+    与 `definitely-not-an-action` 取值，等于断言 **「未来新增的动作默认也是安全的」**
+    —— 只要有人把守卫塞回 `if action in _SCAN_ACTIONS:` 里面，这两条立刻变红
+    （旧代码里它们会落到 `else: job_error = "未知操作"` 并返回 **200**）。
+
+    ★ 反面也在：`else` 分支的存在说明「未知动作」本身是有处理路径的，
+    这正是它能被当成回归探针的原因。
+
+    ★ 与上面两条具名用例的**分工**：那两条钉「scan / chat 这两个**已知**动作的
+    认证口径」（并写下它们各自的缺陷史），本条钉「**动作名不是安全边界**」这个更一般的形状。
+    `scan` / `chat` 两条在这里重复出现是**故意**的 —— 万一有人单独改了其中一个，
+    两条用例都会红，不会出现「只有具名用例红、参数化清单还是绿」的错觉。
+    """
+    resp = client.post("/", data={"action": action, "domain": "example.test"})
+    assert resp.status_code == 401, f"action={action!r} 未登录也能过：守卫又被放回按动作名白名单里了"
+    assert resp.get_json()["error_code"] == "unauthenticated"
+
+
 def test_anonymous_homepage_does_not_leak_authorized_assets(admin_client, client):
     """匿名首页**不得**下发授权资产（名称 / 目标 / 状态）。
 

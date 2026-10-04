@@ -1601,20 +1601,26 @@ real 任务入队（三道闸门全过）
 未动 7 个已定的匿名只读 API（`docs/DECISIONS.md` D 项），
 也未改 `GET /` 本身的匿名可读性（那是有意保持的只读契约）。
 
-**新增 3 条用例**（`tests/integration/test_api_auth_contract.py` 26 → 29）：
+**新增 8 条用例**（`tests/integration/test_api_auth_contract.py` 26 → 34）：
 `test_page_chat_action_requires_login`（匿名 chat 必须 401）、
+**5 条**参数化的 `test_any_page_post_action_requires_login`
+（取值 `scan` / `chat` / `""` / `unknown` / `definitely-not-an-action`，
+**其中 3 个是未知动作** —— 它锁的是「**动作名不是安全边界**」这个一般形状，
+历史根因正是「守卫按动作名白名单护，漏一个动作就漏一个洞」）、
 `test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现
 范围名 / 目标 / 资产卡片类名 / `id="scope_id"`，且已登录时全部照常下发）、
 `test_page_chat_action_still_works_when_logged_in`（**反向守卫**：管理员带 Token
-走 chat 必须 200 —— 只测「匿名 401」对「把分支删掉」也会通过）。
-**前两条在修复前都是红的**（实测 `assert 200 == 401` 与
-`AssertionError: 匿名首页泄露了授权资产信息: 培正学院公网资产`，同一次 `2 failed, 26 passed`）；
-修复后 29 条全绿，**其余 26 条一条未改**（没有放松任何既有断言）。
-第 3 条两侧都绿，价值在将来（它防的是「为了堵匿名而把功能删掉」）。
+走 chat 必须 200）。
+**其中 6 条在修复前是红的**（实测 `6 failed, 28 passed`：`assert 200 == 401`
+与 `AssertionError: 匿名首页泄露了授权资产信息: 培正学院公网资产`）；
+修复后 34 条全绿，**其余原有用例一条未改**（没有放松任何既有断言）。
+**2 条是反向守卫、两侧都绿**（`…still_works_when_logged_in` 与参数化里的 `scan`），
+价值在将来 —— 只测「匿名 401」那种断言，对「把整个 chat 分支删掉」也会通过。
 
-**验证**：`1318 collected / 1316 passed / 2 skipped`；`ruff` 全过；
+**验证**：`1323 collected / 1321 passed / 2 skipped`；`ruff` 全过；
 `mypy` 72 文件 0 error；三个 JS `node --check` 通过；`git diff --check` 退出码 0。
-另做**三次独立于测试**的复核（`test_client` 桩 + **真起 waitress** 桩 + 登录态正路探针），
+另做**五次独立于测试**的复核（`test_client` 桩 + **真起 waitress** 桩 +
+登录态正路探针 + 匿名路由全扫 + 匿名首页内容比对），
 每次都**先断言前提**（桩已装载 / Token 已生效且非临时）再采信数字
 —— 本轮「先断言前提」这条纪律一晚上救回两次假阴性；
 修复后匿名路由里未返回 401 的只剩 `POST /login` 与 `POST /api/auth/logout`
@@ -1629,7 +1635,7 @@ real 任务入队（三道闸门全过）
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1316 passed, 2 skipped, 0 failures（-o addopts=""，收集 1318）
+$ python -m pytest           # 1321 passed, 2 skipped, 0 failures（-o addopts=""，收集 1323）
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
@@ -1645,11 +1651,11 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 → 第二轮只读审计：四处守卫/口径缺口收口 `1315`
 → §1～§18 逐节对照审计 + 第 6 节行号刷新 + 两处 docstring 校正：**仍是 `1315`**
 （只改文档与注释，不新增也不删除用例）
-→ **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1318`**（+3 条用例）。
+→ **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323`**（+8 条用例）。
 
-本轮 +3 全部落在 `tests/integration/test_api_auth_contract.py`（26 → 29），
-其中前 2 条在修复前是**红的**（属「回归用例」，不是「补登记既有接口」），
-第 3 条是**反向守卫**（两侧都绿，防「为了堵匿名把功能删掉」）。
+本轮 +8 全部落在 `tests/integration/test_api_auth_contract.py`（26 → 34），
+其中 6 条在修复前是**红的**（属「回归用例」，不是「补登记既有接口」），
+2 条是**反向守卫**（两侧都绿，防「为了堵匿名把功能删掉」）。
 
 本轮前段（§1～§18 逐节对照审计）的 +8（`tests/unit/test_tool_parameters.py` 17 → 21、
 `test_public_scan_mode.py` 122 → 125、`test_assets_api.py` 29 → 30），

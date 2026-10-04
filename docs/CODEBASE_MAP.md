@@ -502,7 +502,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 27 | 日志里「找不到一个请求相关的任何记录」/ 结构化字段时有时无 | ① `core/observability.py:log_event`（关联字段来自 contextvar，不是参数）② 绑定处是否成对（`app.py` 的 `before_request`、`jobs/worker.py:startup`、`jobs/executor.py` 的 `with observability.bind(...)`）③ `configure_logging()` 是否在**进程入口**调过（`app.py:__main__` / `jobs/worker.py:__main__`）| 三个高发点：① 直接 `python -c "import app"` 或 `waitress-serve app:app` 起服务**不会**调 `configure_logging()`，事件只进 root logger（没人看）；② `Worker` 只 `startup()` 没 `shutdown()` → `worker_id` 一直挂着，同线程后续代码/测试会继承一个已死 worker 的身份；③ 用行号/字符串去 `grep "print("` 会撞上 `Blueprint("api", …)` 这类同形标识符，实际 print 清单以 `tests/unit/test_observability.py` 的 AST 守卫为准。**另注意**：401 的 `error_message` 里 `X-Local-Token` 后面的词会被脱敏规则打码（见 §9.18.3），不是日志丢了内容 |
 | 28 | 对比两次任务时，Web Server / 技术栈明明变了却**报不出 `changed`**（`status_code` / `title` / URL 却能报） | ① `core/assets.py:DIFFABLE_ATTRIBUTES`（白名单用的是哪个键名）② `core/assets.py:ATTRIBUTE_ALIASES` 与 `_canonical_attributes()` ③ `modules/httpx.py:_read_json_results` **实际产出的键名** | **已修**，但复发方式很隐蔽：httpx 产出的是 `webserver` / `tech`，而白名单早期写的是 `server` / `technology` —— 两边对不上，白名单永远匹配不到，`_changed_attributes()` 返回 `{}`。**判别点：只有 `status_code` / `title` / `url` 三项会报变化**。最危险的是单测若用「文档体例」的键名（`server`/`technology`）而不是工具真实键名，测试会全绿而线上失效。以后新增可 diff 属性，先确认工具真实产出的键名 |
 | 29 | 「创建任务」的两个入口行为不一致（错误码/文案/限流口径对不上） | ① `core/application.py:create_scan_job()`（唯一编排入口）② `api/jobs.py:create_job` 是否又被写回了内联编排 ③ `app.py:index()` 的扫描分支是否又反向导入 `api.jobs` 的私有函数 | 这类退化**不会让任何功能测试变红**（两条路各自都"能用"），只会让两个入口慢慢漂移。`tests/unit/test_application_service.py` 的三条源码守卫专拦这个：`api/jobs.py` 里不许再出现 `validate_job_targets` / `create_job_with_status` / `normalize_idempotency_key` / `resolve_mode` / `audit.record(job_created)`；`app.py` 里不许再出现 `from api.jobs import _resolve_targets`；`core/application.py` 里不许出现 `allowed_domains` / `allowed_cidrs` / `fnmatch`。**守卫失败时该改的是那段新写的内联代码，不是守卫** |
-| 30 | 「某个页面动作不用登录也能跑」/ 「匿名也能看到授权资产清单」 | ① `app.py:index()` 的 `_require_admin_for_page()`（`:174` 定义）是否还在 **`action` 分支之前**（`:227`）—— 若又被塞回 `if action in _SCAN_ACTIONS:` 里面，`action=chat` 就会重新裸奔 ② `app.py:304` 的 `context["scopes"]` 是否又变成无条件 `_load_scope_options()`（正确写法带 `if is_authenticated else []`，与 `:382` 的资产页同口径）③ 新增页面动作时**有没有顺手加守卫** | 症状是「功能全对、就是不用登录」。这类洞**不会让功能测试变红**，因为功能本身是好的。三道守卫：`tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login`（匿名 chat 必须 401）、`::test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现范围名/目标/资产卡片类名/`id="scope_id"`）、`ADMIN_ONLY` 参数化清单（逐个方法绑定实测响应码，**权威口径**）。修法与实测证据见 §9.33。**注意守卫失败时该改的是 `app.py`，不是守卫** |
+| 30 | 「某个页面动作不用登录也能跑」/ 「匿名也能看到授权资产清单」 | ① `app.py:index()` 的 `_require_admin_for_page()`（`:174` 定义）是否还在 **`action` 分支之前**（`:227`）—— 若又被塞回 `if action in _SCAN_ACTIONS:` 里面，`action=chat` 就会重新裸奔 ② `app.py:304` 的 `context["scopes"]` 是否又变成无条件 `_load_scope_options()`（正确写法带 `if is_authenticated else []`，与 `:382` 的资产页同口径）③ 新增页面动作时**有没有顺手加守卫** | 症状是「功能全对、就是不用登录」。这类洞**不会让功能测试变红**，因为功能本身是好的。三道守卫：`tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login`（匿名 chat 必须 401）、`::test_any_page_post_action_requires_login`（**5 条参数化，含 3 个未知动作** —— 这是「守卫是否前置」的**权威行为探针**，旧代码下未知动作返回 200 会立刻变红）、`::test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现范围名/目标/资产卡片类名/`id="scope_id"`）；另有 `ADMIN_ONLY` 参数化清单（逐个方法绑定实测响应码）。修法与实测证据见 §9.33。**注意守卫失败时该改的是 `app.py`，不是守卫** |
 
 ---
 
@@ -3742,11 +3742,21 @@ if request.method == "POST":
 
 #### 9.33.4 验证
 
-`pytest -o addopts="" -q` → **1316 passed / 2 skipped**（`--collect-only` 1318）；
+`pytest -o addopts="" -q` → **1321 passed / 2 skipped**（`--collect-only` 1323）；
 `ruff` 全过；`mypy` 72 文件 0 error；三个 JS `node --check` 通过。
-此外做了**三次独立于测试**的复核（`test_client` 桩 + **真起 waitress** 桩 +
-**登录态正路探针**），每次都**先断言前提**（桩已装载 / `get_admin_token()` 等于探针 Token
-且 `is_ephemeral_token()` 为 False）再采信数字 —— 本轮这条纪律一晚上救回两次假阴性
-（含一次「管理员也 401」：Token 在 `import app` 之后才设，而 `config` 导入期已跑完
-`load_dotenv()`）。新增 3 条用例（前 2 条修复前是红的），细节见 `docs/TEST_REPORT.md` §15。
+此外做了**五次独立于测试**的复核（`test_client` 桩 + **真起 waitress** 桩 +
+**登录态正路探针** + 匿名路由全扫 + 匿名首页内容比对），每次都**先断言前提**
+（桩已装载 / `get_admin_token()` 等于探针 Token 且 `is_ephemeral_token()` 为 False）
+再采信数字 —— 本轮这条纪律一晚上救回两次假阴性（含一次「管理员也 401」：
+Token 在 `import app` 之后才设，而 `config` 导入期已跑完 `load_dotenv()`）。
+新增 8 条用例（**6 条修复前是红的**，2 条是反向守卫），细节见 `docs/TEST_REPORT.md` §15。
+
+> ★ **收口时用的是「行为级」参数化，不是源码字符串守卫**：
+> 曾考虑加一条断言「`_require_admin_for_page()` 出现在 `action` 分支之前」的源码守卫，
+> **最终没加** —— 那种守卫锚在**写法**上（重排代码就红，且不证明行为）。
+> 改用 `test_api_auth_contract.py::test_any_page_post_action_requires_login` 的 5 条参数化，
+> 取值含 `""` / `unknown` / `definitely-not-an-action` **三个未知动作**：
+> 它锁的是「**动作名不是安全边界**」这个一般形状 —— 只要守卫被塞回
+> `if action in _SCAN_ACTIONS:`，未知动作就会落到 `else` 分支返回 200，参数化立刻变红
+> （旧代码实测正是如此）。**能行为穷举的，优先行为穷举。**
 
