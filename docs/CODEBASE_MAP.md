@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）** + **第 6 节 BUG 索引表 29 条行号全量复核与刷新（22 条漂移、3 条说法已不成立，见第 6 节开头的「行号批量刷新」说明）**（2026-10-03） + **§1～§18 逐节对照审计（无「漏做」的能力项）与 §9.33 页面级认证缺口收口（匿名 `action=chat` 需登录 + 匿名首页不再下发授权资产，第 6 节新增第 30 条症状）**（2026-10-04）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）** + **第 6 节 BUG 索引表 29 条行号全量复核与刷新（22 条漂移、3 条说法已不成立，见第 6 节开头的「行号批量刷新」说明）**（2026-10-03） + **§1～§18 逐节对照审计（无「漏做」的能力项）与 §9.33 页面级认证缺口收口（匿名 `action=chat` 需登录 + 匿名首页不再下发授权资产，第 6 节新增第 30 条症状）**（2026-10-04） + **第二轮「匿名可达面」审计：§9.34 匿名首页汇总泄漏收口 + 导出结果行重复修复（第 6 节新增第 31 条症状）**（2026-10-04）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -455,7 +455,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ---
 
-## 6. BUG 定位索引表（共 30 条症状；第 23～27 条为 P1/M7 新增，第 28～29 条为 P0-6 轮新增，第 30 条为 2026-10-04 认证缺口轮新增）
+## 6. BUG 定位索引表（共 31 条症状；第 23～27 条为 P1/M7 新增，第 28～29 条为 P0-6 轮新增，第 30 条为 2026-10-04 认证缺口轮新增，第 31 条为同夜第二轮「匿名可达面」审计新增）
 
 > **2026-10-03 行号批量刷新**：本表是 M0 基线时写的，此前的 `文件:行号` 大面积漂移 ——
 > 29 条里 22 条含**已漂移**行号，其中 9 处甚至落进了**别的函数体内**（例如第 4 条把
@@ -502,7 +502,8 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 27 | 日志里「找不到一个请求相关的任何记录」/ 结构化字段时有时无 | ① `core/observability.py:log_event`（关联字段来自 contextvar，不是参数）② 绑定处是否成对（`app.py` 的 `before_request`、`jobs/worker.py:startup`、`jobs/executor.py` 的 `with observability.bind(...)`）③ `configure_logging()` 是否在**进程入口**调过（`app.py:__main__` / `jobs/worker.py:__main__`）| 三个高发点：① 直接 `python -c "import app"` 或 `waitress-serve app:app` 起服务**不会**调 `configure_logging()`，事件只进 root logger（没人看）；② `Worker` 只 `startup()` 没 `shutdown()` → `worker_id` 一直挂着，同线程后续代码/测试会继承一个已死 worker 的身份；③ 用行号/字符串去 `grep "print("` 会撞上 `Blueprint("api", …)` 这类同形标识符，实际 print 清单以 `tests/unit/test_observability.py` 的 AST 守卫为准。**另注意**：401 的 `error_message` 里 `X-Local-Token` 后面的词会被脱敏规则打码（见 §9.18.3），不是日志丢了内容 |
 | 28 | 对比两次任务时，Web Server / 技术栈明明变了却**报不出 `changed`**（`status_code` / `title` / URL 却能报） | ① `core/assets.py:DIFFABLE_ATTRIBUTES`（白名单用的是哪个键名）② `core/assets.py:ATTRIBUTE_ALIASES` 与 `_canonical_attributes()` ③ `modules/httpx.py:_read_json_results` **实际产出的键名** | **已修**，但复发方式很隐蔽：httpx 产出的是 `webserver` / `tech`，而白名单早期写的是 `server` / `technology` —— 两边对不上，白名单永远匹配不到，`_changed_attributes()` 返回 `{}`。**判别点：只有 `status_code` / `title` / `url` 三项会报变化**。最危险的是单测若用「文档体例」的键名（`server`/`technology`）而不是工具真实键名，测试会全绿而线上失效。以后新增可 diff 属性，先确认工具真实产出的键名 |
 | 29 | 「创建任务」的两个入口行为不一致（错误码/文案/限流口径对不上） | ① `core/application.py:create_scan_job()`（唯一编排入口）② `api/jobs.py:create_job` 是否又被写回了内联编排 ③ `app.py:index()` 的扫描分支是否又反向导入 `api.jobs` 的私有函数 | 这类退化**不会让任何功能测试变红**（两条路各自都"能用"），只会让两个入口慢慢漂移。`tests/unit/test_application_service.py` 的三条源码守卫专拦这个：`api/jobs.py` 里不许再出现 `validate_job_targets` / `create_job_with_status` / `normalize_idempotency_key` / `resolve_mode` / `audit.record(job_created)`；`app.py` 里不许再出现 `from api.jobs import _resolve_targets`；`core/application.py` 里不许出现 `allowed_domains` / `allowed_cidrs` / `fnmatch`。**守卫失败时该改的是那段新写的内联代码，不是守卫** |
-| 30 | 「某个页面动作不用登录也能跑」/ 「匿名也能看到授权资产清单」 | ① `app.py:index()` 的 `_require_admin_for_page()`（`:174` 定义）是否还在 **`action` 分支之前**（`:227`）—— 若又被塞回 `if action in _SCAN_ACTIONS:` 里面，`action=chat` 就会重新裸奔 ② `app.py:304` 的 `context["scopes"]` 是否又变成无条件 `_load_scope_options()`（正确写法带 `if is_authenticated else []`，与 `:382` 的资产页同口径）③ 新增页面动作时**有没有顺手加守卫** | 症状是「功能全对、就是不用登录」。这类洞**不会让功能测试变红**，因为功能本身是好的。三道守卫：`tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login`（匿名 chat 必须 401）、`::test_any_page_post_action_requires_login`（**5 条参数化，含 3 个未知动作** —— 这是「守卫是否前置」的**权威行为探针**，旧代码下未知动作返回 200 会立刻变红）、`::test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现范围名/目标/资产卡片类名/`id="scope_id"`）；另有 `ADMIN_ONLY` 参数化清单（逐个方法绑定实测响应码）。修法与实测证据见 §9.33。**注意守卫失败时该改的是 `app.py`，不是守卫** |
+| 30 | 「某个页面动作不用登录也能跑」/ 「匿名也能看到授权资产清单」 | ① `app.py:index()` 的 `_require_admin_for_page()`（`:190` 定义）是否还在 **`action` 分支之前**（`:243`）—— 若又被塞回 `if action in _SCAN_ACTIONS:` 里面，`action=chat` 就会重新裸奔 ② `app.py:329` 的 `context["scopes"]` 是否又变成无条件 `_load_scope_options()`（正确写法带 `if is_authenticated else []`，与 `:407` 的资产页同口径）③ 新增页面动作时**有没有顺手加守卫** | 症状是「功能全对、就是不用登录」。这类洞**不会让功能测试变红**，因为功能本身是好的。三道守卫：`tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login`（匿名 chat 必须 401）、`::test_any_page_post_action_requires_login`（**5 条参数化，含 3 个未知动作** —— 这是「守卫是否前置」的**权威行为探针**，旧代码下未知动作返回 200 会立刻变红）、`::test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现范围名/目标/资产卡片类名/`id="scope_id"`）；另有 `ADMIN_ONLY` 参数化清单（逐个方法绑定实测响应码）。修法与实测证据见 §9.33。**注意守卫失败时该改的是 `app.py`，不是守卫** |
+| 31 | 「匿名首页能看到『跑过几次 / 覆盖几个目标 / 命中多少条』」/ 「`/?domain=<目标>` 匿名也能回显目标名」/ 「导出的 CSV 里有逐字节重复的行，`row_count` 还虚高」 | ① `app.py:build_page_context()` 的三个取数点（`get_global_summary` / `get_results_by_domain` / `get_domain_summary`）是否都按 `is_authenticated` 短路 ② `web/templates/index.html` 的「汇总」面板是否仍**裸渲染**（正确写法是整块包在 `{% if is_authenticated %}` 里）③ `exporter.py:gather_export_rows()` 的**整键去重**是否还在（`seen` 集合 + 键含 `created_at`） | 两个症状同源：**「该过滤的地方漏了一处」**。① 与第 30 条② 是同一个形状 —— `scopes` / `recent_jobs` 都带 `if is_authenticated`，汇总三处漏了；判别点：同一页面上 `class="scope-asset` 与 `id="jobs-table"` **不出现**，但「扫描运行次数」出现，就是这一条。② 的根因是 `get_view_results()`（只扫 8 张子域名表）与 `_get_tool_results_fallback()`（**遍历全部 17 张表**）**重叠**，实测 3 条唯一子域名导出成 6 行。**判别点：`row_count` 恰好是唯一记录数的整数倍、且 CSV 里出现逐字节相同的行**。★ 去重键**必须含 `created_at`**（同值不同时间是两条真实观测）；**不要**改成「`category == "subdomain"` 就跳过」—— `tool_name` 传一个未注册名字时 `get_view_results()` 返回空（`storage.py:419` 逐表 `continue`），按分类一概跳过会把子域名行全丢光。守卫：`tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does_not_leak_scan_summary`（3 段断言）+ `test_export_contract.py` 的三条唯一性用例（含一条「跨工具同值不得被误合并」的反向守卫）。修法与实测证据见 §9.34 |
 
 ---
 
@@ -3759,4 +3760,160 @@ Token 在 `import app` 之后才设，而 `config` 导入期已跑完 `load_dote
 > 它锁的是「**动作名不是安全边界**」这个一般形状 —— 只要守卫被塞回
 > `if action in _SCAN_ACTIONS:`，未知动作就会落到 `else` 分支返回 200，参数化立刻变红
 > （旧代码实测正是如此）。**能行为穷举的，优先行为穷举。**
+
+#### 9.33.5 行号漂移说明（2026-10-04 夜，第二轮补）
+
+本节正文里的 `app.py:304` / `:382` / `index.html:94-110` 是**当轮**的行号。
+同夜第二轮（§9.34）又改了 `app.py`（`build_page_context()` 加形参、`is_authenticated`
+提前），行号整体后移：`_require_admin_for_page()` 定义 `:174 → :190`、调用 `:227 → :243`、
+`context["scopes"]` `:304 → :329`、资产页 `:382 → :407`。
+**本文正文按原样保留不改**（它是当轮的证据记录）；要按当前代码定位请用第 6 节第 30 条。
+
+### 9.34 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复（2026-10-04，无人值守）
+
+> 起因：同一夜的两个只读审计子代理 + 我自己的复核。**两处都改了生产代码**，
+> 两处都是**收紧**（匿名少看数据 / 导出少写重复行）；详见 `docs/DECISIONS.md` §3.16。
+
+#### 9.34.1 缺陷三（与 §9.33.2 同类，但换了个数据源）：匿名首页下发扫描汇总
+
+`§9.33.2` 修的是 `context["scopes"]`（授权资产清单）。本轮发现**同一个函数里**
+还有一处漏了判断：`build_page_context()` 当时**无任何登录态形参**，直接就调
+
+```python
+summary = store.get_global_summary()                    # 旧 :151
+domain_results = store.get_results_by_domain(domain)    # 旧 :152
+domain_summary = store.get_domain_summary(domain)       # 旧 :153
+```
+
+而**同一个文件**里的 `scopes`（`:304`）与 `recent_jobs`（`:307`，内部 `limit=0` 短路）
+都是带登录态的 —— 四处判断漏了一处，模板「汇总」面板（`index.html:169-189`）
+也没有 `is_authenticated` 守卫。
+
+**实测（`%TEMP%\gef_summary_verify.py`，临时库，`leaktarget.test` 7 条子域名）**：
+
+| 请求 | 结果 |
+|---|---|
+| 管理员 `GET /` | 汇总 `{'扫描运行次数': 7, '已有目标数': 1, '结果总数': 7}` |
+| **匿名** `GET /` | **完全相同** —— 三个数字一模一样 |
+| **匿名** `GET /?domain=leaktarget.test` | 目标名 `leaktarget.test` 与「当前目标」区块**都渲染出来** |
+| 匿名 `GET /`（对照） | `class="scope-asset` 与 `id="jobs-table"` **不出现**（§9.33 的修复仍生效） |
+
+最后一行是关键：它排除了「整页没做过滤」这种解释 —— 是**恰好漏了汇总这一块**。
+
+**判别点（写进第 6 节第 31 条）**：同一张首页上「授权资产卡片**不**出现」
+但「**扫描运行次数**出现」，就是这一条。
+
+**修法（三处，有意做成失败关闭）**：
+
+```python
+def build_page_context(store, domain, scan_message, scan_error, chat_error,
+                       *, is_authenticated: bool = False):   # ← 默认 False
+    summary = store.get_global_summary() if is_authenticated else None
+    domain_results = store.get_results_by_domain(domain) if (is_authenticated and domain) else []
+    domain_summary = store.get_domain_summary(domain) if (is_authenticated and domain) else None
+```
+
+`index()` 里把 `is_authenticated = local_auth.is_authenticated()` **提到
+`build_page_context()` 之前**再传入 —— 原先它排在后面，等于「取数」这一步
+**根本不知道**访客是否登录，这才是漏判的机制性原因（不是忘了写 `if`，
+而是那个 `if` 写在了一个**用不上**的位置）。
+
+★ **形参默认 `False` 是刻意的**：`build_page_context()` 是内部函数，默认值只在
+「有人新加调用点忘了传」时起作用 —— 那时应当**不取数**，而不是取数。
+（对照：`app.py` 里 `is_authenticated` 的**局部变量**没有默认值，它必须显式算出。）
+
+#### 9.34.2 缺陷四：`gather_export_rows()` 把子域名结果收集两遍
+
+第 6 节第 9 条早就写着这个症状，但**一直没有回归用例**、也没人量过量级。
+
+```text
+exporter.gather_export_rows()
+  ├─ store.get_view_results()      → 只扫 category=="subdomain" 的 8 张专属表
+  └─ store.get_tool_results(..., category=None, tool_name=None)
+       └─ storage._get_tool_results_fallback()  → **遍历 TOOL_DATABASES 全部 17 张表**
+                                                     ↑ 同一批子域名表在这里又被读一遍
+```
+
+`category` 形参**在这条链上不生效**（`storage.py:705-711` 的 docstring 自陈
+「形参保留但当前不生效」），所以想靠 `category="subdomain"` 传给下游来避免重复，
+**传了也没用**。
+
+**实测（`%TEMP%\gef_dup_selfcheck.py`；子代理独立复现，数字一致）**：
+
+```text
+3 条唯一子域名（单工具 subfinder）：
+  gather_export_rows(默认 limit=1000) → len(rows)=6 / 唯一=3 / 每条 value 出现 2 次
+  导出 CSV → 数据行 6 / 唯一 3，3 对行**逐字节完全相同**（含 created_at）
+  limit=1/3 → 不重复（截断恰好掩盖）；limit=4/6/10 → 重复且 web 类被挤掉
+```
+
+最后一行说明：**小 `limit` 会让这个 bug 看不见，同时静默丢掉整个后序分类。**
+
+**修法**：整键去重，键 = `(domain, category, tool_name, value, created_at)`。
+
+* **`created_at` 必须入键**：同一子域名在**两次不同时间**的扫描里各出现一次是
+  两条真实观测，不带它会被误合并。
+* **不用「`category == "subdomain"` 就跳过」**（子代理建议的写法，我实测后**未采纳**）：
+  `tool_name` 传一个**未注册**的名字时，`get_view_results()` 里逐表 `continue`
+  （`storage.py:419`）会返回空，子域名行**只能**由回退路径提供 —— 按分类一概跳过会全丢。
+  按「已收过的整键」判断则只在真重复时跳过（该写法还顺带对「将来新增第三种重叠来源」免疫）。
+
+#### 9.34.3 一条**被实测证伪**的修法建议（方法论，值得单记）
+
+子代理建议：「把 `storage.py:777-778` 的 `if len(results) >= limit: break` 改成
+每张表查满再整体截断，否则 `?limit=5` 会静默丢掉整类数据」。实测（`%TEMP%\gef_break_claim.py`）：
+
+```text
+                带 break                  去掉 break
+limit= 3 → {'subdomain': 3}          {'subdomain': 3}
+limit= 4 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
+limit= 5 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
+```
+
+**两段完全相同** —— 因为 fallback 末尾本来就是 `return results[:limit]`（`storage.py:780`），
+顺序是「按 `TOOL_DATABASES` 定义序逐表 extend」且子域名表排在最前，
+**即便每张表都查满，末尾的整体截断照样只截到靠前的子域名**。
+⇒ 挡路的是「末尾截断 + 表定义顺序」，**不是那个 `break`**。
+这条建议**没有**写进文档当修法。`limit` 截断本身仍是**未修**的既有行为
+（见 `docs/DECISIONS.md` §3.16.5 第 2 条）。
+
+> **教训**：子代理给的是「现象 + 猜测的根因」，**「换个写法能不能修好」必须自己跑一遍**。
+> 这次花 5 分钟证伪，省下的是把一个无效修法写进文档、下一个人照着改还改不好。
+
+#### 9.34.4 验证（先红后绿，且证明用例**非空转**）
+
+| 用例 | 修复前 | 修复后 |
+|---|---|---|
+| `test_api_auth_contract.py::test_anonymous_homepage_does_not_leak_scan_summary` | **1 failed** | 1 passed |
+| `test_export_contract.py::test_results_endpoint_does_not_duplicate_subdomain_rows` | **3 failed** | 3 passed |
+| `test_export_contract.py::test_export_row_count_equals_unique_rows_and_csv_has_no_duplicates` | 同上 | 同上 |
+| `test_export_contract.py::test_export_keeps_same_value_from_different_tools_and_times`（**反向守卫**） | 同上 | 同上 |
+
+「修复前」不是手工改一行，而是用 `git show HEAD:<path>` 把文件**换成修复前的真身**
+（`%TEMP%\gef_prove_bites_generic.py`），跑完再按 bytes **逐字节还原**并断言还原干净。
+
+★ **为什么必须从 git 取真身**：我最初只手改 `app.py` 那一行的 `is_authenticated` → `True`，
+探针报「用例空转 ❌」—— 但**空转的是探针不是用例**：这条修复是**两处**
+（`app.py` 不再取数 **且** 模板 `{% if %}` 包住面板），只手改前者时模板里的标志
+仍是 `False`，面板照样不渲染。**手工模拟修复会漏掉修复的一半。**
+
+★ **同一次探针还踩了一个坑**：第一版把多个 pytest node id 空格分隔地当成**一个**
+argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据读成「修复前红」，
+差点得出「用例非空转 ✅」的**假结论**。已把 `exit==4` 单独判为「判据无效」。
+
+全量：`pytest -o addopts="" -q` → **1325 passed / 2 skipped**（`--collect-only` **1327**）、
+`ruff` 全过、`mypy` 72 文件 0 error、`git diff --check` 0；
+**路由未变**（48 规则 / 50 绑定 / 42 个 `/api/*`）；`.env` 未动；
+探针全部把 `storage.SQLITE_CONFIG["path"]` / `config.LOCAL_DB_CONFIG["path"]` /
+`exporter.EXPORT_DIR` 重定向到 `%TEMP%`，仓库 `exports/`（90 文件）与 `results/` 未变。
+
+#### 9.34.5 本轮**没做**的
+
+| 没做的 | 为什么 |
+|---|---|
+| `build_page_context()` 里另外 5 个 session 键（`agent_history` / `agent_steps` / `agent_context` / `pending_plan` / `uploaded_targets`）按登录态过滤 | 它们在 `web/` 里**没有任何渲染点**（实测 grep 命中 0），当前**不构成泄漏**；但「不下发」比「不渲染」可靠 —— **等用户拍板**，见 `docs/DECISIONS.md` §3.16.8 第 2 条 |
+| 修 `limit` 截断挤掉后序分类 | 见 §9.34.3：属「多表合并 + 统一截断」的口径变更，会改既有接口返回形状 |
+| 让 `_get_tool_results_fallback()` 读通用 `tool_results` 表 | 子代理实测、我**未独立复核**，只登记不修（`docs/DECISIONS.md` §3.16.5 第 3 条） |
+| session cookie 里的 `SYSTEM_PROMPT` / 4 KB 上限 / 匿名导出配额 | 三件都是独立改动且涉架构，**只取证不动手**（`docs/DECISIONS.md` §3.16.6） |
+| Agent 改走 Job Service（P0-6 阶段二） | 用户明确「先不开工」，本轮未碰 `agent/` 一行 |
 

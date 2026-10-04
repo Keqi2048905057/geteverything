@@ -1381,6 +1381,188 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 
 ---
 
+### 3.16 第二轮「匿名可达面」只读审计的落地：又一处匿名数据泄漏 + 一处导出重复计数（2026-10-04，无人值守）
+
+> **两处都改了生产代码**，依据是第 2 节白名单的「Bug 修复」。两处都是
+> **收紧**（一处让匿名少看数据、一处让导出少写重复行），方向与第 4 节红线相反。
+> 审计本体是只读的（两个子代理 + 我自己的复核），**本节只登记我亲自复现过的结论**；
+> 子代理报的、我没能独立复现的一律标注「未复核」。
+
+#### 3.16.1 缺陷三：匿名首页下发**扫描汇总与目标明细**（**已修**）
+
+`3.14.2` 修掉的是「匿名首页下发**授权资产清单**」；本轮发现**同一类**问题在**另一个来源**上还在：
+
+- `app.py:build_page_context()` 当时**没有任何登录态判断**就调
+  `store.get_global_summary()`（`:146`）、`store.get_results_by_domain(domain)`（`:147`）、
+  `store.get_domain_summary(domain)`（`:148`）—— 而 `scopes`（`:304`）与
+  `recent_jobs`（`:307`）**是带 `if is_authenticated` 的**。四处判断三个有一个漏了。
+- 模板 `web/templates/index.html:166-190` 的「汇总」面板**也没有** `is_authenticated` 守卫，
+  直接把 `summary.total_runs` / `total_domains` / `total_subdomains` 渲染出来。
+
+**实测（`%TEMP%\gef_summary_verify.py`，临时库）**：写入 7 条子域名（目标 `leaktarget.test`）后，
+管理员首页汇总 `{'扫描运行次数':'7','已有目标数':'1','结果总数':'7'}`，
+**匿名首页汇总完全相同**；且匿名 `GET /?domain=leaktarget.test` 会渲染出目标名与
+「当前目标」区块。对照：同一页面上 `class="scope-asset` 与 `id="jobs-table"` 确实**不出现** ——
+说明这不是「整页没做过滤」，而是**恰好漏了汇总这一块**。
+
+**为什么算「修」不算「改契约」**：`SECURITY.md:49` 与 `3.14.2` 已经把口径定成
+「匿名可以打开首页，但**不下发任何数据**」。汇总数字与目标明细**就是数据**，
+而且比资产清单更直接（资产清单说「能扫什么」，汇总说「已经扫出了多少」）。
+本轮只是把 `build_page_context()` 与模板补齐到与 `:304` / `:307` **同一个口径**。
+
+**改了什么（三处，不新增/删除路由）**：
+
+| 文件 | 改动 |
+|---|---|
+| `app.py:build_page_context()` | 新增 `is_authenticated=False` 形参（**默认 False 是刻意的失败关闭**）；三个取数点改为按该标志短路 |
+| `app.py:index()` | 把 `is_authenticated = local_auth.is_authenticated()` **提到取数之前**并传入；原先它排在 `build_page_context()` 之后，导致「取数」这一步根本不知道访客是否登录 |
+| `web/templates/index.html:166-190` | 汇总面板整块包进 `{% if is_authenticated %}`；未登录时改说「登录后可查看扫描汇总」 |
+
+#### 3.16.2 缺陷四：导出的结果行**重复计数**（**已修**，BUG 索引表第 9 条的另一半）
+
+第 9 条索引早就写着「同一条子域名会先由 `get_view_results` 加入、又被
+`_get_tool_results_fallback` 从同一张专属表再加一次 → 重复行」，但**一直没有回归用例**，
+也没有人量过它到底重多少。本轮量了：
+
+**根因**：`exporter.py:gather_export_rows()` 先用 `store.get_view_results()`（只扫
+`TOOL_DATABASES` 里 `category=="subdomain"` 的 8 张表）收子域名，随后又调
+`store.get_tool_results(domain=..., tool_name=..., category=None, limit=...)`；
+`category` 形参**在这条链上不生效**（`storage.py:705-711` 的 docstring 自陈），
+`tool_name` 也为空 → 落到 `storage.py:739-780` 的 `_get_tool_results_fallback()`，
+那个回退**遍历 `TOOL_DATABASES` 全部 17 张表**，其中就包含同一批子域名表。
+
+**实测（我自己跑的 `%TEMP%\gef_dup_selfcheck.py`，与子代理独立复现的数字一致）**：
+
+```text
+3 条唯一子域名（单工具 subfinder）：
+  gather_export_rows(默认 limit=1000) → len(rows)=6 / 唯一=3 / value 出现次数 各 2 次
+  导出 CSV 后 → 数据行 6 / 唯一 3，其中 3 对是**逐字节完全相同**的行（含 created_at）
+limit 截断效应：limit=3 时恰好不重复（截断掩盖），limit=4 起开始重复且 web 类被挤掉
+```
+
+**改了什么（一处）**：`exporter.py:gather_export_rows()` 按
+`(domain, category, tool_name, value, created_at)` **整键去重**。
+
+**为什么键里带 `created_at`**：不带它，`subfinder` 在**两次不同时间的扫描**里各报一次同一条
+子域名会被误合并成一条 —— 那是两条真实观测。而两条取数路径对同一条记录读到的
+`created_at` 完全相同，所以带它去重**恰好**只摘掉真重复。
+
+**为什么不用子代理建议的「`row_category == "subdomain"` 就跳过」**（这条建议我没采纳，
+且实测证明它**不够**）：`tool_name` 传一个**未注册**的名字时，`get_view_results()` 会因
+逐表 `continue`（`storage.py:419`）而返回空，此时子域名行**只能**由回退路径提供 ——
+按分类一概跳过会把它们全丢光。按「已经收过的整键」判断则只在真重复时跳过。
+
+#### 3.16.3 一条**没被采纳**的修法建议（方法论，值得单独记）
+
+子代理还建议「把 `storage.py:777-778` 的 `if len(results) >= limit: break` 改成每张表
+查满再整体截断，否则 `?limit=5` 会静默丢掉整类数据」。我**实测证伪了这条**：
+
+```text
+                带 break              去掉 break
+limit= 3 → {'subdomain': 3}      {'subdomain': 3}
+limit= 4 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
+limit= 5 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
+```
+
+两段**完全相同**。因为 fallback 的最后一行本来就是 `return results[:limit]`
+（`storage.py:780`），而顺序是「按 `TOOL_DATABASES` 定义序逐表 extend」，子域名表排在最前 ——
+**即便每张表都查满，末尾的整体截断照样只截到靠前的子域名**。挡路的是
+「末尾截断 + 表定义顺序」，不是那个 `break`。所以这条**不能**当修法写进文档。
+（`limit` 截断本身仍然是个独立的、**未修**的行为，见 3.16.5 第 2 条。）
+
+#### 3.16.4 验证
+
+- **测试先红后绿**（用 `git show HEAD:<path>` 把文件换成修复前真身，不是手工改一行 —— 
+  手工模拟修复漏过一次，见下）：
+  - `test_results_endpoint_does_not_duplicate_subdomain_rows` /
+    `test_export_row_count_equals_unique_rows_and_csv_has_no_duplicates` /
+    `test_export_keeps_same_value_from_different_tools_and_times` →
+    修复前 **3 failed**，修复后 **3 passed**。
+  - `test_anonymous_homepage_does_not_leak_scan_summary` →
+    修复前 **1 failed**，修复后 **1 passed**。
+- ★ **「手工模拟修复」这个做法本轮失败了一次，记下来**：我最初只手改
+  `app.py` 的 `is_authenticated=is_authenticated` → `True`，探针报「用例空转 ❌」。
+  但**空转的是探针不是用例** —— 这条修复是**两处**（`app.py` 不再取数 + 模板 `{% if %}` 包住面板），
+  只手改前者时模板里的标志仍是 `False`，面板照样不渲染。**从 `HEAD` 取修复前的真身不可能漏**。
+- `pytest -o addopts="" -q` → **1325 passed / 2 skipped**（`--collect-only` **1327**）；
+  `ruff` 全过；`mypy` **72 文件 0 error**；`git diff --check` 0。
+- **路由未变**：48 规则 / 50 绑定 / 42 个 `/api/*`。
+- **导出目录未被污染**：所有探针都把 `storage.SQLITE_CONFIG["path"]`、
+  `config.LOCAL_DB_CONFIG["path"]`、`exporter.EXPORT_DIR` 重定向到 `%TEMP%`；
+  仓库 `exports/` 90 个文件、`results/` 未变。
+
+#### 3.16.5 本轮**没修**的（如实列出，其中两条仍等你拍板）
+
+1. **反推**：`build_page_context()` 里的 `agent_history` / `agent_steps` / `pending_plan` /
+   `uploaded_targets` / `agent_context` **仍未按登录态过滤**（只有 `summary` 那三项改了）。
+   它们在 `web/` 里**没有任何渲染点**（实测 grep 命中 0），所以当前**不构成泄漏**；
+   但这是「靠模板不渲染来保护」，不是「不下发」。**要不要一并过滤等你拍板**（改动很小）。
+2. **`limit` 截断会把后序分类整类挤掉**（`storage.py:780` + 表定义顺序，见 3.16.3）。
+   这是**既有**行为、**未修**：`?limit=5` 在子域名数据多时会返回 5 行子域名、
+   `web`/`port` 类一条不剩。修它要动「多表合并 + 统一截断」的口径（例如按分类配额或全量再排序截断），
+   属独立改动。**我没有顺手改**，因为它会改变既有接口的返回形状。
+3. **`_get_tool_results_fallback()` 从不读通用 `tool_results` 表** ——
+   未注册工具的结果写在库里却**导不出来**（子代理实测，我**未独立复核**，故只登记不修）。
+4. **session cookie 里含完整 `SYSTEM_PROMPT`，且签名只防篡改不防读**（见 3.16.6）。
+5. **匿名 `GET /api/export` 的写盘副作用与无限额**（见 3.16.6）。
+6. **登录失败每次都写一条审计行**（见 3.16.6）。
+
+#### 3.16.6 三条**只做了取证、没动代码**的问题（都需要你拍板）
+
+**(1) `SYSTEM_PROMPT` 可从签名 cookie 里读出来 —— 签名保护的是完整性，不是机密性。**
+`%TEMP%\gef_cookie_leak.py` 在**没有 `SECRET_KEY`** 的情况下解开了登录后的 session cookie
+（`base64.urlsafe_b64decode` + `zlib.decompress`，Flask 压缩 payload 以 `.` 开头，
+payload 在 `parts[1]` 而不是 `parts[0]` —— 这个格式我踩了三次坑，见
+`docs/CODEBASE_MAP.md` §7 的补记）：解出的 `agent_history[0].content` **4600 字符，
+与 `agent/system_prompt.py:SYSTEM_PROMPT` 逐字节相同**。同一份 cookie 里还有
+`agent_history`（5403 B）、`agent_context`、`pending_plan`。
+**这不是新漏洞**（Flask 的签名 cookie 从来就不加密），但两份文档的措辞会让人误解：
+`SECURITY.md` 与 `docs/API.md` 都把「匿名只读」当成主要口径，而**登录后**的客户端的
+cookie 里躺着完整提示词与整段对话历史。要不要处理（例如改用服务端 session 存储、
+或把系统提示词移出会话），**属架构改动，等你拍板**。
+
+**(2) cookie 的 4 KB 上限，目前是「确认执行」闸门的**唯一**实际屏障。**
+`%TEMP%\gef_cookie_verify.py` 用真实浏览器语义（单 cookie 超 4096 即被丢弃）跑两步 chat：
+step1 的 Set-Cookie 头 **5543 B** → 被丢弃；step2 **5335 B** → 被丢弃 → 两次都 HTTP 200，
+但 `run_tools` 调用 **0 次**；对照组（手工剔掉 system 那条、缩小 cookie）step2 的
+`run_tools` = **1 次**。
+⇒ **`pending_plan` 的「先提议、再确认」在真实浏览器里早已失效**，原因是 4 KB 上限而不是代码。
+`%TEMP%\gef_fix_size.py` 量了 15 轮对话：现状最坏 **7571 B**，剔掉 system 后最坏 **2994 B**。
+**这意味着：任何「缩小 cookie」的改动，都必须与 `app.py:227` 的登录守卫同批上线**，
+否则等于把一条匿名执行通道重新打开。本 Agent **没有**动 cookie 存储方式。
+
+**(3) 匿名 `GET /api/export` 会真的写盘、登记，且无任何配额。**
+`%TEMP%\gef_summary_verify.py` 实测：匿名 `GET /api/export?domain=…&format=csv` → HTTP 200、
+磁盘文件 0→1、`exports` 表 0→1 行、`created_by='local-admin'`；匿名还能下载
+**管理员创建**的导出文件（HTTP 200、2635 B、内容含目标名）。
+子代理另测（**我未独立复核**）：无大小/频率上限、约 376750 B/s ⇒ ≈30 GB/天；
+同一秒的文件名会互相覆盖；全仓无清理/配额策略；`exports` 写入**不产生审计**。
+这属 `DECISIONS-D`（7 个匿名只读 API **有意**保持匿名）的**后果面**，不是新决定 ——
+但「只读」这个词与「会写盘」有落差，**要不要给它加限制（或至少记审计）请拍板**。
+
+#### 3.16.7 顺带修的文档过期项
+
+- `docs/API.md:577` 第 7 条仍写着「`GET /api/export?format=<非法值>` 返回 **500**」。
+  这条**早已修掉**：`api/results.py:254-258` 在调用 exporter 之前用同一份
+  `SUPPORTED_FORMATS` 拦下，实测是 **400 + `details.supported`**（`SECURITY.md:56-57`
+  也已改写）。本轮把 API.md 这条改成「已修复」并注明修法，避免后来者按过期结论去"修"。
+- `docs/CODEBASE_MAP.md` 第 6 节新增第 31 条症状（匿名首页汇总泄漏 / 导出重复行），
+  并把第 9 条（重复行）标注为**已有回归守卫**。
+
+#### 3.16.8 需要你确认的（**不阻塞**，两处已按「收紧」方向自决）
+
+1. **匿名首页「汇总」面板改成登录后可见 —— 认不认？** 依据是「汇总数字与目标明细就是数据」，
+   与 `3.14.2` 的资产清单是同一口径（`SECURITY.md:49`）。若你认为匿名也该看到汇总，
+   说一声即可回退（改回 `is_authenticated` 的两处判断）。
+2. **`build_page_context()` 里那 5 个 session 键要不要一并按登录态过滤？**（见 3.16.5 第 1 条）
+   当前**不构成泄漏**（无渲染点），所以我不擅自扩大改动；但「不下发」比「不渲染」可靠。
+3. **导出重复行按 `created_at` 参与去重 —— 认不认这个口径？** 见 3.16.2 的理由；
+   若你希望「同一子域名无论何时扫到都只导一行」，那是**另一个口径**（会丢观测历史），说一声即可改。
+4. **3.16.6 三条要不要各开一轮？**（cookie 存储 / 4KB 闸门 / 导出配额）
+   三件都属**独立改动**，我没有顺手做。
+
+---
+
 ## 4. 永不预授权的红线
 
 无论本文件如何填写，以下操作在无人值守期间**一律不执行**：

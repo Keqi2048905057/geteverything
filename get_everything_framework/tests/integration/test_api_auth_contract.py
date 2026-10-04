@@ -202,3 +202,45 @@ def test_anonymous_homepage_does_not_leak_authorized_assets(admin_client, client
     assert "培正学院公网资产" in admin_home
     assert "www.example.test" in admin_home
     assert 'class="scope-asset' in admin_home
+
+
+def test_anonymous_homepage_does_not_leak_scan_summary(admin_client, client, store):
+    """匿名首页**不得**下发扫描汇总与目标明细（结果库统计）。
+
+    与上一条是**同一类**漏洞、但**不同来源**：上一条是「谁在授权」，
+    这一条是「扫过什么、扫出多少」。首页的「汇总」面板读的是
+    ``store.get_global_summary()`` / ``get_domain_summary()``，
+    而 ``app.py:build_page_context()`` 当时**没有任何登录态判断** ——
+    与 ``scopes``（``app.py:320``）/ ``recent_jobs``（``app.py:323``）
+    那两处的写法不一致。
+
+    匿名访客因此能读到：跑过几次、覆盖几个目标、命中多少条；
+    并且 ``/?domain=<目标>`` 这一条 GET 还会把「该目标扫过几次、用了哪些工具、
+    多少条结果」直接渲染出来 —— 目标名本身也就跟着回显了。
+
+    这条钉住三件事：① 匿名不出现汇总标签；② 匿名不出现目标名；
+    ③ 管理员路径照常（修的是可见性，不是把功能删了）。
+    """
+    store.save_results(
+        "leaktarget.test",
+        "subfinder",
+        ["a.leaktarget.test", "b.leaktarget.test", "c.leaktarget.test"],
+    )
+
+    # ① 汇总面板的三个标签属于**数据载体**，匿名一个都不该出现。
+    anon_home = client.get("/").get_data(as_text=True)
+    for label in ("扫描运行次数", "已有目标数", "结果总数"):
+        assert label not in anon_home, f"匿名首页仍然渲染汇总数字: {label}"
+
+    # ② 带上 domain 也不行：目标名与「当前目标」区块都必须消失。
+    anon_focus = client.get("/?domain=leaktarget.test").get_data(as_text=True)
+    assert "leaktarget.test" not in anon_focus, "匿名首页通过 ?domain= 回显了目标名"
+    assert "当前目标" not in anon_focus, "匿名首页仍然渲染目标明细区块"
+
+    # ③ 已登录时照常下发。
+    admin_home = admin_client.get("/").get_data(as_text=True)
+    for label in ("扫描运行次数", "已有目标数", "结果总数"):
+        assert label in admin_home, f"管理员首页丢了汇总面板: {label}"
+    admin_focus = admin_client.get("/?domain=leaktarget.test").get_data(as_text=True)
+    assert "当前目标" in admin_focus
+    assert "leaktarget.test" in admin_focus

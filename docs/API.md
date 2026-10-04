@@ -574,7 +574,13 @@ python -c "import app; [print(sorted(r.methods - {'HEAD','OPTIONS'}), r.rule) fo
    （注释与 `core/errors_handlers.py` 映射表不一致，映射表是对的）。
 6. `api/scan.py` 的 docstring 举例工具名 `nuclei`——`RUNNER_REGISTRY` 里没有 `nuclei`
    （`api/tools.py`、`api/results.py` 的示例里也有同样的错）。实际 17 个工具见 `/api/tools`。
-7. `GET /api/export?format=<非法值>` 返回 **500**，接口文档期望的是 400：
-   `api/results.py` 未捕获 `exporter.py` 的 `ValueError`，属真实缺陷（`docs/CODEBASE_MAP.md` §7.1 第 5 条）。
+7. ~~`GET /api/export?format=<非法值>` 返回 **500**，接口文档期望的是 400~~ ▶ **已修复**：
+   `api/results.py` 在调用 `exporter` **之前**用同一份 `SUPPORTED_FORMATS` 拦下，
+   现在是 **400 `bad_request`** + `details.supported`（校验清单与 `exporter.SUPPORTED_FORMATS`
+   同源）。回归用例：`tests/integration/test_export_contract.py::test_export_rejects_unsupported_format_with_400`。
+   同一函数还有一处**曾漏记**的缺陷 —— `gather_export_rows` 把子域名结果收集两遍
+   （`get_view_results` + `_get_tool_results_fallback` 扫到同一批专属表），
+   `row_count` 与 CSV 都重复；**2026-10-04 已修**（按整键去重），
+   回归用例见同文件的 `test_*_duplicate_*` 三条。详见 `docs/DECISIONS.md` §3.16.2。
 8. `GET /api/tool/<n>/results` 的错误响应是 `{"error": "..."}` 而**不是**统一错误信封，
    是为兼容旧脚本保留的例外，容易被误当成 `ok=false` 缺失。

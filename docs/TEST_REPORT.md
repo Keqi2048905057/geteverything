@@ -264,12 +264,12 @@ Linux CI runner 上会真跑。**它们不是「跑不了」，是「这条机�
 
 | 方案要求 | 覆盖情况 | 代表用例 |
 |---|---|---|
-| API：auth | ✅ | `test_api_auth_contract.py`（24 条，参数化覆盖全部方法绑定） |
+| API：auth | ✅ | `test_api_auth_contract.py`（35 条，参数化覆盖全部方法绑定） |
 | API：scope | ✅ | `test_m2_scope_enforcement.py`、`test_policy.py` |
 | API：job | ✅ | `test_m3_jobs_api.py`（45 条）、`test_application_service.py`（27 条） |
 | API：asset | ✅ | `test_assets_api.py`（28 条） |
 | API：artifact | ✅ | `test_m4_runner_result.py`、`test_m7_local_e2e.py` |
-| API：export | ✅ | `test_export_contract.py`（30 条） |
+| API：export | ✅ | `test_export_contract.py`（33 条，含 3 条结果行唯一性/去重口径守卫） |
 | 安全：path traversal | ✅ | `test_security_baseline.py::test_resolve_targets_file_rejects_path_traversal`（4 例参数化）、`test_export_contract.py::test_export_id_with_path_traversal_is_rejected` |
 | 安全：arbitrary file path | ✅ | `test_m2_security.py::test_run_rejects_raw_file_path`（4 例）、`test_agent_boundary.py`（4 例） |
 | 安全：upload overwrite | ✅ | `test_security_baseline.py::test_two_uploads_never_collide` |
@@ -1858,3 +1858,109 @@ FAILED tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does
 | `.env` / 真实扫描开关 | 一行未动（复核 `LastWriteTime` 未变）。所有探针的目标都是 `example.test`，桩拦在子进程入口之前 |
 | 修 `session cookie is too large` 告警 | 那是**既有**坑（`docs/CODEBASE_MAP.md` 第 6 节第 20 条），本轮只是**恰好触发**了它（带 Token 的正路用例会让它打出来）。修它要改 `agent_history` 的存储方式，属独立改动，**未做**；已在该用例 docstring 里写明「这是既有告警、不是本用例引入的失败」 |
 | 用**源码字符串守卫**钉「守卫在 `action` 分支之前」 | **刻意不用**。那种守卫锚在**写法**上，重排代码就红，且不证明任何行为。改用 `test_any_page_post_action_requires_login` 的 5 条**行为级**参数化（其中 3 条是未知动作）——见 §15.2 的说明 |
+
+---
+
+## 16. 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复（1325）
+
+> 与 §15 同一夜、同一类：**不是加功能，是修既有缺陷**。§15 修的是
+> 「匿名首页资产清单」与「匿名 chat」，本轮发现**同一个函数**里还漏了汇总三处；
+> 另外量清了第 6 节 BUG 索引表第 9 条（导出重复行）的真实量级并补上回归守卫。
+> 详见 `docs/DECISIONS.md` §3.16 与 `docs/CODEBASE_MAP.md` §9.34。
+
+### 16.1 实测结果
+
+```text
+python -m pytest -o addopts="" -q
+  → 1325 passed, 2 skipped, 11 warnings in 165.99s
+python -m pytest -o addopts="" -q --collect-only | tail
+  → 1327 tests collected
+ruff check .                       → All checks passed!
+mypy app.py core api jobs storage.py modules scripts
+                                   → Success: no issues found in 72 source files
+git diff --check                   → exit 0
+路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
+```
+
+| 项 | §15（上一轮） | 本轮 |
+|---|---|---|
+| 收集数 | 1323 | **1327**（+4） |
+| 通过 / 跳过 | 1321 / 2 | **1325 / 2** |
+| mypy 源文件 | 72 | 72（未新增模块） |
+| `app.url_map` 规则 / 绑定 | 48 / 50 | **48 / 50** |
+| `test_api_auth_contract.py` | 34 | **35** |
+| `test_export_contract.py` | 30 | **33** |
+
+> **+4 = +1 +3**。新增的三条导出用例**都在 `test_export_contract.py` 的同一个
+> 新分区里**（「结果行唯一性」），其中一条是**反向守卫**（跨工具同值不得被误合并）。
+
+### 16.2 四条新用例：**四条在修复前都是红的**
+
+先写用例、先看它红，再动实现。红的时候的真实输出：
+
+```text
+FAILED tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does_not_leak_scan_summary
+  E  AssertionError: 匿名首页泄露了扫描汇总: '扫描运行次数' in '...<div class="summary-grid">...'
+FAILED tests/integration/test_export_contract.py::test_results_endpoint_does_not_duplicate_subdomain_rows
+  E  AssertionError: 结果行出现重复: 6 行 / 3 唯一
+FAILED tests/integration/test_export_contract.py::test_export_row_count_equals_unique_rows_and_csv_has_no_duplicates
+  E  assert 6 == 3
+FAILED tests/integration/test_export_contract.py::test_export_keeps_same_value_from_different_tools_and_times
+3 failed, 1 passed ...   ← 修复前
+```
+
+修复后四条全绿，**其余原有用例一条未改**（没有放松任何既有断言）。
+
+### 16.3 「修复前」是怎么造出来的（**这一轮的方法论重点**）
+
+不是手工把某一行改回去，而是 `git show HEAD:<path>` 把文件**换成修复前的真身**，
+跑完再按 bytes **逐字节还原**并断言还原干净（`%TEMP%\gef_prove_bites_generic.py`）。
+
+★ **我最初就是手工改的，结果探针报了假结论**：只手改 `app.py` 里
+`is_authenticated=is_authenticated` → `True`，探针报「用例空转 ❌」。
+但**空转的是探针不是用例** —— 这条修复是**两处**（`app.py` 不再取数
+**且** `index.html` 用 `{% if is_authenticated %}` 包住面板）。只手改前者时
+模板里的 `is_authenticated` 仍是 `False`，面板照样不渲染，用例照绿。
+**手工模拟修复会漏掉修复的一半。**
+
+★ **同一个探针还踩了第二个坑**：第一版把多个 pytest node id 用空格连成**一个**
+argv 传进去 → `no tests ran`（**exit=4**）。而判据写的是「`exit != 0` 且还原后 `exit == 0`
+⇒ 非空转」，于是 `exit=4` 会被读成「修复前红」，**差点输出一个假的 ✅**。
+已把 `exit==4`（没收集到用例）单独判为「判据无效」，不与「用例失败」混同。
+
+### 16.4 本轮修复内容（两处，都是「补边界」而非「改契约」）
+
+| 文件 | 改动 | 为什么这么改 |
+|---|---|---|
+| `app.py:build_page_context()` | 新增 `is_authenticated=False` 形参；三个取数点（`get_global_summary` / `get_results_by_domain` / `get_domain_summary`）按它短路 | 同一个函数里 `scopes` / `recent_jobs` 早就带判断，**四处漏了一处**。形参**默认 False** 是「失败关闭」：将来新加调用点忘了传时应当**不取数** |
+| `app.py:index()` | 把 `is_authenticated = local_auth.is_authenticated()` **提到 `build_page_context()` 之前**并传入 | 原先它排在后面 —— 漏判的**机制性**原因是「那个 `if` 写在了用不上的位置」，不是「忘了写」 |
+| `web/templates/index.html:166-191` | 「汇总」面板整块包进 `{% if is_authenticated %}`，未登录时改说「登录后可查看扫描汇总」 | 后端不再下发 + 前端不再裸渲染，两层都要 |
+| `exporter.py:gather_export_rows()` | 按 `(domain, category, tool_name, value, created_at)` **整键去重** | 两条取数路径**重叠**：`get_view_results()` 只扫 8 张子域名专属表，`_get_tool_results_fallback()` **遍历全部 17 张表**，同一批记录被加两次 |
+
+### 16.5 一个**被实测证伪**的子代理修法建议（记下来，省下后来者的时间）
+
+子代理建议把 `storage.py:777-778` 的 `if len(results) >= limit: break` 去掉，
+「否则 `?limit=5` 会静默丢掉整类数据」。实测（`%TEMP%\gef_break_claim.py`）两段**完全相同**：
+
+```text
+                带 break                  去掉 break
+limit= 3 → {'subdomain': 3}          {'subdomain': 3}
+limit= 4 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
+```
+
+因为 fallback 末尾本来就是 `return results[:limit]`（`storage.py:780`），
+而顺序是「按 `TOOL_DATABASES` 定义序逐表 extend」且子域名表排在最前 ——
+**即便每张表都查满，末尾的整体截断照样只截到靠前的子域名**。
+挡路的是「末尾截断 + 表定义顺序」，不是那个 `break`。**该建议未采纳，也未写成修法。**
+
+### 16.6 本轮**没做**的（如实列出）
+
+| 没做的 | 为什么 |
+|---|---|
+| `build_page_context()` 里另外 5 个 session 键按登录态过滤 | `agent_history` / `agent_steps` / `agent_context` / `pending_plan` / `uploaded_targets` 在 `web/` 里**没有任何渲染点**（grep 命中 0），当前**不构成泄漏**；但「不下发」比「不渲染」可靠 —— 改动很小，**等用户拍板**（`docs/DECISIONS.md` §3.16.8 第 2 条） |
+| 修 `limit` 截断挤掉后序分类 | 见 §16.5：属「多表合并 + 统一截断」的口径变更，会改变既有接口返回形状，独立改动 |
+| 让 `_get_tool_results_fallback()` 读通用 `tool_results` 表 | 子代理实测、我**未独立复核**，按纪律只登记不修（`docs/DECISIONS.md` §3.16.5 第 3 条） |
+| session cookie 里的完整 `SYSTEM_PROMPT` / 4 KB 上限 / 匿名导出配额 | 三件都是**独立改动且涉架构**，本轮**只取证不动手**：`%TEMP%\gef_cookie_leak.py` 在**没有 `SECRET_KEY`** 的情况下解出了 4600 字符、与 `agent/system_prompt.py` 逐字节相同的提示词；`gef_fix_size.py` 量了 15 轮对话（现状最坏 7571 B，剔掉 system 后最坏 2994 B）；`gef_summary_verify.py` 实测匿名 `GET /api/export` 会真写盘并登记。详见 `docs/DECISIONS.md` §3.16.6 |
+| Agent 改走 Job Service（P0-6 阶段二） | 用户明确「先不开工」，本轮未碰 `agent/` 一行 |
+| 7 个匿名只读 API（含 `GET /api/export`）收紧 | 属 `docs/DECISIONS.md` D 项已定契约，改动需用户明确授权；本轮只把「它会写盘」这个后果面如实登记 |
+

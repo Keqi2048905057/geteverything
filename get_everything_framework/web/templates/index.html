@@ -165,27 +165,34 @@
 
     <section class="panel">
       <h2>汇总</h2>
-      <dl class="summary">
-        <dt>扫描运行次数</dt><dd>{{ summary.total_runs if summary else 0 }}</dd>
-        <dt>已有目标数</dt><dd>{{ summary.total_domains if summary else 0 }}</dd>
-        <dt>结果总数</dt><dd>{{ summary.total_subdomains if summary else 0 }}</dd>
-      </dl>
-
-      {% if domain_summary %}
-        <h3>当前目标 · {{ current_domain }}</h3>
+      {% if is_authenticated %}
         <dl class="summary">
-          <dt>子域结果</dt><dd>{{ domain_summary.total_subdomains }}</dd>
-          <dt>最近扫描</dt><dd>{{ domain_summary.last_scan_at or '—' }}</dd>
+          <dt>扫描运行次数</dt><dd>{{ summary.total_runs if summary else 0 }}</dd>
+          <dt>已有目标数</dt><dd>{{ summary.total_domains if summary else 0 }}</dd>
+          <dt>结果总数</dt><dd>{{ summary.total_subdomains if summary else 0 }}</dd>
         </dl>
-        {% if domain_summary.tool_stats %}
-          <ul class="stats">
-            {% for tool, count in domain_summary.tool_stats %}
-              <li><span>{{ tool }}</span><span>{{ count }}</span></li>
-            {% endfor %}
-          </ul>
+
+        {% if domain_summary %}
+          <h3>当前目标 · {{ current_domain }}</h3>
+          <dl class="summary">
+            <dt>子域结果</dt><dd>{{ domain_summary.total_subdomains }}</dd>
+            <dt>最近扫描</dt><dd>{{ domain_summary.last_scan_at or '—' }}</dd>
+          </dl>
+          {% if domain_summary.tool_stats %}
+            <ul class="stats">
+              {% for tool, count in domain_summary.tool_stats %}
+                <li><span>{{ tool }}</span><span>{{ count }}</span></li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% else %}
+          <p class="hint">尚无该目标的扫描记录。</p>
         {% endif %}
       {% else %}
-        <p class="hint">尚无该目标的扫描记录。</p>
+        {# 未登录时不说「还没有扫描记录」——那是另一回事。汇总数字（跑过几次、
+           覆盖几个目标、命中多少条）与目标明细本身就是扫描结果，与任务列表
+           同一口径：只对本地管理员可见（app.py:build_page_context()）。 #}
+        <p class="hint">登录后可查看扫描汇总（统计数字与目标明细来自扫描结果库，仅本地管理员可见）。</p>
       {% endif %}
     </section>
   </main>

@@ -141,11 +141,27 @@ def build_page_context(
     scan_message=None,
     scan_error=None,
     chat_error=None,
+    is_authenticated=False,
 ):
-    """构建页面模板所需的上下文数据"""
-    summary = store.get_global_summary()
-    domain_results = store.get_results_by_domain(domain) if domain else []
-    domain_summary = store.get_domain_summary(domain) if domain else None
+    """构建页面模板所需的上下文数据。
+
+    认证在**取数之前**生效，而不是只靠模板少渲染几行：
+
+    * ``summary``（``get_global_summary``）是扫描结果库的全局统计 ——
+      跑过几次、覆盖几个目标、命中多少条；
+    * ``domain_results`` / ``domain_summary`` 是**按目标**的结果明细与
+      「这个目标扫过几次、用了哪些工具」。
+
+    未登录时三者一律不下发。``is_authenticated`` 默认 **False** 是刻意的
+    **失败关闭**：将来新增调用方忘传这个参数，结果也只是少显示一块汇总，
+    不会把扫描结果递给匿名访客。
+
+    调用点见 ``index()``：它在调本函数之前就已经把登录态取好并复用，
+    因此这里不需要（也不应该）再读一次 Session。
+    """
+    summary = store.get_global_summary() if is_authenticated else None
+    domain_results = store.get_results_by_domain(domain) if (is_authenticated and domain) else []
+    domain_summary = store.get_domain_summary(domain) if (is_authenticated and domain) else None
     raw_history = session.get("agent_history", [])
     raw_steps = session.get("agent_steps", [])
 
@@ -288,15 +304,24 @@ def index():
         else:
             job_error = f"未知操作: {action}"
 
+    # 认证状态只取一次：下面四处都要用它，重复调用会再走一遍 Token 比较。
+    #
+    # ★ 必须**在取汇总数据之前**取好：`build_page_context()` 现在按这个标志决定
+    #   要不要读扫描结果库（``get_global_summary`` / ``get_domain_summary``）。
+    #   之前它排在 `build_page_context()` 之后，于是「取数」这一步根本不知道
+    #   访客是否登录 —— 汇总与目标明细因此无条件下发给了匿名首页
+    #   （匿名访客能读到「跑过几次 / 覆盖几个目标 / 命中多少条」，
+    #   并且 ``/?domain=<目标>`` 还会把该目标扫过的工具与数量渲染出来）。
+    is_authenticated = local_auth.is_authenticated()
+
     context = build_page_context(
         store,
         domain=domain,
         scan_message=job_message,
         scan_error=job_error,
         chat_error=chat_error,
+        is_authenticated=is_authenticated,
     )
-    # 认证状态只取一次：下面两处都要用它，重复调用会再走一遍 Token 比较。
-    is_authenticated = local_auth.is_authenticated()
     context["is_authenticated"] = is_authenticated
     # 授权资产（名称 / 覆盖目标 / 状态）只在已登录时下发，与 `/assets` 同一口径。
     # 首页曾无条件下发；Phase 1 又把 `allowed_domains` / `allowed_cidrs` 渲染进

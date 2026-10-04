@@ -1631,11 +1631,89 @@ real 任务入队（三道闸门全过）
 也未给 Agent 补聊天框 UI（`web/` 里至今没有任何 chat 入口）。
 详见 `docs/CODEBASE_MAP.md` §9.33、`docs/TEST_REPORT.md` §15、`docs/DECISIONS.md` §3.14。
 
+### 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复（2026-10-04）
+
+> 与上一节同一夜、同一类：**不是加功能，是修既有缺陷**。上一节修的是
+> 「匿名首页**资产清单**」与「匿名 `action=chat`」；本轮发现**同一个函数**
+> 里还漏了**汇总三处**，并量清了第 6 节 BUG 索引表第 9 条（导出重复行）的
+> 真实量级、补上回归守卫。详见 `docs/CODEBASE_MAP.md` §9.34、
+> `docs/TEST_REPORT.md` §16、`docs/DECISIONS.md` §3.16。
+
+**缺陷三：匿名首页下发扫描汇总与目标明细。**
+`app.py:build_page_context()` 当时**没有任何登录态形参**，直接就调
+`store.get_global_summary()` / `store.get_results_by_domain(domain)` /
+`store.get_domain_summary(domain)`；而**同一个函数**里的 `scopes`（`:304`）
+与 `recent_jobs`（`:307`，内部 `limit=0` 短路）**都带登录态判断** ——
+四处漏了一处；模板「汇总」面板（`index.html:169-189`）也没有 `is_authenticated` 守卫。
+
+实测（临时库，`leaktarget.test` 7 条子域名）：管理员首页汇总
+`{'扫描运行次数': 7, '已有目标数': 1, '结果总数': 7}`，**匿名首页完全相同**；
+匿名 `GET /?domain=leaktarget.test` 还会把目标名与「当前目标」区块渲染出来。
+**对照**：同一张匿名首页上 `class="scope-asset` 与 `id="jobs-table"` **不出现**
+—— 这排除了「整页没做过滤」，是**恰好漏了汇总这一块**。
+
+漏判的**机制性**原因值得记下来：`is_authenticated` 原先是在
+`build_page_context()` **之后**才算出来的（因为只有 `scopes` / `recent_jobs` 用它），
+于是「取数」这一步**根本不知道**访客是否登录 —— 不是「忘了写 `if`」，
+而是那个 `if` 写在了一个**用不上**的位置。修法是把标志**提前**算好并传进去，
+`build_page_context()` 新增 `is_authenticated=False` 形参（**默认 False 是刻意的
+失败关闭**：将来新加调用点忘了传时应当**不取数**），模板同步包上 `{% if %}`。
+
+**缺陷四：`gather_export_rows()` 把子域名结果收集两遍。**
+两条取数路径**重叠**：`store.get_view_results()` 只扫 `category=="subdomain"`
+的 8 张专属表，`store.get_tool_results(..., category=None, tool_name=None)`
+落到 `storage._get_tool_results_fallback()` —— 那个回退**遍历 `TOOL_DATABASES`
+全部 17 张表**，其中就有同一批子域名表。`category` 形参在这条链上**不生效**
+（`storage.py:705-711` docstring 自陈），所以想靠传 `category="subdomain"`
+给下游避重，**传了也没用**。
+
+实测：3 条唯一子域名 → `gather_export_rows` 返回 **6 行 / 唯一 3**，
+导出 CSV **6 个数据行 / 唯一 3**，其中 3 对**逐字节完全相同**（含 `created_at`）；
+`limit=1/3` 时不重复（截断恰好掩盖）、`limit=4` 起重复且 `web` 类被挤掉
+—— **小 `limit` 会让这个 bug 看不见，同时静默丢掉整个后序分类**。
+
+修法是按 `(domain, category, tool_name, value, created_at)` **整键去重**。
+两个刻意的取舍：① **`created_at` 必须入键** —— 同一子域名在两次不同时间的扫描里
+各出现一次是两条**真实观测**，不带它会被误合并；② **不采用「`category == "subdomain"`
+就跳过」** —— `tool_name` 传一个**未注册**名字时 `get_view_results()` 会因逐表
+`continue`（`storage.py:419`）返回空，子域名行**只能**由回退路径提供，
+按分类一概跳过会把它们全丢光。
+
+**一条子代理修法建议被实测证伪（未采纳）**：建议去掉
+`storage.py:777-778` 的 `if len(results) >= limit: break`，理由是
+「否则 `?limit=5` 会静默丢掉整类数据」。实测两段**完全相同**
+（`limit=3/4/5` 分类分布一字不差）—— 因为 fallback 末尾本来就是
+`return results[:limit]`（`storage.py:780`），顺序是「按 `TOOL_DATABASES`
+定义序逐表 extend」且子域名表排在最前，**即便每张表都查满，末尾的整体截断照样
+只截到靠前的子域名**。挡路的是「末尾截断 + 表定义顺序」，不是那个 `break`。
+（`limit` 截断本身仍是**未修**的既有行为。）
+
+**验证**：`1327 collected / 1325 passed / 2 skipped`；`ruff` 全过；
+`mypy` 72 文件 0 error；`git diff --check` 退出码 0；路由未变（48 / 50 / 42）。
+**四条新用例在修复前都是红的**（`1 failed` + `3 failed`），
+「修复前」是用 `git show HEAD:<path>` 换成修复前真身、跑完再按 bytes
+**逐字节还原**造出来的 —— ★ **不是手工改一行**：我最初手工改
+`app.py` 一处，探针报「用例空转 ❌」，但**空转的是探针不是用例**，
+因为这条修复是**两处**（后端不再取数 **且** 模板包上 `{% if %}`），
+只手改前者时模板里的标志仍是 `False`，面板照样不渲染。**手工模拟修复会漏掉一半。**
+（同一探针还踩了第二个坑：多个 node id 被空格连成**一个** argv →
+`no tests ran` 的 **exit=4** 被误读成「修复前红」，差点输出假 ✅；
+已把 exit=4 单独判为「判据无效」。）
+
+**仍未做**：`build_page_context()` 里另外 5 个 session 键
+（`agent_history` / `agent_steps` / `agent_context` / `pending_plan` / `uploaded_targets`）
+**未**按登录态过滤 —— 它们在 `web/` 里**没有任何渲染点**（grep 命中 0），
+当前**不构成泄漏**，但「不下发」比「不渲染」可靠，**等用户拍板**；
+`limit` 截断、`_get_tool_results_fallback()` 不读通用 `tool_results` 表、
+session cookie 里的完整 `SYSTEM_PROMPT`、cookie 4 KB 上限、
+匿名 `GET /api/export` 的写盘副作用与配额 —— 五件**只取证未动手**，
+理由与实测数字见 `docs/DECISIONS.md` §3.16.5 / §3.16.6。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1321 passed, 2 skipped, 0 failures（-o addopts=""，收集 1323）
+$ python -m pytest           # 1325 passed, 2 skipped, 0 failures（-o addopts=""，收集 1327）
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
@@ -1651,13 +1729,24 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 → 第二轮只读审计：四处守卫/口径缺口收口 `1315`
 → §1～§18 逐节对照审计 + 第 6 节行号刷新 + 两处 docstring 校正：**仍是 `1315`**
 （只改文档与注释，不新增也不删除用例）
-→ **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323`**（+8 条用例）。
+→ **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323`**（+8 条用例）
+→ **第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327`**（+4 条用例）。
 
-本轮 +8 全部落在 `tests/integration/test_api_auth_contract.py`（26 → 34），
-其中 6 条在修复前是**红的**（属「回归用例」，不是「补登记既有接口」），
+本轮 +4 = `tests/integration/test_api_auth_contract.py` **34 → 35**（+1）
++ `tests/integration/test_export_contract.py` **30 → 33**（+3，含 1 条反向守卫：
+「跨工具的同值记录不得被误合并」）。**四条在修复前都是红的**
+（「修复前」由 `git show HEAD:<path>` 换成真身造出，非手工改一行 —— 见上文说明）。
+
+> **口径演进（四个阶段，别混）**：上一节先写 2 条具名用例 → `1317 收集 / 1315 通过`；
+> 再补第 3 条**反向守卫** → `1318 / 1316`；最后把「任意 action 都要登录」改成
+> **5 条参数化**（+5）→ `1323 / 1321`。本节再 +4 → **`1327 收集 / 1325 通过`**。
+> 中间那几版数字在别处出现过，**以本节为最终口径**。
+
+上一节（页面级认证缺口收口）的 +8 全部落在 `tests/integration/test_api_auth_contract.py`
+（26 → 34），其中 6 条在修复前是**红的**（属「回归用例」，不是「补登记既有接口」），
 2 条是**反向守卫**（两侧都绿，防「为了堵匿名把功能删掉」）。
 
-本轮前段（§1～§18 逐节对照审计）的 +8（`tests/unit/test_tool_parameters.py` 17 → 21、
+再上一轮前段（§1～§18 逐节对照审计）的 +8（`tests/unit/test_tool_parameters.py` 17 → 21、
 `test_public_scan_mode.py` 122 → 125、`test_assets_api.py` 29 → 30），
 另有 **2 条既有用例被加强**（函数数不变、断言变严：工具名守卫改为从注册表派生、
 资产页 UUID/列值拆出独立守卫）。

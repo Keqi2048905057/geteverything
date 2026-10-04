@@ -211,3 +211,84 @@ def test_export_prefix_cannot_escape_export_dir(admin_client, tmp_path):
     expected_dir = os.path.abspath(str(tmp_path / "exports"))
     assert export_dir == expected_dir
     assert ".." not in record["filename"]
+
+
+# ── 结果行唯一性（BUG 索引表第 9 条「行重复」的回归守卫） ─────
+
+
+def _unique(rows):
+    """唯一性口径：整条记录的五元组。``created_at`` 必须参与 —— 见下面的用例说明。"""
+    return {(r["domain"], r["category"], r["tool_name"], r["value"], r["created_at"]) for r in rows}
+
+
+def test_results_endpoint_does_not_duplicate_subdomain_rows(client, store):
+    """``GET /api/results`` 不得把同一条子域名结果返回两遍。
+
+    根因（本轮实测复现并修复）：``exporter.gather_export_rows()`` 先用
+    ``store.get_view_results()`` 收子域名专属表，随后又调
+    ``store.get_tool_results()``；后者在未指定已注册 ``tool_name`` 时会落到
+    ``storage.py:_get_tool_results_fallback()``，而那个回退**遍历
+    ``TOOL_DATABASES`` 全部表**（含同一批子域名表）。同一条记录于是被
+    原样加入两次。
+
+    实测：3 条唯一子域名 → ``len(rows) == 6``；导出成 CSV 后 6 个数据行里
+    有 3 对逐字节完全相同的行（``created_at`` 也相同，排除「同值不同时间」）。
+    ``GET /api/results`` 与 ``GET /api/export`` 走的是同一个函数，所以两条
+    接口一起被这条用例钉住。
+    """
+    store.save_results(
+        "dupcheck.test",
+        "subfinder",
+        ["a.dupcheck.test", "b.dupcheck.test", "c.dupcheck.test"],
+    )
+
+    rows = client.get("/api/results?domain=dupcheck.test").get_json()["results"]
+    assert len(rows) == len(_unique(rows)), f"结果行出现重复: {len(rows)} 行 / {len(_unique(rows))} 唯一"
+    assert len(rows) == 3
+
+
+def test_export_row_count_equals_unique_rows_and_csv_has_no_duplicates(admin_client, store):
+    """导出的 ``row_count`` 与 CSV 数据行都必须等于**唯一**记录数。
+
+    ★ 这条用例的价值在于它**同时看两个数**：``row_count`` 报 6 而 CSV 里
+    也有 6 行 —— 单看任何一个都「自洽」，只有跟「唯一记录数 = 3」比才露馅。
+    """
+    store.save_results(
+        "dupcheck.test",
+        "subfinder",
+        ["a.dupcheck.test", "b.dupcheck.test", "c.dupcheck.test"],
+    )
+
+    body = admin_client.get("/api/export?format=csv&domain=dupcheck.test").get_json()
+    assert body["row_count"] == 3, f"row_count 报了重复后的行数: {body['row_count']}"
+
+    download = admin_client.get(body["download_url"])
+    try:
+        csv_text = download.data.decode("utf-8-sig")
+    finally:
+        download.close()
+
+    lines = [line for line in csv_text.splitlines() if line.strip()]
+    data_lines = lines[1:]  # 第 0 行是表头
+    assert len(data_lines) == 3
+    assert len(set(data_lines)) == len(data_lines), "CSV 里出现了逐字节相同的重复行"
+
+
+def test_export_keeps_same_value_from_different_tools_and_times(client, store):
+    """去重不能**过头**：真正不同的观测必须都保留。
+
+    两类「看起来像重复、其实不是」的记录，去重键必须把它们区分开：
+
+    * 同一子域名由**两个不同工具**各报一次（``subfinder`` 与 ``amass``）；
+    * 同一子域名在**两次扫描**里各出现一次（``created_at`` 不同）。
+
+    去重键因此取整个五元组 (domain, category, tool_name, value, created_at)；
+    若图省事只按 (domain, value) 去重，下面这条用例会变红。
+    """
+    store.save_results("multi.test", "subfinder", ["shared.multi.test"])
+    store.save_results("multi.test", "amass", ["shared.multi.test"])
+
+    rows = client.get("/api/results?domain=multi.test").get_json()["results"]
+    tools = sorted(r["tool_name"] for r in rows if r["value"] == "shared.multi.test")
+    assert tools == ["amass", "subfinder"], f"跨工具的同值记录被误合并: {tools}"
+    assert len(rows) == len(_unique(rows))
