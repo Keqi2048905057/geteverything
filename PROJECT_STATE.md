@@ -849,6 +849,7 @@ git diff --check: 退出码 0
 
 ```text
 （本次提交）  ← 本轮文档回填（只改本文件，按上面的说明不入表）
+fd2f5d1  test(scope-form,security): novalidate 四条验收 + 5 个 session 键按登录态过滤
 35d0580  fix(ui,security): 修「第一个授权范围在界面上建不出来」+ 收起匿名 /scan-center 骨架
 c132a9e  docs: 补 32/33 个提交范围的推送前安全审计 + 状态板对齐（本轮第二条）
 4c75dc4  fix(auth,export): 第二轮「匿名可达面」审计收口 —— 匿名首页汇总不再下发 + 导出结果行去重
