@@ -1913,8 +1913,15 @@ FAILED tests/integration/test_export_contract.py::test_export_keeps_same_value_f
 
 ### 16.3 「修复前」是怎么造出来的（**这一轮的方法论重点**）
 
-不是手工把某一行改回去，而是 `git show HEAD:<path>` 把文件**换成修复前的真身**，
-跑完再按 bytes **逐字节还原**并断言还原干净（`%TEMP%\gef_prove_bites_generic.py`）。
+不是手工把某一行改回去，而是 `git show <修复前的修订号>:<path>` 把文件
+**换成修复前的真身**，跑完再按 bytes **逐字节还原**并断言还原干净
+（`%TEMP%\gef_prove_bites_generic.py`）。
+★ 修订号**必须显式写死**（本轮修复前 = `b5a7cb3`，即 `4c75dc4` 的父提交）：
+探针最初写的是 `HEAD`，那时修复还没提交、恰好等于修复前；
+**提交之后 `HEAD` 就变成了修复后的代码**，同一份探针会静默退化成
+「拿修复后跟修复后比」，然后给出一个看起来正常、其实什么都没证明的数字。
+（我正是在提交后复核「5 条 → 10 行」时踩到的：先用 `HEAD` 量到 5/5，
+改用 `b5a7cb3` 才对上 `n → 2n`。现在这类探针都先断言真身里**不含**修复的特征串。）
 
 ★ **我最初就是手工改的，结果探针报了假结论**：只手改 `app.py` 里
 `is_authenticated=is_authenticated` → `True`，探针报「用例空转 ❌」。
@@ -1959,7 +1966,7 @@ limit= 4 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
 |---|---|
 | `build_page_context()` 里另外 5 个 session 键按登录态过滤 | `agent_history` / `agent_steps` / `agent_context` / `pending_plan` / `uploaded_targets` 在 `web/` 里**没有任何渲染点**（grep 命中 0），当前**不构成泄漏**；但「不下发」比「不渲染」可靠 —— 改动很小，**等用户拍板**（`docs/DECISIONS.md` §3.16.8 第 2 条） |
 | 修 `limit` 截断挤掉后序分类 | 见 §16.5：属「多表合并 + 统一截断」的口径变更，会改变既有接口返回形状，独立改动 |
-| 让 `_get_tool_results_fallback()` 读通用 `tool_results` 表 | 子代理实测、我**未独立复核**，按纪律只登记不修（`docs/DECISIONS.md` §3.16.5 第 3 条） |
+| 让 `_get_tool_results_fallback()` 读通用 `tool_results` 表 | 子代理先报、**我随后独立复核并证实**（`%TEMP%\gef_fallback_verify.py`：`tool_results` 表里确有 2 行 `my-custom-tool`，而导出结果的 `tool_name` 分布里只有 `subfinder`）；修它要定「通用表的 category 怎么参与截断」，与上一行同源（`docs/DECISIONS.md` §3.16.5 第 3 条） |
 | session cookie 里的完整 `SYSTEM_PROMPT` / 4 KB 上限 / 匿名导出配额 | 三件都是**独立改动且涉架构**，本轮**只取证不动手**：`%TEMP%\gef_cookie_leak.py` 在**没有 `SECRET_KEY`** 的情况下解出了 4600 字符、与 `agent/system_prompt.py` 逐字节相同的提示词；`gef_fix_size.py` 量了 15 轮对话（现状最坏 7571 B，剔掉 system 后最坏 2994 B）；`gef_summary_verify.py` 实测匿名 `GET /api/export` 会真写盘并登记。详见 `docs/DECISIONS.md` §3.16.6 |
 | Agent 改走 Job Service（P0-6 阶段二） | 用户明确「先不开工」，本轮未碰 `agent/` 一行 |
 | 7 个匿名只读 API（含 `GET /api/export`）收紧 | 属 `docs/DECISIONS.md` D 项已定契约，改动需用户明确授权；本轮只把「它会写盘」这个后果面如实登记 |

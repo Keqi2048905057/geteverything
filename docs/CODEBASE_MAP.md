@@ -3847,6 +3847,19 @@ exporter.gather_export_rows()
   limit=1/3 → 不重复（截断恰好掩盖）；limit=4/6/10 → 重复且 web 类被挤掉
 ```
 
+**规律不是从「3 条 → 6 行」外推的**：`%TEMP%\gef_dup_by_count.py` 把修复前真身
+（`b5a7cb3`）按条数逐点量了一遍 —— `n` 条唯一子域名 → **恰好 `2n` 行**、
+每条 value 出现 **2 次**、两行 `created_at` 相同；`n = 1,2,3,4,5,6,8,12` 全部对上
+（1→2、3→6、5→10、12→24）。
+我最初在 `exporter.py` 的 docstring 里凭「3 条 → 6 行」外推写了「5 条 → 10 行」——
+**结论碰巧是对的，但那是运气不是证据**；现已改成「`n` → `2n`」并附逐点实测。
+
+★ **量这条规律时又踩了一次「用 `HEAD` 当修复前」的坑**：那时 `4c75dc4` 已经提交，
+`HEAD` **就是修复后的代码**，于是「修复前」与「修复后」量的是同一份，
+得到 5/5（无重复），一度让我以为**文档写错了**。改用
+`PRE_FIX = "b5a7cb3"`（`4c75dc4` 的父提交）后立刻对上。
+现在这类探针都会**先断言那份真身里不含修复的特征串**（`b"seen" not in src`）。
+
 最后一行说明：**小 `limit` 会让这个 bug 看不见，同时静默丢掉整个后序分类。**
 
 **修法**：整键去重，键 = `(domain, category, tool_name, value, created_at)`。
@@ -3855,7 +3868,9 @@ exporter.gather_export_rows()
   两条真实观测，不带它会被误合并。
 * **不用「`category == "subdomain"` 就跳过」**（子代理建议的写法，我实测后**未采纳**）：
   `tool_name` 传一个**未注册**的名字时，`get_view_results()` 里逐表 `continue`
-  （`storage.py:419`）会返回空，子域名行**只能**由回退路径提供 —— 按分类一概跳过会全丢。
+  （`storage.py:419-420`）会返回空，子域名行**只能**由回退路径提供 —— 按分类一概跳过会全丢。
+  这点是**实测**的（`%TEMP%\gef_fallback_verify.py`）：同一份数据
+  `get_view_results(tool_name="my-custom-tool")` = **0 行**、回退路径 = **1 行**。
   按「已收过的整键」判断则只在真重复时跳过（该写法还顺带对「将来新增第三种重叠来源」免疫）。
 
 #### 9.34.3 一条**被实测证伪**的修法建议（方法论，值得单记）
@@ -3889,8 +3904,11 @@ limit= 5 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
 | `test_export_contract.py::test_export_row_count_equals_unique_rows_and_csv_has_no_duplicates` | 同上 | 同上 |
 | `test_export_contract.py::test_export_keeps_same_value_from_different_tools_and_times`（**反向守卫**） | 同上 | 同上 |
 
-「修复前」不是手工改一行，而是用 `git show HEAD:<path>` 把文件**换成修复前的真身**
-（`%TEMP%\gef_prove_bites_generic.py`），跑完再按 bytes **逐字节还原**并断言还原干净。
+「修复前」不是手工改一行，而是用 `git show <修复前的修订号>:<path>` 把文件
+**换成修复前的真身**（`%TEMP%\gef_prove_bites_generic.py`），跑完再按 bytes
+**逐字节还原**并断言还原干净。
+当年那条探针里的修订号写的是 `HEAD`（那时修复还没提交，`HEAD` 恰好等于修复前）；
+**现在 `HEAD` 已经不是了** —— 见本节最后那条踩坑记录。
 
 ★ **为什么必须从 git 取真身**：我最初只手改 `app.py` 那一行的 `is_authenticated` → `True`，
 探针报「用例空转 ❌」—— 但**空转的是探针不是用例**：这条修复是**两处**
@@ -3900,6 +3918,23 @@ limit= 5 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
 ★ **同一次探针还踩了一个坑**：第一版把多个 pytest node id 空格分隔地当成**一个**
 argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据读成「修复前红」，
 差点得出「用例非空转 ✅」的**假结论**。已把 `exit==4` 单独判为「判据无效」。
+
+★ **第三次踩坑（提交之后再复核时）：「修复前」不能再写 `git show HEAD:`。**
+我在把本轮提交（`4c75dc4`）落下去**之后**，为了核对 `exporter.py` docstring 里
+「5 条唯一子域名导出成 10 行」这句话，又跑了一个 `git show HEAD:…exporter.py`
+当「修复前」的探针 —— 结果量到「5 条 → 5 行、无重复」，与 docstring 不符，
+一度以为是自己写错了数字。**是探针错了不是文档错了**：那时 `HEAD` **已经是修复后的提交**，
+于是「修复前」与「修复后」量的是**同一份代码**，一个自己骗自己的对照。
+改用显式写死的 `PRE_FIX = b5a7cb3`（`4c75dc4` 的父提交）后，数字立刻对上：
+`n 条唯一子域名 → gather_export_rows 返回 2n 行`（n=1..12 逐点实测，每条恰好出现 2 次），
+**docstring 里那句「5 条 → 10 行」是对的。**
+
+> **规律**：`HEAD` 只在**还没提交**时等于「修复前」。一旦把修复提交掉，
+> 所有拿 `HEAD` 当「修复前基线」的探针都会**静默退化成自我对照** ——
+> 它不报错，只是把「修复后」当成「修复前」再量一遍，然后给出一个
+> 看起来很正常、实际什么都没证明的数字。
+> **凡是要造「修复前」，就显式写死修订号**（本仓用 `b5a7cb3`），
+> 并且**先断言那份真身里确实不含修复的特征串**（这里断言 `b"seen" not in src`）。
 
 全量：`pytest -o addopts="" -q` → **1325 passed / 2 skipped**（`--collect-only` **1327**）、
 `ruff` 全过、`mypy` 72 文件 0 error、`git diff --check` 0；
@@ -3913,7 +3948,7 @@ argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据�
 |---|---|
 | `build_page_context()` 里另外 5 个 session 键（`agent_history` / `agent_steps` / `agent_context` / `pending_plan` / `uploaded_targets`）按登录态过滤 | 它们在 `web/` 里**没有任何渲染点**（实测 grep 命中 0），当前**不构成泄漏**；但「不下发」比「不渲染」可靠 —— **等用户拍板**，见 `docs/DECISIONS.md` §3.16.8 第 2 条 |
 | 修 `limit` 截断挤掉后序分类 | 见 §9.34.3：属「多表合并 + 统一截断」的口径变更，会改既有接口返回形状 |
-| 让 `_get_tool_results_fallback()` 读通用 `tool_results` 表 | 子代理实测、我**未独立复核**，只登记不修（`docs/DECISIONS.md` §3.16.5 第 3 条） |
+| 让 `_get_tool_results_fallback()` 读通用 `tool_results` 表 | 子代理先报、**我随后独立复核并证实**（写入 2 条 `my-custom-tool` 的结果，`tool_results` 表里确实有 2 行，而 `gather_export_rows()` 导出的 `tool_name` 分布里只有 `subfinder`）；修它要定「通用表的 category 怎么参与截断」，与上一行同源，属独立改动（`docs/DECISIONS.md` §3.16.5 第 3 条） |
 | session cookie 里的 `SYSTEM_PROMPT` / 4 KB 上限 / 匿名导出配额 | 三件都是独立改动且涉架构，**只取证不动手**（`docs/DECISIONS.md` §3.16.6） |
 | Agent 改走 Job Service（P0-6 阶段二） | 用户明确「先不开工」，本轮未碰 `agent/` 一行 |
 

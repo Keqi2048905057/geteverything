@@ -1452,8 +1452,18 @@ limit 截断效应：limit=3 时恰好不重复（截断掩盖），limit=4 起�
 
 **为什么不用子代理建议的「`row_category == "subdomain"` 就跳过」**（这条建议我没采纳，
 且实测证明它**不够**）：`tool_name` 传一个**未注册**的名字时，`get_view_results()` 会因
-逐表 `continue`（`storage.py:419`）而返回空，此时子域名行**只能**由回退路径提供 ——
-按分类一概跳过会把它们全丢光。按「已经收过的整键」判断则只在真重复时跳过。
+逐表 `continue`（`storage.py:419-420`）而返回空，此时子域名行**只能**由回退路径提供 ——
+按分类一概跳过会把它们全丢光。**实测**（`%TEMP%\gef_fallback_verify.py`）：
+同一份数据，`get_view_results(tool_name="my-custom-tool")` = **0 行**，
+而回退路径 = **1 行**。按「已经收过的整键」判断则只在真重复时跳过。
+
+> **重复的量级也是实测的，不是外推**（`%TEMP%\gef_dup_by_count.py`，
+> 修复前真身 `b5a7cb3`）：`n` 条唯一子域名 → **恰好 `2n` 行**、每条 value 出现 **2 次**、
+> 两行的 `created_at` 逐字节相同。`n = 1,2,3,4,5,6,8,12` 逐点量过
+> （1→2、3→6、5→10、12→24）。我最初在 `exporter.py` 的 docstring 里凭「3 条 → 6 行」
+> 外推写了「5 条 → 10 行」——**结论碰巧是对的**，但那是运气不是证据；现已改成
+> 「`n` → `2n`」并附上逐点实测，同时把「外推 vs 实测」这件事记在本节
+> （第一次用 `HEAD` 当修复前量到 5/5，是因为 `HEAD` 已经是修复后的提交，见 3.16.4）。
 
 #### 3.16.3 一条**没被采纳**的修法建议（方法论，值得单独记）
 
@@ -1475,8 +1485,8 @@ limit= 5 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
 
 #### 3.16.4 验证
 
-- **测试先红后绿**（用 `git show HEAD:<path>` 把文件换成修复前真身，不是手工改一行 —— 
-  手工模拟修复漏过一次，见下）：
+- **测试先红后绿**（用 `git show <修复前的修订号>:<path>` 把文件换成修复前真身，
+  不是手工改一行 —— 手工模拟修复漏过一次，见下）：
   - `test_results_endpoint_does_not_duplicate_subdomain_rows` /
     `test_export_row_count_equals_unique_rows_and_csv_has_no_duplicates` /
     `test_export_keeps_same_value_from_different_tools_and_times` →
@@ -1486,13 +1496,26 @@ limit= 5 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
 - ★ **「手工模拟修复」这个做法本轮失败了一次，记下来**：我最初只手改
   `app.py` 的 `is_authenticated=is_authenticated` → `True`，探针报「用例空转 ❌」。
   但**空转的是探针不是用例** —— 这条修复是**两处**（`app.py` 不再取数 + 模板 `{% if %}` 包住面板），
-  只手改前者时模板里的标志仍是 `False`，面板照样不渲染。**从 `HEAD` 取修复前的真身不可能漏**。
+  只手改前者时模板里的标志仍是 `False`，面板照样不渲染。
+- ★★ **第二次同类失败（更隐蔽，必须记）：「修复前」不能写 `git show HEAD:`。**
+  上面那句「从 `HEAD` 取修复前的真身不可能漏」**在本轮提交之后就失效了** ——
+  `HEAD` 变成了修复后的提交，于是「修复前」与「修复后」量的是**同一份代码**。
+  我就是这么又踩了一次：核对 `exporter.py` docstring 里「5 条唯一子域名导出成 10 行」时，
+  用 `HEAD` 当修复前，量到「5 条 → 5 行、无重复」，一度以为**文档写错了**；
+  改用显式写死的 `b5a7cb3` 后立刻对上：`n → 2n` 行（n=1..12 逐点实测）。
+  **假阴性与假阳性之外还有第三种：探针自己骗自己，而且它不报错。**
+  现在所有「造修复前」的探针都写成 `PRE_FIX = "b5a7cb3"` 常量 +
+  **先断言那份真身里确实不含修复的特征串**（这里断言 `b"seen" not in src`）。
 - `pytest -o addopts="" -q` → **1325 passed / 2 skipped**（`--collect-only` **1327**）；
   `ruff` 全过；`mypy` **72 文件 0 error**；`git diff --check` 0。
 - **路由未变**：48 规则 / 50 绑定 / 42 个 `/api/*`。
 - **导出目录未被污染**：所有探针都把 `storage.SQLITE_CONFIG["path"]`、
   `config.LOCAL_DB_CONFIG["path"]`、`exporter.EXPORT_DIR` 重定向到 `%TEMP%`；
   仓库 `exports/` 90 个文件、`results/` 未变。
+- **去重的规律与两条取舍理由都实测过**（不是从「3 条 → 6 行」外推）：
+  `n` 条唯一子域名 → **恰好 `2n` 行**、每 value 出现 2 次、两行 `created_at` 相同；
+  未注册 `tool_name` 时 `get_view_results()` **0 行**而回退路径**1 行**（这就是不能
+  「按 category 一概跳过」的实证理由）。
 
 #### 3.16.5 本轮**没修**的（如实列出，其中两条仍等你拍板）
 
@@ -1505,7 +1528,11 @@ limit= 5 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
    `web`/`port` 类一条不剩。修它要动「多表合并 + 统一截断」的口径（例如按分类配额或全量再排序截断），
    属独立改动。**我没有顺手改**，因为它会改变既有接口的返回形状。
 3. **`_get_tool_results_fallback()` 从不读通用 `tool_results` 表** ——
-   未注册工具的结果写在库里却**导不出来**（子代理实测，我**未独立复核**，故只登记不修）。
+   未注册工具的结果写在库里却**导不出来**。（子代理先报，**我随后独立复核并证实**：
+   `%TEMP%\gef_fallback_verify.py` 写入 2 条 `my-custom-tool` 的结果，
+   `tool_results` 表里**确实有 2 行**，而 `gather_export_rows()` 导出的
+   `tool_name` 分布里**只有 `subfinder`** —— 那 2 条一条都出不来。**仍未修**：
+   修它要决定「通用表的 category 怎么参与「多表合并 + 截断」的口径」，与第 2 条同源。）
 4. **session cookie 里含完整 `SYSTEM_PROMPT`，且签名只防篡改不防读**（见 3.16.6）。
 5. **匿名 `GET /api/export` 的写盘副作用与无限额**（见 3.16.6）。
 6. **登录失败每次都写一条审计行**（见 3.16.6）。
