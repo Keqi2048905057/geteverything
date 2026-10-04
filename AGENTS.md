@@ -1,6 +1,6 @@
 # get_everything_framework — 工作约定
 
-> 完整地图：`docs/CODEBASE_MAP.md`（3800+ 行，含 **31 条**「症状 → 排查位置」索引表）
+> 完整地图：`docs/CODEBASE_MAP.md`（4070+ 行，含 **33 条**「症状 → 排查位置」索引表）
 > 测试全景：`docs/TEST_REPORT.md`（测了什么 / 没测什么 / 为什么没测；含「已验证」与
 > 「仅代码审查、尚未实测」的分界，以及三条可复现的覆盖缺口证据）
 > Agent 改造影响：`docs/AGENT_ASYNC_IMPACT.md`（P0-6 阶段二前置件，未开工；
@@ -20,7 +20,7 @@
 - 测试：在项目根执行 `python -m pytest -q`（`pyproject.toml` 已配 `pythonpath = ["."]`，测试内可直接 `import storage`）
 - 静态检查：`ruff check .`；类型检查：`mypy app.py core api jobs storage.py modules scripts`
 - 环境自检：`python scripts/check_env.py`（**只读**，不建库、不执行任何扫描；退出码 0/1/2）
-- 基线：pytest **1325 项通过 / 2 skipped**（收集 1327），ruff 全过，mypy 0 error（72 source files）。
+- 基线：pytest **1328 项通过 / 2 skipped**（收集 1330），ruff 全过，mypy 0 error（72 source files）。
   基线会随每轮推进变化，**以 `PROJECT_STATE.md` 的「最近一次验证」为准**（本行容易过期）。
 - 跑测试的口径：**`python -m pytest -o addopts="" -q`**。
   `pyproject.toml` 里已有 `addopts = "-q"`；若命令行再写一个 `-q`，两者会**叠成 `-qq`**，

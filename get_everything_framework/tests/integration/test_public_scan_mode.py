@@ -737,9 +737,152 @@ def test_scan_center_page_renders_for_anonymous(client):
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "扫描中心" in body
-    assert "授权公网测试模式" in body
     # 未登录时给出明确提示，而不是渲染一个看起来能用的表单。
     assert "401 unauthenticated" in body
+    # 但**骨架**不下发：匿名看到的是「为什么看不到」，不是一个空表单。
+    assert 'id="strategy-list"' not in body
+    assert 'id="scope-form"' not in body
+    assert "步骤 1 · 输入目标" not in body
+
+
+def test_anonymous_scan_center_does_not_leak_backend_jargon(client, admin_client):
+    """匿名 ``/scan-center`` 不得下发骨架与后台术语（方案第 4 节原则 2）。
+
+    ``app.py`` 的 ``scan_center()`` 视图**不强制登录**（否则匿名连导航都点不进来），
+    但骨架整段是无条件渲染的 —— 实测匿名响应 8833 字符，管理员 8891 字符，
+    **只差 58 字符**：四步表单、项目 / 任务 / 详情三个面板、以及它们自带的后台术语
+    全部白送给匿名访客。这与首页的口径不一致（首页 ``build_page_context()``
+    对匿名不下发任何数据），也与方案第 4 节「前端不显示数据库字段 / 内部模型」相抵触。
+
+    这里钉的是**术语面**，不是数据面：实体 ID（``proj_`` / ``scope_`` / ``job_``）
+    与目标清单本来就没漏（``test_scan_center_page_does_not_leak_targets_or_jobs``
+    管那一条）。术语同样是内部模型 —— 匿名访客没有提交动作，不需要知道
+    ``mock`` / ``worker`` / ``allowed_cidrs`` 是什么。
+
+    刻意**不**列入黑名单的两个词：``扫描中心``（顶部导航与标题，匿名点进来必须看得到）
+    与 ``401 unauthenticated``（上面那条提示故意写出来的「为什么看不到」）。
+    """
+    body = client.get("/scan-center").get_data(as_text=True).lower()
+
+    for term in (
+        "mock",
+        "queued",
+        "worker",
+        "python -m",
+        "gef_allow_real_scan",
+        "scope_violation",
+        "allowed_domains",
+        "allowed_cidrs",
+        "active_scan",
+        "policy",
+        "scope",
+        "scope_id",
+    ):
+        assert term not in body, f"匿名扫描中心仍下发后台术语: {term!r}"
+
+    # 四个步骤的骨架元素一个都不能出现（术语未必带得出，元素 id 一定带得出）。
+    for element_id in (
+        "check-form",
+        "job-target",
+        "scope-form",
+        "job-project",
+        "job-scope",
+        "strategy-list",
+        "tool-list",
+        "job-operator",
+        "limits-fields",
+        "job-form",
+        "jobs-table",
+        "job-detail-panel",
+    ):
+        assert f'id="{element_id}"' not in body, f"匿名扫描中心仍下发骨架元素: #{element_id}"
+
+    # 反向守卫：登录后骨架与术语照常下发 —— 这条修的是「谁看得见」，不是「还显示不显示」。
+    admin_body = admin_client.get("/scan-center").get_data(as_text=True)
+    assert "步骤 1 · 输入目标" in admin_body
+    assert "真实扫描总开关未开启" in admin_body or "授权公网测试模式" in admin_body
+    assert "python -m jobs.worker" in admin_body
+
+
+def test_scan_center_scope_form_opts_out_of_native_validation():
+    """``#scope-form`` 必须带 ``novalidate`` —— 否则**第一个授权范围建不出来**。
+
+    这个表单同时装着两个 ``required`` 下拉（``#job-project`` / ``#job-scope``）和
+    「添加授权范围」的 ``type=submit`` 按钮。原生约束校验跑在 ``submit`` 事件**之前**：
+    全新用户（两下拉都只有占位项）点按钮时 ``valueMissing=true``，浏览器直接拦下，
+    ``scan_center.js:bindScopeForm`` 的 submit 回调**一次都不执行**。
+
+    实测（headless Chrome，三状态，从真实渲染结果里原样截取该表单）：
+
+    ==========  ============  ==============  ==================================
+    状态        submit 触发   checkValidity   ``:invalid``
+    ==========  ============  ==============  ==================================
+    1（全空）   0 次          False           ``#job-project``、``#job-scope``
+    2（有项目） 0 次          False           ``#job-scope``
+    3（有范围） 1 次          True            （无）
+    ==========  ============  ==============  ==================================
+
+    状态 1 正是「全新用户第一次进来」——也就是最需要这个按钮的那一次。
+
+    ``novalidate`` 只关掉**浏览器原生**校验，不动服务端：``bindScopeForm`` 自己
+    给出「还没有授权项目…」/「至少填一个授权域名或授权网段」，服务端
+    ``POST /api/scopes`` 的 ``*`` 全放行拒绝与非法 CIDR 拒绝一条都没少
+    （``test_m2_security.py`` 守着）。
+
+    守卫写成**正则**而不是 ``'novalidate' in source``：注释里就写着这个词，
+    纯字面命中会让「把属性删掉但留着注释」也算通过。
+    """
+    import re
+    from pathlib import Path
+
+    template = (
+        Path(__file__).resolve().parents[2] / "web" / "templates" / "scan_center.html"
+    ).read_text(encoding="utf-8")
+
+    match = re.search(r'<form[^>]*id="scope-form"[^>]*>', template)
+    assert match, "模板里找不到 #scope-form"
+    tag = match.group(0)
+    assert "novalidate" in tag, (
+        "#scope-form 又被加上原生约束校验了 —— 全新用户点「添加授权范围」不会有任何反应。"
+        f"实测标签: {tag!r}"
+    )
+    # 两个 required 下拉仍在（它们本身不是缺陷，缺的是 novalidate）。
+    assert 'id="job-project"' in template and 'id="job-scope"' in template
+
+
+def test_no_real_registrable_placeholder_domain_in_frontend():
+    """前端占位域只能落在 RFC 6761 保留域里，不得写真实已注册的域名。
+
+    ``www.example.cn`` 曾出现在 ``scan_center.html`` 的两个 ``placeholder`` 与
+    ``scan_center.js`` / ``app.css`` 的注释里。``example.cn`` **不是**保留域 ——
+    RFC 2606 只保留 ``example.com`` / ``example.net`` / ``example.org``
+    （见 https://www.rfc-editor.org/rfc/rfc2606 ），``.test`` / ``.invalid`` /
+    ``.localhost`` 由 RFC 6761 保留；而 ``example.cn`` 是别人**已经注册、
+    能解析出 A 记录**的真实域名（本机单次 DNS 查询实测：`example.cn → 8.218.126.38`）。
+
+    它只作为 ``placeholder`` 出现（浏览器不会把 placeholder 当值提交），所以不是
+    扫描风险；风险是**给人看**的：下一个照着页面填的用户会把它当成可扫描目标，
+    而本仓的硬约束是「不扫描任何未授权的外部目标」。统一换成 ``example.test``。
+
+    守卫按**白名单**判：抽出所有 ``example.<tld>`` 形状的域名，落在保留集里的放行，
+    其余一律报错 —— 这样 ``*.example.com``（保留）不会被误伤，
+    而下一个 ``example.cn`` 这类会立刻被抓住。
+    """
+    import re
+    from pathlib import Path
+
+    RESERVED = {"com", "net", "org", "test", "invalid", "localhost", "example"}
+    root = Path(__file__).resolve().parents[2] / "web"
+    offenders = []
+    for path in list(root.rglob("*.html")) + list(root.rglob("*.js")) + list(root.rglob("*.css")):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"\bexample\.([a-z]{2,})\b", text):
+            if match.group(1) not in RESERVED:
+                lineno = text[: match.start()].count("\n") + 1
+                offenders.append(
+                    f"{path.relative_to(root.parent)}:{lineno} 用了非保留域 {match.group(0)!r}"
+                )
+    assert not offenders, "前端又出现真实可注册域名占位符：\n" + "\n".join(offenders)
 
 
 def test_scan_center_page_renders_four_steps_for_admin(admin_client):

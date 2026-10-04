@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）** + **第 6 节 BUG 索引表 29 条行号全量复核与刷新（22 条漂移、3 条说法已不成立，见第 6 节开头的「行号批量刷新」说明）**（2026-10-03） + **§1～§18 逐节对照审计（无「漏做」的能力项）与 §9.33 页面级认证缺口收口（匿名 `action=chat` 需登录 + 匿名首页不再下发授权资产，第 6 节新增第 30 条症状）**（2026-10-04） + **第二轮「匿名可达面」审计：§9.34 匿名首页汇总泄漏收口 + 导出结果行重复修复（第 6 节新增第 31 条症状）**（2026-10-04）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）** + **第 6 节 BUG 索引表 29 条行号全量复核与刷新（22 条漂移、3 条说法已不成立，见第 6 节开头的「行号批量刷新」说明）**（2026-10-03） + **§1～§18 逐节对照审计（无「漏做」的能力项）与 §9.33 页面级认证缺口收口（匿名 `action=chat` 需登录 + 匿名首页不再下发授权资产，第 6 节新增第 30 条症状）**（2026-10-04） + **第二轮「匿名可达面」审计：§9.34 匿名首页汇总泄漏收口 + 导出结果行重复修复（第 6 节新增第 31 条症状）**（2026-10-04） + **第三轮只读审计收口：§9.35 第一个授权范围建不出来（`#scope-form` 原生约束校验吞掉提交）+ 匿名 `/scan-center` 骨架全量下发收起 + 占位域改回 RFC 6761 保留域**（2026-10-04）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -455,7 +455,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ---
 
-## 6. BUG 定位索引表（共 31 条症状；第 23～27 条为 P1/M7 新增，第 28～29 条为 P0-6 轮新增，第 30 条为 2026-10-04 认证缺口轮新增，第 31 条为同夜第二轮「匿名可达面」审计新增）
+## 6. BUG 定位索引表（共 33 条症状；第 23～27 条为 P1/M7 新增，第 28～29 条为 P0-6 轮新增，第 30 条为 2026-10-04 认证缺口轮新增，第 31 条为同夜第二轮「匿名可达面」审计新增，第 32～33 条为同夜第三轮只读审计新增 —— 一个是「点了没反应」的功能死锁，一个是匿名骨架全量下发）
 
 > **2026-10-03 行号批量刷新**：本表是 M0 基线时写的，此前的 `文件:行号` 大面积漂移 ——
 > 29 条里 22 条含**已漂移**行号，其中 9 处甚至落进了**别的函数体内**（例如第 4 条把
@@ -504,6 +504,8 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 29 | 「创建任务」的两个入口行为不一致（错误码/文案/限流口径对不上） | ① `core/application.py:create_scan_job()`（唯一编排入口）② `api/jobs.py:create_job` 是否又被写回了内联编排 ③ `app.py:index()` 的扫描分支是否又反向导入 `api.jobs` 的私有函数 | 这类退化**不会让任何功能测试变红**（两条路各自都"能用"），只会让两个入口慢慢漂移。`tests/unit/test_application_service.py` 的三条源码守卫专拦这个：`api/jobs.py` 里不许再出现 `validate_job_targets` / `create_job_with_status` / `normalize_idempotency_key` / `resolve_mode` / `audit.record(job_created)`；`app.py` 里不许再出现 `from api.jobs import _resolve_targets`；`core/application.py` 里不许出现 `allowed_domains` / `allowed_cidrs` / `fnmatch`。**守卫失败时该改的是那段新写的内联代码，不是守卫** |
 | 30 | 「某个页面动作不用登录也能跑」/ 「匿名也能看到授权资产清单」 | ① `app.py:index()` 的 `_require_admin_for_page()`（`:190` 定义）是否还在 **`action` 分支之前**（`:243`）—— 若又被塞回 `if action in _SCAN_ACTIONS:` 里面，`action=chat` 就会重新裸奔 ② `app.py:329` 的 `context["scopes"]` 是否又变成无条件 `_load_scope_options()`（正确写法带 `if is_authenticated else []`，与 `:407` 的资产页同口径）③ 新增页面动作时**有没有顺手加守卫** | 症状是「功能全对、就是不用登录」。这类洞**不会让功能测试变红**，因为功能本身是好的。三道守卫：`tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login`（匿名 chat 必须 401）、`::test_any_page_post_action_requires_login`（**5 条参数化，含 3 个未知动作** —— 这是「守卫是否前置」的**权威行为探针**，旧代码下未知动作返回 200 会立刻变红）、`::test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现范围名/目标/资产卡片类名/`id="scope_id"`）；另有 `ADMIN_ONLY` 参数化清单（逐个方法绑定实测响应码）。修法与实测证据见 §9.33。**注意守卫失败时该改的是 `app.py`，不是守卫** |
 | 31 | 「匿名首页能看到『跑过几次 / 覆盖几个目标 / 命中多少条』」/ 「`/?domain=<目标>` 匿名也能回显目标名」/ 「导出的 CSV 里有逐字节重复的行，`row_count` 还虚高」 | ① `app.py:build_page_context()` 的三个取数点（`get_global_summary` / `get_results_by_domain` / `get_domain_summary`）是否都按 `is_authenticated` 短路 ② `web/templates/index.html` 的「汇总」面板是否仍**裸渲染**（正确写法是整块包在 `{% if is_authenticated %}` 里）③ `exporter.py:gather_export_rows()` 的**整键去重**是否还在（`seen` 集合 + 键含 `created_at`） | 两个症状同源：**「该过滤的地方漏了一处」**。① 与第 30 条② 是同一个形状 —— `scopes` / `recent_jobs` 都带 `if is_authenticated`，汇总三处漏了；判别点：同一页面上 `class="scope-asset` 与 `id="jobs-table"` **不出现**，但「扫描运行次数」出现，就是这一条。② 的根因是 `get_view_results()`（只扫 8 张子域名表）与 `_get_tool_results_fallback()`（**遍历全部 17 张表**）**重叠**，实测 3 条唯一子域名导出成 6 行。**判别点：`row_count` 恰好是唯一记录数的整数倍、且 CSV 里出现逐字节相同的行**。★ 去重键**必须含 `created_at`**（同值不同时间是两条真实观测）；**不要**改成「`category == "subdomain"` 就跳过」—— `tool_name` 传一个未注册名字时 `get_view_results()` 返回空（`storage.py:419` 逐表 `continue`），按分类一概跳过会把子域名行全丢光。守卫：`tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does_not_leak_scan_summary`（3 段断言）+ `test_export_contract.py` 的三条唯一性用例（含一条「跨工具同值不得被误合并」的反向守卫）。修法与实测证据见 §9.34 |
+| 32 | 「点了『添加授权范围』**一点反应都没有**：没有请求、没有报错、没有文案，按钮看着是好的」 | ① `web/templates/scan_center.html` 的 `#scope-form` **标签上有没有 `novalidate`**（`:139`）② 该 form 里是否仍同时装着两个 `required` 下拉（`#job-project` `:141` / `#job-scope` `:146`）与 `type=submit` 按钮（`:176`） | 症状是「**静默**无反应」——这也是它藏得久的原因：给它报错的那段 JS 根本没跑。**根因不是按钮被禁用、也不是事件没绑上**（实测三态 `disabled` 皆 `False`），而是**原生约束校验（constraint validation）跑在 `submit` 事件之前**：两下拉只有占位项 `<option value="">` 时 `valueMissing=true`，浏览器直接吞掉提交。**判别点：DevTools 里点按钮，Network 与 Console 都毫无动静，但按钮本身是 enabled。** 触发条件是「全新用户」或「有项目、无范围」——**正是最需要这个按钮的两次**。`novalidate` 只关浏览器原生校验，服务端 `POST /api/scopes` 的 `*` 全放行拒绝与非法 CIDR 拒绝一条没少，`bindScopeForm` 自己的文案反而从死代码变活。**别把它当脏东西删掉。** 守卫：`tests/integration/test_public_scan_mode.py::test_scan_center_scope_form_opts_out_of_native_validation`（**正则匹配 form 标签本身**，不是 `'novalidate' in source` —— 注释里就写着这个词）。修法与实测证据见 §9.35.2 |
+| 33 | 「匿名 `GET /scan-center` 返回 200，还渲染出完整的四步表单与项目/任务面板」/ 「匿名页面里出现 `mock` / `queued` / `worker` / `python -m` / `allowed_domains` / `active_scan`」 | ① `web/templates/scan_center.html` 的四步骨架与三个面板是否仍在 `{% if is_authenticated %}` **之外**（闸门从 `:49` 开始）②「真实扫描总开关未开启」那条告警是否又回到 `{% if not is_authenticated %}…{% elif not real_scan_enabled %}` 的形状（正确写法：匿名分支只有一句「需先登录」，告警挂在登录分支里）③ `<script>` 引入与顶部导航是否**被误包进闸门**（那会让匿名点不进来） | 与第 30、31 条同源：**「该过滤的地方漏了一处」**，但这一处漏的是**骨架与内部模型**，不是数据。判别点：匿名响应长度与管理员响应**只差几十字符**（实测 8833 vs 8891），且匿名页面上 `mock` 出现 4 次 —— 正常应为 **1078** 字符、术语 0 次。★ 变量名 `scope`/`scope_id` 也在黑名单里，而**匿名仍必须看到**「扫描中心」（导航与标题）与 `401 unauthenticated`（「为什么看不到」）—— 收紧时别把它们一起收掉。守卫：`tests/integration/test_public_scan_mode.py::test_anonymous_scan_center_does_not_leak_backend_jargon`（12 术语 + 12 元素 id，**含管理员侧反向断言**）、`::test_scan_center_page_renders_for_anonymous`（追加 3 条「不得出现」）。修法与实测证据见 §9.35.3 |
 
 ---
 
@@ -3156,9 +3158,9 @@ app.url_map       48 规则 / 50 方法绑定 / 42 个 /api/*
 
 | 意见 | 实测 | 判定 |
 |---|---|---|
-| 第 5.2 节「合并两级选择」，两个下拉还在 | `#job-scope` 的选项由 `#job-project` 联动过滤（`scan_center.js:774`），未选项目前选不到任何范围 —— 已是一级 | 已达成方案意图 |
+| 第 5.2 节「合并两级选择」，两个下拉还在 | `#job-scope` 的选项由 `#job-project` 联动过滤（`scan_center.js:774`）；**但空状态下两个都只有占位项**，是「没得选」而非「没选」，且首次建范围被原生校验锁死 | 已达成方案意图；**措辞与「无害」判定已在本轮更正**，见 §9.35 |
 | 第 5.1 节四个旧步骤名从未字面存在 | `548d196^` 实测标题是「输入目标 / 确认授权范围 / 选择工具 / 执行模式与提交」，第 5.1 节是用户视角描述 | 描述性对照，非缺陷 |
-| `#job-consent` 在 `#scope-form` 内 | 实测 `scan_center.html:112` / `:127` / `:179`；JS 一律按 id 读，跨表单无副作用 | 无害，刻意不动 |
+| `#job-consent` 在 `#scope-form` 内 | 实测 `scan_center.html:139` 开 `scope-form`、`:154` 是 `job-consent`、`:210` 才开 `job-form`；JS 一律按 id 读，跨表单无副作用 | **checkbox 位置判断仍成立（刻意不动）**；但当时「无害」这个**结论是错的** —— 缺陷不在 checkbox，在同一个 form 里的两个 `required` 下拉，见 §9.35 |
 
 另两条（第 8 节「用户无法主动选择工具」这个前提当时已不成立、方案里
 `resolve_scope(target)` 这个函数名不存在）见 `docs/DECISIONS.md` §3.11.6。
@@ -3326,25 +3328,25 @@ Phase 3 把这两个字段都写进 `Runner.config`（`core/job_limits.py:apply_
 | 节 | 方案的要求（方案内的行号） | 现状 | 证据（亲读） | 刻意不做 / 漏了 |
 |---|---|---|---|---|
 | §1 | 当前阶段判断（陈述句，`:34-52`） | 不适用 | `core/jobs.py:488`、`core/policy.py:110`、`core/application.py:202` | — |
-| §2.1① | Scope 不该是主要用户概念（`:74-88`） | 已实现 | `scan_center.js:31-42`（`scopeLabel` `:193` / `projectLabel` `:200` / `scopeStateLabel` `:183` / `paceLabelOf` `:253` 四个翻译函数）、`scan_center.html:118-119` 用「授权资产」 | — |
-| §2.1② | 项目/范围/`scope_id` 概念重复（`:90-111`） | 已实现（合并为一步） | `scan_center.html:74`、`:112-124`；`docs/DECISIONS.md:895`（两下拉已联动过滤＝已是一级） | — |
+| §2.1① | Scope 不该是主要用户概念（`:74-88`） | 已实现 | `scan_center.js:31-42`（`scopeLabel` `:193` / `projectLabel` `:200` / `scopeStateLabel` `:183` / `paceLabelOf` `:253` 四个翻译函数）、`scan_center.html:145-146` 用「授权资产」 | — |
+| §2.1② | 项目/范围/`scope_id` 概念重复（`:90-111`） | 已实现（合并为一步） | `scan_center.html:90`、`:139-151`；`docs/DECISIONS.md:895`（两下拉已联动过滤＝已是一级） | 刻意不动；**但该行的措辞已更正**（空状态下是「没得选」，且首次建范围被原生校验锁死，见 §9.35） |
 | §3.1 | 一次创建流程 **30 秒以内**（`:123`） | **未实现，且此前未被登记** | 全仓「30 秒」只命中方案自身 `:123`；无计时用例、无埋点 | **漏记**，见 §9.31.2 |
-| §3.1 | 四件事：输入目标 / 确认授权 / 选择工具 / 创建任务（`:125-130`） | 已实现 | `scan_center.html:54,74,162,182` | — |
+| §3.1 | 四件事：输入目标 / 确认授权 / 选择工具 / 创建任务（`:125-130`） | 已实现 | `scan_center.html:70,90,189,209` | — |
 | §4 原则 1 | 前端开放能力、后端控制风险（`:136-156`） | 已实现 | `scan_center.js:44-49`；闸门 `core/application.py:569-573` | — |
-| §4 原则 2 | 隐藏 Scope（不显示 `scope_id`/UUID/DB 字段，`:158-191`） | 已实现 | `index.html:46-48`、`assets.js:242`、`scan_center.js:38-40`；守卫 `test_m2_page_scan.py:116`、`test_assets_api.py:366`、`test_public_scan_mode.py:876` | — |
+| §4 原则 2 | 隐藏 Scope（不显示 `scope_id`/UUID/DB 字段，`:158-191`） | 已实现（**本轮补上一处匿名面**） | `index.html:46-48`、`assets.js:242`、`scan_center.js:38-40`；守卫 `test_m2_page_scan.py:116`、`test_assets_api.py:366`、`test_public_scan_mode.py:1005`；**新增** `test_public_scan_mode.py:748`（匿名扫描中心不得下发 12 个后台术语）与 `test_public_scan_mode.py:853`（占位域必须是保留域） | 匿名 `/scan-center` 曾把 `allowed_domains`/`allowed_cidrs`/`active_scan`（**`scopes` 表字面列名**）连同骨架全量下发，已收起，见 §9.35 |
 | §5.1 | 四个「旧步骤」（`:199-206`） | 不适用（用户视角描述，从未字面存在） | `docs/DECISIONS.md:897`、§9.29 附近 | 刻意（描述性对照） |
-| §5.2 | 新四步流程（`:208-224`） | 已实现 | `scan_center.html:54,74,162,182`；`scan_center.js:3-11`；守卫 `test_public_scan_mode.py:745-768`（含反向断言旧步骤名不得复活） | — |
-| §6 | 目标输入框：域名 / IP / URL（`:228-239`） | 已实现 | `scan_center.html:56-58`；无协议 URL 归一 `core/scope.py:62-97` | — |
+| §5.2 | 新四步流程（`:208-224`） | 已实现 | `scan_center.html:70,90,189,209`；`scan_center.js:3-11`；守卫 `test_public_scan_mode.py:888-911`（含反向断言旧步骤名不得复活） | — |
+| §6 | 目标输入框：域名 / IP / URL（`:228-239`） | 已实现 | `scan_center.html:74`（占位域 `www.example.test`，本轮由 `www.example.cn` 改来）；无协议 URL 归一 `core/scope.py:62-97` | — |
 | §6 | 后台 `resolve_scope(target)` 自动判断（`:241-246`） | 部分实现（**同名函数不存在，能力齐备**） | 同名符号只有 `api/scan.py:28`（legacy）；等价能力 `core/authorization.py:246/292`（只读试算）＋ `scan_center.js:858 applyMatchedScope`；`docs/DECISIONS.md:896` | 刻意（方案写的是**意图**，不是函数名） |
 | §6 | 情况 A 放行 / 情况 B 拒绝，**禁止删 Scope 校验**（`:243-251`） | 已实现 | `core/authorization.py:127/173`、`core/policy.py:110`；用例 `test_public_scan_mode.py:295,450` | — |
-| §7 | 授权确认复选框（`:257-266`） | 已实现 | `scan_center.html:126-133`、`scan_center.js:1314-1325`、`core/application.py:579-583`（**刻意不是闸门**，文案里就写着） | — |
+| §7 | 授权确认复选框（`:257-266`） | 已实现 | `scan_center.html:153-160`、`scan_center.js:1314-1325`、`core/application.py:579-583`（**刻意不是闸门**，文案里就写着） | — |
 | §7 | 审计记录 `operator`/`target`/`timestamp`/`scope_id`（`:268-270`） | 已实现（**四者都不是表列**，全在事件 detail 或 `created_at`） | `core/application.py:366,369,372,389`；`core/audit.py:29,32,46`；`core/db.py:112`；用例 `test_public_scan_mode.py:1594-1618`、`:2112-2147` | 边界：`audit_events.actor` 仍硬编码 `local-admin`，operator 是「自称」（`docs/DECISIONS.md:564-569`，刻意） |
-| §8 | 工具选择中心、用户可主动勾选（`:274-287`） | 部分实现（清单**常显**，但只有 `custom` 模板可勾） | `scan_center.js:511,520-523`、`scan_center.html:171-177` | 刻意（模板语义决定工具；`docs/DECISIONS.md:898`） |
+| §8 | 工具选择中心、用户可主动勾选（`:274-287`） | 部分实现（清单**常显**，但只有 `custom` 模板可勾） | `scan_center.js:511,520-523`、`scan_center.html:201-204` | 刻意（模板语义决定工具；`docs/DECISIONS.md:898`） |
 | §8 | 五栏分类表（`:280-286`） | 部分实现（**6 栏**，空栏如实显示） | `core/tool_registry.py:120-127`；空栏文案 `scan_center.js:628-631`；理由 `core/tool_registry.py:114-119` | 刻意（方案那张表示意） |
 | §9 | 工具不写死在前端（`:292-297`） | 已实现 | `scan_center.js:559-563`；守卫 `test_public_scan_mode.py:1039`（黑名单**由注册表派生**，见 §9.30.2） | — |
 | §9 | Tool Registry 统一管理（`:299-315`） | 已实现 | `core/tool_registry.py:200 TOOL_POLICIES`、`:147 ToolPolicy`、`:553 STRATEGIES`、`:120 TOOL_GROUPS` | — |
-| §9 | 前端动态读 `GET /api/tools`（`:318`） | 部分实现（**读的是 `/api/scan-center`**） | `scan_center.js:331`；理由 `api/tools.py:18-27`；`docs/API.md:174` | 刻意（两个读出点**不等价**，见 §9.30.6） |
-| §9 | 字段 `name`/`description`/`category`/`risk`（`:302-315`） | 部分实现（字段名**有意不同**） | `core/tool_registry.py:163-186`（`tool_group` 于 `:171`、`to_dict` 于 `:173-186`）、`api/tools.py:99-105`、`docs/API.md:188-194`（`category`→`tool_group`、`risk`→`risk_level`/`risk_label`） | 刻意（本仓 `category` 已是「观测类别」，同名异义会**静默给错值**；改名理由 `core/tool_registry.py:79-84`） |
+| §9 | 前端动态读 `GET /api/tools`（`:318`） | **刻意改读 `/api/scan-center`** | `scan_center.js:331` 读的是 `/api/scan-center`（`web/` 下 `/api/tools` **零命中**）；`/api/tools` 仍在，是资产/工具页与脚本用的另一个入口；理由 `api/tools.py:18-27`；`docs/API.md:174` | 刻意（两个读出点**不等价**，见 §9.30.6）。**更正**：本节曾写「部分实现」，实际是「有意换端点」而非没做完 —— 两端的 `tools[]` 键集实测不同，见下一行 |
+| §9 | 字段 `name`/`description`/`category`/`risk`（`:302-315`） | **刻意改名 / 不在本端点** | `core/tool_registry.py:163-186`（`tool_group` 于 `:171`、`to_dict` 于 `:173-186`）、`api/tools.py:99-105`、`docs/API.md:188-194` | 刻意。实测键集：`/api/scan-center` 的 `tools[]` = `default_enabled`/`description`/`internet_allowed`/`reason`/`risk_label`/`risk_level`/`tool_group`/`tool_group_label`/`tool_name`（**无** `name`/`category`/`risk`）；`/api/tools` = 上述 + `category`/`database`/`name`（**仍无** `risk`）。即 `category`→`tool_group`、`risk`→`risk_level`/`risk_label`，且 `scan_center.js` 用 `tool_name` 不用 `name`。改名理由：本仓 `category` 已是「观测类别」，同名异义会**静默给错值**（`core/tool_registry.py:79-84`） |
 | §10 | 三档扫描模式、默认信息收集（`:322-332`） | **未实现** | 代码无 `scan_mode`；登记 `docs/DECISIONS.md:92`、`docs/TEST_REPORT.md:1010,1171` | 刻意（语义重叠＋权限扩张，等你拍板） |
 | §11⛔1 | 不扩大目标范围（`:346`） | 无此能力 | `api/scopes.py:77`（`scope_store.create` 的**唯一生产调用点**）；`docs/DECISIONS.md:627-630` | 刻意（守住） |
 | §11⛔2 | 不自动发现未知资产（`:347`） | 无此能力 | grep `auto_expand`/`expand_scope`/`auto_discover` **零命中**；扫描结果只落 `assets`/`observations` | 刻意（守住） |
@@ -3356,7 +3358,7 @@ Phase 3 把这两个字段都写进 `Runner.config`（`core/job_limits.py:apply_
 | §13 | Real Mode 控制 `GEF_ALLOW_REAL_SCAN`（`:397`） | 已实现（**创建期＋执行期双检**） | `core/safety.py:25,38,43-64`；`jobs/executor.py:141,148-172`；用例 `test_jobs_executor.py:241,298,331` | — |
 | §13 | Job 审计六项（`:398`） | 已实现 | `core/application.py:365-389`；用例 `test_public_scan_mode.py:2112-2147` | — |
 | §13 | 工具白名单，禁任意字符串（`:399`） | 已实现（**老入口例外已登记**） | `core/tool_registry.py:445 assert_tools_internet_allowed()`，生产唯一调用点 `core/application.py:573`；用例 `test_public_scan_mode.py:2150` | 老入口 `POST /api/jobs` 不装白名单 —— **刻意未改**，三选一待拍板（`docs/DECISIONS.md:856-884`） |
-| §14 P1 | 前端体验重构，不改 Policy/Scope/Job 模型（`:405-415`） | 已实现 | `548d196` 的 `--numstat` 9 个文件全在 `web/`、`app.py`、`tests/`，**未含** `core/policy.py`/`core/jobs.py`；用例 `test_m2_page_scan.py:93,116,131` | — |
+| §14 P1 | 前端体验重构，不改 Policy/Scope/Job 模型（`:405-415`） | 已实现 | `548d196` 的 `--numstat` **8 个文件**全在 `web/`、`app.py`、`tests/`，**未含** `core/policy.py`/`core/jobs.py`；用例 `test_m2_page_scan.py:93,116,131` | 更正：本节曾写「9 个文件」，实测 8（`app.py`、`tests/integration/test_m2_page_scan.py`、`tests/integration/test_public_scan_mode.py`、`web/static/app.css`、`web/static/scan_center.js`、`web/templates/{assets,index,scan_center}.html`）。`+538/−59` 与 `docs/DECISIONS.md:598` 一致 |
 | §14 P2 | 注册模型 / 列表 API / 前端动态 / Job `tools` 标准化（`:417-426`） | 已实现 | `core/tool_registry.py`；`api/tools.py:108`；`tool_runner.py:60,114`；`tests/unit/test_tool_parameters.py:151,183,216` | — |
 | §14 P3 | 操作者 / 授权备注 / 策略 / 限速 / 超时（`:428-436`） | 已实现（**零 DDL**） | `core/jobs.py:337,366,388,435`；`core/job_limits.py:47,99,113`；反向守卫 `tests/unit/test_jobs_store.py:842` | 边界：`rate_limit` 只有 2/17 runner 真生效 —— 刻意未补（`docs/DECISIONS.md:93-115`） |
 | §15 | 九项暂缓（React / 框架迁移 / Agent 自主 / 自动扩范围 / Scheduler / 多租户 / SSO / K8s / Redis·Celery，`:440-454`） | 已遵守 | 无 `package.json`；grep `redis`/`celery`/`kubernetes`/`apscheduler` 零命中；无 users/tenant 建表 | 刻意（守住） |
@@ -3951,4 +3953,120 @@ argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据�
 | 让 `_get_tool_results_fallback()` 读通用 `tool_results` 表 | 子代理先报、**我随后独立复核并证实**（写入 2 条 `my-custom-tool` 的结果，`tool_results` 表里确实有 2 行，而 `gather_export_rows()` 导出的 `tool_name` 分布里只有 `subfinder`）；修它要定「通用表的 category 怎么参与截断」，与上一行同源，属独立改动（`docs/DECISIONS.md` §3.16.5 第 3 条） |
 | session cookie 里的 `SYSTEM_PROMPT` / 4 KB 上限 / 匿名导出配额 | 三件都是独立改动且涉架构，**只取证不动手**（`docs/DECISIONS.md` §3.16.6） |
 | Agent 改走 Job Service（P0-6 阶段二） | 用户明确「先不开工」，本轮未碰 `agent/` 一行 |
+
+---
+
+### 9.35 第三轮只读审计的收口：第一个授权范围**建不出来** + 匿名扫描中心骨架全量下发（2026-10-04，无人值守）
+
+依据：本轮起点是复核 §9.34 之后子代理留下的**四条「残余项」** —— 复核中**三条被实测证伪**
+（见 §9.35.4），却在复核现场撞到两个真缺陷。两条都**不是「方案没做到」，是已实现的功能自己坏了**。
+详见 `docs/DECISIONS.md` §3.17、`docs/TEST_REPORT.md` §17、`CHANGELOG.md` 同名小节。
+
+#### 9.35.1 症状索引（回填第 6 节）
+
+| # | 症状 | 根因位置 | 触发条件 |
+|---|---|---|---|
+| 32 | 点「添加授权范围」**毫无反应**：无请求、无报错、无文案；按钮看起来完好 | `web/templates/scan_center.html` 的 `#scope-form` 把两个 `required` 下拉与 `type=submit` 按钮装在**同一个 form** 里，而**原生约束校验跑在 `submit` 事件之前** | 全新用户（两下拉皆占位项）或「有项目、无范围」时 |
+| 33 | 匿名 `GET /scan-center` 返回 200 且**完整渲染四步骨架**，连同 `allowed_domains`/`allowed_cidrs`/`active_scan`（`scopes` 表字面列名）与 `mock`/`queued`/`worker`/`python -m` | `app.py:413-440 scan_center()` 刻意不强制登录，但骨架整段**无条件渲染** | 未登录访问该页 |
+
+#### 9.35.2 缺陷五：首次建授权范围的按钮被原生校验吞掉（**已修**）
+
+**实测证据**（`%TEMP%\gef_scope_form_required.py`，本机 headless Chrome，注入从**管理员真实渲染结果**
+里用 `r'<form class="form" id="scope-form".*?</form>'`（`re.S`）原样截取的该表单 **1833 字符**）：
+
+| 状态 | submit 触发次数 | `checkValidity()` | `:invalid` 元素 |
+|---|---|---|---|
+| 1（全新用户，两下拉皆空） | **0** | `False` | `#job-project`、`#job-scope` |
+| 2（有项目、无范围） | **0** | `False` | `#job-scope` |
+| 3（项目与范围都有） | 1 | `True` | （无） |
+
+按钮 `disabled` 三态皆 `[False, False, False]`、`novalidate` 三态皆 `[False, False, False]`
+—— 排除「按钮被禁用」「事件没绑上」两种解释，锁定为**原生约束校验先于 `submit` 事件**。
+
+**为什么这是硬死锁**：`core/db.py:65` 的 `INSERT INTO scopes` 只是 docstring 示例，
+生产唯一写入点是 `api/scopes.py:77` —— **界面是全新用户唯一的建范围入口，而它是锁死的**。
+这也解释了 `index.html` 里那段 `curl -X POST /api/scopes` 为什么存在（在给死锁打补丁），
+但方向错了：应该修按钮。
+
+**修法**：`#scope-form` 加 `novalidate`（本轮唯一的功能修复；`app.py` / `api/` / `core/` 一行未改）。
+
+| 校验层 | 加之前 | 加之后 |
+|---|---|---|
+| 浏览器原生（`required`/`valueMissing`） | 拦截，静默吞掉 | 交给 JS |
+| `bindScopeForm` 自己的文案 | **跑不到**（死代码） | 跑得到（「还没有授权项目…」/「至少填一个授权域名或授权网段」） |
+| 服务端 `POST /api/scopes` | 照常 | **完全不变**（`*` 全放行拒绝、非法 CIDR 拒绝） |
+| Scope / Policy / 审计 | 照常 | **完全不变** |
+
+即 `novalidate` 在这里**是让校验真正生效**。守卫写成**正则匹配 form 标签本身**
+（`test_public_scan_mode.py:807`），不是 `'novalidate' in source` —— 注释里就写着这个词。
+
+#### 9.35.3 缺陷六：匿名 `/scan-center` 骨架全量下发（**已修**）
+
+`app.py:413-440 scan_center()` 刻意不强制登录（否则匿名连导航都点不进来），但骨架无条件渲染。
+实测（`%TEMP%\gef_tighten_verify.py`，`app.py` 的 `test_client()`，同一时刻对照）：
+
+| 指标 | 改动前 | 改动后 |
+|---|---|---|
+| 匿名响应长度 | **8833** 字符 | **1078** 字符 |
+| 管理员响应长度 | 8891 字符 | 8953 字符 |
+
+改动前匿名响应逐词：`mock`×4、`worker`×4、`queued`×2、`python -m`×1、`allowed_domains`×1、
+`allowed_cidrs`×1、`active_scan`×1、`Policy`×1、`Scope`×1、`scope_id`×1、`401`×1 → 改动后**全部 0**；
+匿名仍可见（刻意保留）`扫描中心`×3、`401 unauthenticated`×1、`登录`×4。
+
+**为什么算缺陷**：与首页口径直接冲突 —— `app.py:304-329 build_page_context()` 对匿名
+**不下发任何数据**（`scopes` 按登录态过滤，守卫在 `test_api_auth_contract.py:171`）。
+`allowed_domains`/`allowed_cidrs`/`active_scan` 经 `core/db.py:98-104` 确认是 `scopes` 表**字面列名**，
+正是方案第 4 节原则 2 的禁止项。
+
+**修法**：四步骨架 + 三个面板整段包进 `{% if is_authenticated %}`；
+「真实扫描总开关未开启（`GEF_ALLOW_REAL_SCAN=false`）」告警**从匿名分支移进登录分支**
+（原先挂在 `{% elif not real_scan_enabled %}` 上，匿名也会看到开关名与 `scope_violation`）。
+
+**闸门边界**（防后来者包错）：`<script>` 引入、顶部导航、以及那条「需先登录；相关接口返回
+`401 unauthenticated`」的提示**必须在闸门之外**。页面**仍返回 200**（刻意不改 403/302：
+导航要能点；401 的服务端契约由 `/api/scan-center` 自己守，`ADMIN_ONLY_ENDPOINTS` 已覆盖）。
+
+**管理员渲染等价性**：改动前模板的 **42 个静态 `id`** 逐个比对，只「缺」`jobs-table` 与
+`{{ job.id }}` 两个 —— 二者**本就由 JS 填行**（非本轮引入）。8891 → 8953 的增量全部来自
+新增的 Jinja 注释与 `novalidate` 属性。
+
+#### 9.35.4 上一轮四条残余项的复核结果（**三条被实测证伪**）
+
+| 残余项 | 结论 |
+|---|---|
+| A `:3346` §9 判「部分实现」过弱 | **成立**。`web/` 下 `/api/tools` **零命中**，是**有意换端点** → 已改判 |
+| B `:3347` §9 字段判定不清 | **成立且补上端点键集实测差** → 已改判并写全键集 |
+| C `DECISIONS.md:899` 第 ⑪ 条「无害」 | **原判定错**，但**缺陷不在 checkbox**（在同 form 的两个 `required` 下拉，§9.35.2）；「不移动 checkbox」仍成立 —— 已就地更正 |
+| D `548d196` 触及 **9** 个文件 | **证伪**：`--numstat` 实测 **8** 个，`+538/−59` 与 `DECISIONS.md:598` 一致 —— 写「9」的只有本文档 §9.31.1 的 §14 P1 行，已改回 |
+
+另有两处**刻意不动**：`§2.1②` 的「合并为一步」（同一步骤内的字段级联动，判断站得住）、
+`DECISIONS.md:598` 的 `8 文件 +538/−59`（本来就对）。
+
+#### 9.35.5 顺带修的两处
+
+1. **占位域 `www.example.cn` → `example.test`**（`scan_center.html` 两个 `placeholder`、
+   `scan_center.js` 与 `app.css` 的注释）。`example.cn` **不是保留域**：RFC 2606 只保留
+   `example.com/.net/.org`，`.test`/`.invalid`/`.localhost` 由 RFC 6761 保留
+   （https://www.rfc-editor.org/rfc/rfc2606 ）；本机单次 DNS 查询实测 `example.cn → 8.218.126.38`
+   （NS `dns8.66.cn`/`dns9.66.cn`）—— 是别人**已注册、能解析**的真实域名。
+   它只作 `placeholder`（浏览器不会把 placeholder 当值提交），**不是扫描风险**；
+   风险是**给人看**的：下一个照着页面填的人会把它当成可扫描目标。
+   守卫 `test_public_scan_mode.py:853` 用**白名单判法**（保留集放行，
+   `*.example.com` 不误伤），下一个 `example.cn` 立刻被抓住。
+2. **`index.html` 零授权资产时那段 `curl` 示例删掉** → 改为指向 `/scan-center` 的可点链接。
+   它原本把 `allowed_domains`/`allowed_cidrs`/`active_scan` 三个**数据库列名**印在可见
+   `code-block` 里（`index.html:99-102`），又让用户去手写 API 请求 —— 而扫描中心步骤 2
+   本就有这两个表单。§9.35.2 修好之后，这段补丁完全没必要了。
+   守卫 `test_m2_page_scan.py:23` 已从「钉 `/api/scopes` 这个词」改为
+   「钉可点去路 + 4 个字段名/认证头一个不许出现」。
+
+#### 9.35.6 本轮**没做**的
+
+| 没做的 | 为什么 |
+|---|---|
+| `docs/DECISIONS.md` §3.16.8 那四条 + §3.16.6 三条 | **仍全部未答、未动手**（匿名汇总面板 / 5 个 session 键 / `created_at` 去重口径 / 三条各开一轮；cookie 存储 / 4 KB 闸门 / 导出配额） |
+| 把 `#scope-form` 拆表单或移按钮 | 改动面与回归风险都大；`novalidate` 已修好且服务端校验一条没少。若更认可结构化解法，说一声即可改（`DECISIONS.md` §3.17.6 第 1 条） |
+| 匿名扫描中心改成「骨架可见、术语不可见」的中间态 | 我按「与首页同口径」选了完全收起；若要匿名**预览**流程当产品介绍，说一声即可改（`DECISIONS.md` §3.17.6 第 2 条） |
+| 改 `app.py` / `api/` / `core/` 任何一行 | 本轮两处修复**全在前端模板与静态资源**；服务端校验、Scope、Policy、审计、路由、表结构一行未改 |
 

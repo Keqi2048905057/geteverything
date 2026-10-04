@@ -1715,11 +1715,142 @@ session cookie 里的完整 `SYSTEM_PROMPT`、cookie 4 KB 上限、
 匿名 `GET /api/export` 的写盘副作用与配额 —— 五件**只取证未动手**，
 理由与实测数字见 `docs/DECISIONS.md` §3.16.5 / §3.16.6。
 
+### 第三轮只读审计的收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发（2026-10-04）
+
+> 与前两节同一类：**不是加功能，是修既有缺陷**，而且这两条都不是「方案没做到」，
+> 是**已实现的功能自己坏了**。发现路径也值得记：本轮本意是复核上一轮子代理留下的
+> 四条「残余项」，复核中三条被实测**证伪**，却在复核现场撞到这两个真缺陷。
+> 详见 `docs/DECISIONS.md` §3.17、`docs/CODEBASE_MAP.md` §9.31.1 的四处更正。
+
+**缺陷五：新建授权范围的按钮「点不动」——全新用户建不出第一个授权范围。**
+
+`web/templates/scan_center.html` 的 `#scope-form` **同一个表单里**同时装着
+两个 `required` 下拉（`#job-project[name=project_id]`、`#job-scope[name=scope_id]`）
+和「添加授权范围」的 `type=submit` 按钮。而**原生约束校验跑在 `submit` 事件之前**：
+全新用户两个下拉都只有占位项（`<option value="">`），点按钮时 `valueMissing=true`，
+浏览器直接吞掉这次提交 —— `scan_center.js:1201` 的 `form.addEventListener("submit", …)`
+回调**一次都不执行**。所以「点了一点反应都没有、也不报错」是必然的：给它报错的那段代码根本没跑。
+
+实测（`%TEMP%\gef_scope_form_required.py`，本机 headless Chrome，注入从**管理员真实渲染结果**
+里用正则原样截取的该表单 1833 字符，`--dump-dom` 读回 `RESULT=[…]`）：
+
+| 状态 | submit 触发次数 | `checkValidity()` | `:invalid` 元素 |
+|---|---|---|---|
+| 1（全新用户，两下拉皆空） | **0** | `False` | `#job-project`、`#job-scope` |
+| 2（有项目、无范围） | **0** | `False` | `#job-scope` |
+| 3（项目与范围都有） | 1 | `True` | （无） |
+
+按钮 `disabled` 三态皆 `[False, False, False]`、`novalidate` 三态皆 `[False, False, False]`
+—— **不是按钮被禁用，是约束校验把提交吞了**。状态 1 正是「第一次进来」那一次，
+状态 2 是「建完项目还没加范围」的常见中间态，两者同样死锁。
+
+死锁有多硬：`core/db.py:65` 的 `INSERT INTO scopes` 只是 docstring 示例，
+生产唯一写入点是 `api/scopes.py:77` —— 也就是说**界面是全新用户唯一的建范围入口，而它被锁死了**。
+这也顺带解释了 `index.html` 里那段 `curl -X POST /api/scopes` 为什么存在：它是在给这个死锁打补丁
+（但补丁指错了方向，见下）。
+
+**修法**：给 `#scope-form` 加 `novalidate`（唯一的功能修复，服务端一行未改）。
+
+`novalidate` **不等于关掉校验**，这点必须钉住，否则下一个人会把它当脏东西删掉：
+
+| 校验层 | 加之前 | 加之后 |
+|---|---|---|
+| 浏览器原生（`required` / `valueMissing`） | 拦截，静默吞掉 | 交给 JS |
+| `bindScopeForm` 自己的文案 | **跑不到**（被原生拦截） | 跑得到：「还没有授权项目…」/「至少填一个授权域名或授权网段」 |
+| 服务端 `POST /api/scopes` | 照常 | **完全不变**（`*` 全放行拒绝、非法 CIDR 拒绝，`test_m2_security.py` 守着） |
+| Scope / Policy / 审计 | 照常 | **完全不变** |
+
+即 `novalidate` 在这里**是让校验真正生效** —— 修之前那段 JS 文案是**死代码**。
+未选「拆表单 / 移按钮」：改动面与回归风险都大，而 `formnovalidate` 只对单个按钮生效。
+
+**缺陷六：匿名 `/scan-center` 把整个骨架连同后台术语全量下发。**
+
+`app.py:413-440 scan_center()` **不强制登录**（刻意如此，否则匿名连导航都点不进来），
+但四步骨架与三个面板是**无条件渲染**的。实测（`%TEMP%\gef_tighten_verify.py`，
+`app.py` 的 `test_client()`，匿名与管理员同一时刻对照）：
+
+| 指标 | 改动前 | 改动后 |
+|---|---|---|
+| 匿名响应长度 | **8833** 字符 | **1078** 字符 |
+| 管理员响应长度 | 8891 字符 | 8953 字符 |
+| 差的 58 字符是什么 | 只差登录态徽标与那条提示 | 匿名只剩「需先登录」 |
+
+改动前匿名响应逐词计数：`mock`×4、`worker`×4、`queued`×2、`python -m`×1、
+`allowed_domains`×1、`allowed_cidrs`×1、`active_scan`×1、`Policy`×1、`Scope`×1、
+`scope_id`×1、`401`×1；改动后**全部归零**。
+
+**为什么算缺陷**：与首页口径直接冲突 —— `app.py:304-329 build_page_context()` 对匿名
+**不下发任何数据**（`scopes` 按登录态过滤，`tests/integration/test_api_auth_contract.py:171`
+专门钉了「匿名首页不得下发授权资产」），而扫描中心这边整段白送。
+`allowed_domains` / `allowed_cidrs` / `active_scan` 经 `core/db.py:98-104` 确认
+**就是 `scopes` 表的字面列名**，正落在方案第 4 节原则 2 的禁止项上。
+
+**修法**：四步骨架 + 三个面板整段包进 `{% if is_authenticated %}`；并把
+「真实扫描总开关未开启（`GEF_ALLOW_REAL_SCAN=false`）」那条告警**从匿名分支移进登录分支**
+（它原本挂在 `{% elif not real_scan_enabled %}` 上，匿名也会看到开关名与 `scope_violation`；
+匿名没有提交动作，这条告警对它既无意义又白送内部模型）。
+
+**闸门边界**（明确写下防后来者包错）：`<script>` 引入、顶部导航、以及那条
+「需先登录；未登录时相关接口返回 `401 unauthenticated`」的提示**必须在闸门之外**，
+否则匿名既点不进来也看不到「为什么看不到」。页面**仍返回 200**（刻意不改 403/302：
+导航要能点；401 的服务端契约由 `/api/scan-center` 自己守，`ADMIN_ONLY_ENDPOINTS` 已覆盖）。
+
+**管理员渲染等价性**（不回归的硬证据）：改动前模板的全部 **42 个静态 `id`** 逐个比对，
+只「缺」`jobs-table` 与 `{{ job.id }}` 两个，而这两个**本就由 JS 填行**（非本轮引入）。
+四个步骤标题、`#scope-form`、`python -m jobs.worker`、`novalidate` 全部在位；
+8891 → 8953 的增量全部来自新增的 Jinja 注释与 `novalidate` 属性。
+
+**顺带修的两处**：
+
+- 前端占位域 `www.example.cn` → `example.test`（`scan_center.html` 两个 `placeholder`、
+  `scan_center.js` 与 `app.css` 的注释）。`example.cn` **不是保留域**：RFC 2606 只保留
+  `example.com/.net/.org`，`.test`/`.invalid`/`.localhost` 由 RFC 6761 保留
+  （https://www.rfc-editor.org/rfc/rfc2606 ）；本机单次 DNS 查询实测
+  `example.cn → 8.218.126.38`（NS `dns8.66.cn`/`dns9.66.cn`）—— 是别人**已注册、能解析**的真实域名。
+  它只作 `placeholder`（浏览器不会把 placeholder 当值提交），**不是扫描风险**；
+  风险是**给人看**的：下一个照着页面填的人会把它当成可扫描目标。
+- `index.html` 零授权资产时那段 `curl` 示例**删掉**，改成指向 `/scan-center` 的可点链接。
+  它原本把 `allowed_domains` / `allowed_cidrs` / `active_scan` 三个**数据库列名**印在可见
+  `code-block` 里，又让用户去手写 API 请求 —— 而扫描中心步骤 2 本就有这两个表单。
+  §3.17.1 修好之后，这段补丁完全没必要了。
+
+**上一轮四条残余项的复核结果（三条被实测证伪）**：
+
+| 残余项 | 结论 |
+|---|---|
+| A `CODEBASE_MAP.md:3346` 判「部分实现」过弱 | **成立**。`web/` 下 `/api/tools` **零命中**，是**有意换端点**，改判为「刻意改读 `/api/scan-center`」 |
+| B `:3347` 字段判定不清 | **成立且补上实测键集**。`/api/scan-center` 的 `tools[]` = `default_enabled`/`description`/`internet_allowed`/`reason`/`risk_label`/`risk_level`/`tool_group`/`tool_group_label`/`tool_name`（**无** `name`/`category`/`risk`）；`/api/tools` = 上述 + `category`/`database`/`name`（**仍无** `risk`） |
+| C `DECISIONS.md:899` 第 ⑪ 条「无害」 | **原判定错**，但**缺陷不在 checkbox**，在同 form 的两个 `required` 下拉（§3.17.1）；「不移动 checkbox」的位置判断仍成立 |
+| D `548d196` 触及 **9** 个文件 | **证伪**。`git show --numstat --format="" 548d196` 实测 **8** 个，`+538/−59` 与 `DECISIONS.md:598` 一致 —— 写「9」的只有 `CODEBASE_MAP.md:3359` 一处，已改回 |
+
+**本轮新增/加强的回归守卫**：
+
+- `test_scan_center_scope_form_opts_out_of_native_validation`（新）——
+  `#scope-form` **标签上**必须有 `novalidate`。写成**正则匹配标签本身**，
+  不是 `'novalidate' in source`：注释里就写着这个词，
+  纯字面命中会让「删掉属性、留下注释」也算通过。
+- `test_anonymous_scan_center_does_not_leak_backend_jargon`（新）—— 匿名响应不得出现
+  12 个后台术语与 12 个骨架元素 id；**反向**断言管理员照常拿到骨架与 `python -m jobs.worker`。
+- `test_no_real_registrable_placeholder_domain_in_frontend`（新）—— 前端所有
+  `example.<tld>` 必须落在保留集 `{com,net,org,test,invalid,localhost,example}` 内。
+  **白名单判法**：`*.example.com` 放行，下一个 `example.cn` 立刻被抓住。
+- `test_page_without_scope_shows_creation_hint`（**加强**，函数数不变）—— 原先只钉
+  `"/api/scopes"` 这个词，现在钉「有指向 `/scan-center` 的可点去路」+
+  「`allowed_domains`/`allowed_cidrs`/`active_scan`/`X-Local-Token` 一个都不许出现」。
+- `test_scan_center_page_renders_for_anonymous`（**加强**）—— 断言从 3 条到 6 条，
+  追加 `id="strategy-list"` / `id="scope-form"` / 「步骤 1 · 输入目标」三个**不得出现**。
+  原先它只断言「授权公网测试模式」在页面上，而那句话**正好落在被移走的告警里** ——
+  不加反向断言的话，这次收紧会**静默把它变成一条永远通过的空用例**。
+
+**仍未做**：`docs/DECISIONS.md` §3.16.8 那四条（匿名汇总面板改登录后可见 / 另外 5 个 session 键 /
+`created_at` 去重口径 / 三条要不要各开一轮）与 §3.16.6 三条（cookie 存储 / 4 KB 闸门 / 导出配额）
+**仍全部未答、未动手**；§3.17.6 新增两条待拍板。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1325 passed, 2 skipped, 0 failures（-o addopts=""，收集 1327）
+$ python -m pytest           # 1328 passed, 2 skipped, 0 failures（-o addopts=""，收集 1330）
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
@@ -1736,7 +1867,16 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 → §1～§18 逐节对照审计 + 第 6 节行号刷新 + 两处 docstring 校正：**仍是 `1315`**
 （只改文档与注释，不新增也不删除用例）
 → **页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323`**（+8 条用例）
-→ **第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327`**（+4 条用例）。
+→ **第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327`**（+4 条用例）
+→ **第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发 `1330`**（+3 条用例，
+另 **2 条既有用例被加强**：`test_page_without_scope_shows_creation_hint`
+与 `test_scan_center_page_renders_for_anonymous`，函数数不变）。
+
+本轮 +3 = `tests/integration/test_public_scan_mode.py` **125 → 128**（+3）。
+★ 其中 `test_scan_center_page_renders_for_anonymous` 的加强不是可选项：
+它原先断言「`授权公网测试模式` 在匿名页面上」，而那句话**正好落在本轮被移走的告警里** ——
+不加反向断言的话，这次收紧会**静默把它变成一条永远通过的空用例**（它仍会绿，
+但不再证明任何事）。两条被加强的用例都**只加严、未放松任何既有断言**。
 
 本轮 +4 = `tests/integration/test_api_auth_contract.py` **34 → 35**（+1）
 + `tests/integration/test_export_contract.py` **30 → 33**（+3，含 1 条反向守卫：

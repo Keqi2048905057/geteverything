@@ -93,13 +93,10 @@
            见 app.py:index() 的 `context["scopes"]`）。 #}
         {% if is_authenticated %}
           <p class="hint">
-            还没有任何授权范围。本机联调版要求「没有授权范围不允许创建扫描任务」，
-            请先用管理员 Token 创建：
+            还没有任何授权范围。本机联调版要求「没有授权范围不允许创建扫描任务」——
+            到<a href="{{ url_for('scan_center') }}">扫描中心</a>的步骤 2 里建一个授权项目、
+            再给它加一份授权资产即可，不必手写 API 请求。
           </p>
-          <pre class="code-block">curl -X POST http://127.0.0.1:5000/api/scopes ^
-  -H "Content-Type: application/json" ^
-  -H "X-Local-Token: &lt;你的 Token&gt;" ^
-  -d "{\"name\":\"本地测试范围\",\"allowed_domains\":[\"example.test\"],\"allowed_cidrs\":[\"127.0.0.1/32\"],\"active_scan\":false}"</pre>
         {% else %}
           <p class="hint">
             授权资产（名称、覆盖目标、是否开启真实扫描）与任务列表仅本地管理员可见，

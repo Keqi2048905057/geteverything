@@ -713,7 +713,7 @@ ul.result-evidence {
 }
 
 /* 步骤 2 里「当前项目的已授权范围」清单：名称 + 目标 + 授权状态。
-   刻意不出现 scope_… —— 用户看的是「学校官网 / www.example.cn / 已授权」。 */
+   刻意不出现 scope_… —— 用户看的是「学校官网 / www.example.test / 已授权」。 */
 .sc-scope-row {
   display: flex;
   align-items: center;

@@ -1971,3 +1971,102 @@ limit= 4 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
 | Agent 改走 Job Service（P0-6 阶段二） | 用户明确「先不开工」，本轮未碰 `agent/` 一行 |
 | 7 个匿名只读 API（含 `GET /api/export`）收紧 | 属 `docs/DECISIONS.md` D 项已定契约，改动需用户明确授权；本轮只把「它会写盘」这个后果面如实登记 |
 
+---
+
+## 17. 第三轮只读审计的收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发（1330）
+
+> 与 §15、§16 同一类：**修既有缺陷，不是加功能**。本轮起点是复核 §16 之后子代理留下的
+> 四条「残余项」，**三条被实测证伪**（不再是待办），却在复核现场撞到两个真缺陷。
+> 详见 `docs/DECISIONS.md` §3.17。
+
+### 17.1 实测结果
+
+```text
+ruff:   All checks passed!
+pytest: 1330 collected / 1328 passed / 2 skipped / 0 failures / 0 errors（163.76s）
+mypy:   Success: no issues found in 72 source files
+git diff --check: 退出码 0
+路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
+```
+
+本轮 **+3**：`tests/integration/test_public_scan_mode.py` **125 → 128**。
+另有 **2 条既有用例被加强**（函数数不变、断言只加严）：
+
+| 用例 | 加强内容 |
+|---|---|
+| `test_scan_center_page_renders_for_anonymous` | 断言 3 → 6 条，追加 `id="strategy-list"` / `id="scope-form"` / 「步骤 1 · 输入目标」三个**不得出现** |
+| `test_page_without_scope_shows_creation_hint` | 原先只钉 `"/api/scopes"` 这个词，现在钉「有指向 `/scan-center` 的可点去路」+「4 个数据库列名 / 认证头一个不许出现」 |
+
+★ **第一行那个加强不是可选项**：它原先断言「`授权公网测试模式` 出现在匿名页面上」，
+而那句话**正好落在本轮被移走的告警里**。若只改模板不加强断言，这条用例**仍会绿**
+——但从此不再证明任何事（一条空用例）。这是本轮方法论的落点：
+**收紧一处可见面时，必须回头检查有没有既有断言正踩在被收走的那块上。**
+
+### 17.2 三条新用例与它们守的东西
+
+| 用例 | 钉住什么 | 为什么这么写 |
+|---|---|---|
+| `test_scan_center_scope_form_opts_out_of_native_validation` | `#scope-form` **标签上**必须有 `novalidate` | 写成**正则匹配标签本身**，不是 `'novalidate' in source`：注释里就写着这个词，纯字面命中会让「删掉属性、留下注释」也算通过 |
+| `test_anonymous_scan_center_does_not_leak_backend_jargon` | 匿名响应不得出现 12 个后台术语 + 12 个骨架元素 id；**反向**断言管理员照常拿到骨架与 `python -m jobs.worker` | 术语面与元素面**各钉一遍**：术语未必带得出（Jinja 注释里也有这些词），元素 id 一定带得出。反向断言防「一刀切把管理员也关了」 |
+| `test_no_real_registrable_placeholder_domain_in_frontend` | 前端 `*.html`/`*.js`/`*.css` 里所有 `example.<tld>` 必须落在保留集 `{com,net,org,test,invalid,localhost,example}` 内 | **白名单判法**而非黑名单：`*.example.com`（RFC 2606 保留）放行，下一个 `example.cn` 立刻被抓住。第一版写成黑名单 `("example.cn", …)` 时**误伤了 `*.example.com`**，实测报错后才改成白名单 |
+
+### 17.3 两个缺陷的实测证据（都不靠推理）
+
+**缺陷五（按钮点不动）** —— `%TEMP%\gef_scope_form_required.py`：
+从**管理员真实渲染结果**里用正则 `r'<form class="form" id="scope-form".*?</form>'`（`re.S`）
+原样截取该表单 **1833 字符**，注入最小 harness 后用本机 headless Chrome
+（`--headless=new --disable-gpu --no-sandbox --dump-dom --virtual-time-budget=2500`）
+跑三种状态，读回 `<pre id="log">` 里的 `RESULT=[…]`：
+
+| 状态 | submit 触发次数 | `checkValidity()` | `:invalid` 元素 |
+|---|---|---|---|
+| 1（全新用户，两下拉皆空） | **0** | `False` | `#job-project`、`#job-scope` |
+| 2（有项目、无范围） | **0** | `False` | `#job-scope` |
+| 3（项目与范围都有） | 1 | `True` | （无） |
+
+按钮 `disabled` 三态皆 `[False, False, False]`、`novalidate` 三态皆 `[False, False, False]`。
+→ 排除「按钮被禁用」「表单本来就没绑事件」两种解释，锁定为**原生约束校验跑在 `submit` 事件之前**。
+
+★ 探针纪律与 §16.3 一致：`LOCAL_ADMIN_TOKEN` **先断言相等且非临时**再下任何结论；
+DB / 导出目录全部重定向到 `tempfile.mkdtemp()`；不联网、不读 `.env`、不写仓库。
+
+**缺陷六（匿名骨架全量下发）** —— `%TEMP%\gef_tighten_verify.py`：
+同一时刻的匿名 vs 管理员对照。
+
+| 指标 | 改动前 | 改动后 |
+|---|---|---|
+| 匿名响应长度 | **8833** 字符 | **1078** 字符 |
+| 管理员响应长度 | 8891 字符 | 8953 字符 |
+
+改动前匿名响应逐词计数：`mock`×4、`worker`×4、`queued`×2、`python -m`×1、
+`allowed_domains`×1、`allowed_cidrs`×1、`active_scan`×1、`Policy`×1、`Scope`×1、
+`scope_id`×1、`401`×1 → 改动后**全部归零**；匿名仍可见（必须保留）
+`扫描中心`×3、`401 unauthenticated`×1、`登录`×4。
+
+**管理员渲染等价性**：改动前模板的全部 **42 个静态 `id`** 逐个比对，只「缺」
+`jobs-table` 与 `{{ job.id }}` 两个 —— 二者**本就由 JS 填行**（非本轮引入）。
+8891 → 8953 的增量全部来自新增的 Jinja 注释与 `novalidate` 属性。
+
+### 17.4 一条被实测证伪的残余项（记下来，省后来者的时间）
+
+上一轮子代理报的「`548d196` 触及 **9** 个文件」**不成立**：
+`git show --numstat --format="" 548d196 | Where-Object { $_ -match '\S' }` 实测 **8** 个
+（`app.py` 27/3、`tests/integration/test_m2_page_scan.py` 49/0、
+`tests/integration/test_public_scan_mode.py` 122/3、`web/static/app.css` 71/0、
+`web/static/scan_center.js` 184/11、`web/templates/assets.html` 6/6、
+`web/templates/index.html` 23/6、`web/templates/scan_center.html` 56/30），
+`+538/−59` 与 `docs/DECISIONS.md:598`、`PROJECT_STATE.md` **一致** ——
+写「9」的只有 `docs/CODEBASE_MAP.md:3359` 一处，已改回 8 并注明出处。
+
+### 17.5 本轮**没做**的（如实列出）
+
+| 没做的 | 为什么 |
+|---|---|
+| `docs/DECISIONS.md` §3.16.8 那四条 | 匿名汇总面板改登录后可见 / 另外 5 个 session 键 / `created_at` 去重口径 / 三条要不要各开一轮 —— **仍全部未答**，本轮未擅自扩范围 |
+| `docs/DECISIONS.md` §3.16.6 三条 | cookie 存储 / 4 KB 闸门 / 导出配额 —— **只取证、未动手**，本轮仍未动 |
+| 把 `#scope-form` 拆成两个表单 / 把按钮移出表单 | 改动面与回归风险都大；`novalidate` 已能修好，且**服务端校验一条没少**。若你更认可结构化解法，说一声即可改（`docs/DECISIONS.md` §3.17.6 第 1 条） |
+| 匿名扫描中心改成「骨架可见、术语不可见」的中间态 | 我按「与首页同口径」选了完全收起；若你要匿名**预览**流程当作产品介绍，说一声即可改（`docs/DECISIONS.md` §3.17.6 第 2 条） |
+| 改 `app.py` / `api/` / `core/` 任何一行 | 本轮两处修复**全部在前端模板与静态资源**；服务端校验、Scope、Policy、审计、路由、表结构一行未改 |
+| Agent 改走 Job Service（P0-6 阶段二） | 用户明确「先不开工」，本轮未碰 `agent/` 一行 |
+
+

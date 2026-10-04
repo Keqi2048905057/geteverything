@@ -32,7 +32,7 @@
  * 用户看到的是
  *
  *     学校官网
- *     www.example.cn
+ *     www.example.test
  *     已授权
  *
  * 而不是 `scope_9f3c…`。所有可见文案都走 scopeLabel() / projectLabel() /
@@ -186,7 +186,7 @@
   }
 
   /**
-   * 下拉框里的一项范围：`学校官网 · www.example.cn · 已授权`。
+   * 下拉框里的一项范围：`学校官网 · www.example.test · 已授权`。
    *
    * 这是「隐藏 Scope ID」的落点 —— 返回值里**不含**任何实体 ID。
    */

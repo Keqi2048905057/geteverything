@@ -892,11 +892,11 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 
 | # | 审计意见 | 实测核对结果 | 判定 |
 |---|---|---|---|
-| ④ | 第 5.2 节要求「把两级选择合并」，`#job-project` / `#job-scope` 两个下拉还在 | 两个下拉确实还在（`scan_center.html:114` / `:119`），但它们**已经是一级**：`job-scope` 的选项由 `job-project` 联动过滤（`scan_center.js:774`），选中项目之前**选不到**任何范围。方案要消除的是「用户得先理解内部结构」，而页面文案已改成「授权资产 / 授权项目」（不出现 Scope 字样） | 已达成方案意图，不再合并 |
+| ④ | 第 5.2 节要求「把两级选择合并」，`#job-project` / `#job-scope` 两个下拉还在 | 两个下拉确实还在，但它们**已经是一级**：`job-scope` 的选项由 `job-project` 联动过滤（`scan_center.js:774`）。方案要消除的是「用户得先理解内部结构」，而页面文案已改成「授权资产 / 授权项目」（不出现 Scope 字样） | 已达成方案意图，不再合并。**但这一行的措辞要更正**：原文写「选中项目之前**选不到**任何范围」——在**空状态**（一个项目都没有）下，两个下拉都只有占位项，这句话读起来像「有得选只是没选」，实际是「没得选」。空状态的真正问题不是选择顺序，而是**新建授权范围的按钮点不动**（见 §3.17.1） |
 | ⑧ | 第 6 节写的 `resolve_scope(target)` 这个**函数不存在** | 全仓唯一同名符号是 `api/scan.py:28 resolve_scoped_targets`（legacy 同步链的**另一个**东西）。第 6 节的意图由 `core/authorization.py:292 check_targets()`（只读试算）+ `scan_center.js:858 applyMatchedScope()`（把结论变成选中项）承接 | 方案写的是**意图**不是函数签名；能力齐备 |
 | ⑨ | 第 5.1 节的四个旧步骤名**从未字面存在过** | `548d196^` 的模板标题实测是「输入目标 / 确认授权范围 / 选择工具 / 执行模式与提交」——第 5.1 节是**用户视角的描述**，不是逐字引用 | 描述性对照，不是缺陷 |
 | ⑩ | 第 8 节「当前最大缺失：用户无法主动选择工具」这一前提**当时已经不成立** | `548d196^` 的 `custom-tools` 确实带着 `hidden`，但 `custom` 模板被点选时会 `custom.hidden = false`（`548d196^ scan_center.js:315`）——**可以**选，只是藏在需要先点「自定义」之后 | 前提略过期，能力当时已存在；本轮起工具清单常显 |
-| ⑪ | `#job-consent` 位于 `#scope-form` 内而不是 `#job-form` 内 | 实测确认（`scan_center.html:112` 开 `scope-form`、`:127` 是 `job-consent`、`:179` 才开 `job-form`）。但 JS 一律按 **id** 读取（`$("job-consent")`），跨表单读取没有副作用；移动它反而会让「授权确认」在视觉上离开它所确认的那份资产 | 无害，**刻意不动** |
+| ⑪ | `#job-consent` 位于 `#scope-form` 内而不是 `#job-form` 内 | 实测确认（`scan_center.html:112` 开 `scope-form`、`:127` 是 `job-consent`、`:179` 才开 `job-form`）。但 JS 一律按 **id** 读取（`$("job-consent")`），跨表单读取没有副作用；移动它反而会让「授权确认」在视觉上离开它所确认的那份资产 | 位置判断仍然成立（**不移动**），但当时「**无害**」这个结论**是错的** —— 缺陷不在 checkbox，在同一个 form 里的两个 `required` 下拉，见 §3.17.1 |
 
 **共同点**：这五条都是「方案的字面写法」与「实现的具体做法」之间的差，不是行为缺陷。
 把它们逐条写下来，是为了避免下一个人把它们当成待办重新推一遍。
@@ -1687,6 +1687,157 @@ git push origin main          # 刻意不带 --tags / --follow-tags
   **推送前请自己复跑** `python %TEMP%\gef_push_audit2.py`，以脚本输出的范围与命中数为准。
 
 > 推送命令仍必须是显式的 `git push origin main`（**刻意不带** `--tags` / `--follow-tags`）。
+
+---
+
+### 3.17 第三轮只读审计的收口：**第一个授权范围在界面上建不出来** + 匿名扫描中心骨架全量下发（2026-10-04，无人值守）
+
+> **怎么发现的**：本轮先复核了上一轮子代理留下的四条「残余项」，其中三条经实测**不成立**
+> （见 §3.17.3），**但复核过程中撞到两个真缺陷** —— 一个功能死锁，一个匿名信息面。
+> 两条都不是「方案没做到」，是**已实现的功能自己坏了**。
+
+#### 3.17.1 缺陷五：新建授权范围的按钮**点不动**（**已修**，本轮最高优先级）
+
+**症状**：全新用户进入扫描中心 → 步骤 2 展开「添加授权范围」→ 填好域名 → 点「添加授权范围」→
+**什么都不会发生**：没有请求、没有报错、没有文案，按钮看起来完全是好的。
+
+**根因**（不是猜的，是实测的）：`scan_center.html` 的 `#scope-form` 同一个表单里同时装着
+
+- 两个 `required` 下拉：`#job-project[name=project_id]`、`#job-scope[name=scope_id]`
+- 一个 `type=submit` 按钮：「添加授权范围」
+
+而**原生约束校验（constraint validation）跑在 `submit` 事件之前**。全新用户两个下拉都只有占位项
+（`<option value="">`），点按钮时 `valueMissing=true`，浏览器直接吞掉这次提交 ——
+`scan_center.js:1201` 的 `form.addEventListener("submit", …)` 回调**一次都不执行**。
+所以「没有报错」是必然的：给它报错的那段代码根本没跑。
+
+**实测证据**（`%TEMP%\gef_scope_form_required.py`，本机 headless Chrome，从**管理员真实渲染结果**里
+用正则原样截取该表单 1833 字符，注入最小 harness，`--dump-dom` 读回 `RESULT=[…]`）：
+
+| 状态 | submit 触发次数 | `checkValidity()` | `:invalid` 元素 |
+|---|---|---|---|
+| 1（全新用户，两下拉皆空） | **0** | `False` | `#job-project`、`#job-scope` |
+| 2（有项目、无范围） | **0** | `False` | `#job-scope` |
+| 3（项目与范围都有） | 1 | `True` | （无） |
+
+按钮 `disabled` 三态皆 `[False, False, False]`，`novalidate` 三态皆 `[False, False, False]`。
+→ **状态 1 正是「第一次进来」那一次，也就是最需要这个按钮的那一次。**
+状态 2 同样死锁，而它是**建完项目、还没加范围**的常见中间态。
+
+**这个死锁有多硬**：`core/db.py:65` 的 `INSERT INTO scopes` 只是 docstring 示例，
+生产唯一写入点是 `api/scopes.py:77` —— 也就是说**界面是全新用户唯一的建范围入口，而它被锁死了**。
+当前唯一出路是手写 `POST /api/scopes`，或者先在别处建好范围再刷新页面（那时进状态 3，按钮才活）。
+这同时解释了 §3.16.7 里 `index.html` 那段 curl 为什么存在：它是在给这个死锁打补丁。
+但补丁指错了方向 —— 应该修按钮，不是教用户用 curl。
+
+**修法**（最小、且不碰服务端任何一行）：给 `#scope-form` 加 `novalidate`。
+
+```html
+<form class="form" id="scope-form" autocomplete="off" novalidate>
+```
+
+为什么是 `novalidate` 而不是「把按钮移出表单」或「给按钮加 `formnovalidate`」：
+
+- 移按钮／拆表单要动 DOM 结构与 `bindScopeForm` 的取值方式，改动面和回归风险都大；
+- `formnovalidate` 只对**该按钮**生效，`#check-form`、`#job-form` 上同类风险仍在；
+- `novalidate` 是**只关浏览器原生校验**，服务端一条校验都没少（见下）。
+
+**`novalidate` 不等于「关掉校验」**（这点必须钉住，否则下一个人会把它当脏东西删掉）：
+
+| 校验层 | 加 `novalidate` 前 | 加 `novalidate` 后 |
+|---|---|---|
+| 浏览器原生（`required` / `valueMissing`） | 拦截，静默吞掉 | **交给 JS** |
+| `bindScopeForm` 自己的文案 | **跑不到**（被原生拦截） | 跑得到：「还没有授权项目，请先在上面的表单里创建一个」/「至少填一个授权域名或授权网段」 |
+| 服务端 `POST /api/scopes` | 照常 | **完全不变**（`*` 全放行拒绝、非法 CIDR 拒绝，`test_m2_security.py` 守着） |
+| Scope / Policy / 审计 | 照常 | **完全不变** |
+
+也就是说 `novalidate` 在这里**是让校验真正生效**，不是绕过校验 —— 修之前那段 JS 文案是死代码。
+
+#### 3.17.2 缺陷六：匿名 `/scan-center` 把整个骨架连同后台术语全量下发（**已修**）
+
+**症状**：未登录直接访问 `/scan-center`，页面**返回 200 且渲染完整的四步表单** ——
+能看见步骤 1~4 的标题、项目/任务/详情三个面板、以及它们自带的后台术语。
+
+**实测**（`%TEMP%\gef_tighten_verify.py`，`app.py` 的 `test_client()`，匿名 vs 管理员同一时刻对照）：
+
+| 指标 | 改动前 | 改动后 |
+|---|---|---|
+| 匿名响应长度 | **8833** 字符 | **1078** 字符 |
+| 管理员响应长度 | 8891 字符 | 8953 字符 |
+| 差的 58 字符是什么 | 只差登录态徽标与那条提示 | 匿名只剩「需先登录」 |
+
+改动前匿名响应里逐词计数：`mock`×4、`worker`×4、`queued`×2、`python -m`×1、
+`allowed_domains`×1、`allowed_cidrs`×1、`active_scan`×1、`Policy`×1、`Scope`×1、
+`scope_id`×1、`401`×1。改动后**全部归零**。
+
+**为什么算缺陷**：与首页的口径直接冲突。`app.py:304-329 build_page_context()` 对匿名
+**不下发任何数据**（`scopes` 按登录态过滤，`tests/integration/test_api_auth_contract.py:171`
+还专门钉了「匿名首页不得下发授权资产」）。而扫描中心这边 `app.py:413-440 scan_center()`
+**不强制登录**（刻意如此，否则匿名连导航都点不进来），却把骨架整段无条件渲染 ——
+等于同一个项目里两页对匿名给的东西不一样。方案第 4 节原则 2 要的是「不显示数据库字段
+与内部模型」，`allowed_domains` / `allowed_cidrs` / `active_scan` 经 `core/db.py:98-104`
+确认就是 `scopes` 表的字面列名。
+
+**修法**：把四步骨架 + 三个面板整段包进 `{% if is_authenticated %}`，并且把
+「真实扫描总开关未开启（`GEF_ALLOW_REAL_SCAN=false`）」那条告警**从匿名分支移进登录分支**
+（它原本挂在 `{% elif not real_scan_enabled %}` 上，匿名也会看到开关名与 `scope_violation`；
+匿名没有提交动作，这条告警对它既无意义又白送内部模型）。
+
+**闸门边界**（明确写下，防止后来者包错范围）：以下三项**必须在闸门之外** ——
+`<script>` 引入、顶部导航、以及那条「需先登录；未登录时相关接口返回 `401 unauthenticated`」
+的提示。否则匿名既点不进来、也看不到「为什么看不到」。页面**仍然返回 200**（刻意不改成 403/302：
+导航要能点，且 401 的服务端契约由 `/api/scan-center` 自己守，`ADMIN_ONLY_ENDPOINTS` 已覆盖）。
+
+**管理员渲染等价性**（不回归的硬证据）：把改动前模板的**全部静态 `id`** 抽出来与改动后的
+管理员渲染比对 —— 42 个里只「缺」`jobs-table`、`{{ job.id }}` 两个，而这两个都是
+**任务列表由 JS 填充的行 id**（本轮之前也一样，不是本轮引入）。四个步骤标题、`#scope-form`、
+`python -m jobs.worker`、`novalidate` 全部在位。管理员响应从 8891 → 8953 字符，
+增量全部来自新加的 Jinja 注释与 `novalidate` 属性。
+
+#### 3.17.3 上一轮子代理四条残余项的复核结果（**三条不成立**）
+
+| 残余项 | 我的实测结论 |
+|---|---|
+| A：`CODEBASE_MAP.md:3346` §9「读的是 `/api/scan-center`」判「部分实现」措辞过弱 | **成立**。`web/` 下 `/api/tools` **零命中**，是**有意换端点**而非没做完，已改判为「刻意改读 `/api/scan-center`」 |
+| B：`:3347` §9 字段判定不清 | **成立且补上了实测键集**。`/api/scan-center` 的 `tools[]` 键 = `default_enabled`/`description`/`internet_allowed`/`reason`/`risk_label`/`risk_level`/`tool_group`/`tool_group_label`/`tool_name`（**无** `name`/`category`/`risk`）；`/api/tools` = 上述 + `category`/`database`/`name`（**仍无** `risk`）。即 `category`→`tool_group`、`risk`→`risk_level`/`risk_label`，`scan_center.js` 用 `tool_name` 不用 `name` |
+| C：`DECISIONS.md:899` 第 ⑪ 条「无害」判定 | **原判定错**，但**缺陷不在 checkbox 上** —— 在同一个 form 里的两个 `required` 下拉（§3.17.1）。checkbox 的位置判断（不移动）仍成立，已就地更正「无害」二字 |
+| D：`548d196` 触及 **9** 个文件 | **不成立**。`git show --numstat --format="" 548d196` 实测 **8** 个文件，`+538/−59` 与 `DECISIONS.md:598`、`PROJECT_STATE.md` 一致 —— **写「9」的是 `CODEBASE_MAP.md:3359` 这一处**，已改回 8 并注明出处 |
+
+另有两处**刻意不动**：`:3330` 第 ② 条的「合并为一步」（同一步骤内的字段级联动，
+判断站得住）；`DECISIONS.md:598` 的 `8 文件 +538/−59`（本来就对）。
+
+#### 3.17.4 顺带修的两处
+
+1. **前端占位域 `www.example.cn` → `example.test`**。它出现在 `scan_center.html` 的两个
+   `placeholder`、`scan_center.js` 与 `app.css` 的注释里。`example.cn` **不是保留域**：
+   RFC 2606 只保留 `example.com/.net/.org`，`.test`/`.invalid`/`.localhost` 由 RFC 6761 保留
+   （https://www.rfc-editor.org/rfc/rfc2606 ）。本机单次 DNS 查询实测 `example.cn → 8.218.126.38`
+   （NS `dns8.66.cn`/`dns9.66.cn`）—— 是别人**已经注册、能解析**的真实域名。
+   它只作 `placeholder`（浏览器不会把 placeholder 当值提交），**不是扫描风险**；
+   风险是**给人看**的：下一个照着页面填的人会把它当成可扫描目标。
+2. **`index.html` 零授权资产时那段 curl 示例删掉，改成指向扫描中心的可点链接**。
+   它原本把 `allowed_domains` / `allowed_cidrs` / `active_scan` 三个**数据库列名**印在可见
+   `code-block` 里，又让用户去手写 API 请求 —— 而扫描中心步骤 2 本来就有这两个表单。
+   修掉 §3.17.1 之后这段补丁完全没必要了。
+
+#### 3.17.5 本轮新增的回归守卫
+
+| 守卫 | 钉住什么 |
+|---|---|
+| `test_scan_center_scope_form_opts_out_of_native_validation` | `#scope-form` 标签上必须有 `novalidate`。**写成正则匹配标签本身**，不是 `'novalidate' in source` —— 注释里就写着这个词，纯字面命中会让「删掉属性、留下注释」也算通过 |
+| `test_anonymous_scan_center_does_not_leak_backend_jargon` | 匿名响应不得出现 12 个后台术语（`mock`/`queued`/`worker`/`python -m`/`GEF_ALLOW_REAL_SCAN`/`scope_violation`/`allowed_domains`/`allowed_cidrs`/`active_scan`/`policy`/`scope`/`scope_id`）与 12 个骨架元素 id；**反向**断言管理员照常拿到骨架与术语 |
+| `test_no_real_registrable_placeholder_domain_in_frontend` | 前端 `*.html`/`*.js`/`*.css` 里所有 `example.<tld>` 必须落在保留集 `{com,net,org,test,invalid,localhost,example}` 内。**白名单判法**：`*.example.com` 放行，下一个 `example.cn` 立刻被抓住 |
+| `test_page_without_scope_shows_creation_hint`（改） | 零授权资产时首页要有指向 `/scan-center` 的可点链接，且 `allowed_domains`/`allowed_cidrs`/`active_scan`/`X-Local-Token` 一个都不许出现（原断言只钉了 `/api/scopes` 这个词） |
+
+#### 3.17.6 需要你拍板的（本轮新增，**不阻塞**）
+
+1. **`#scope-form` 用 `novalidate` 收口 —— 认不认？** 另一条路是拆表单/移按钮（改动面更大）。
+   我选了最小改动，依据是「服务端校验一条没少、JS 文案反而从死代码变活」。
+2. **匿名 `/scan-center` 收紧成「只剩一句需先登录」—— 认不认？** 若你希望匿名也能**预览**
+   四步流程长什么样（当作产品介绍），说一声即可改成「骨架可见、术语与数据不可见」的中间态。
+3. **§3.16.8 那四条（匿名汇总 / 5 个 session 键 / `created_at` 去重口径 / 三条要不要各开一轮）
+   仍全部未答**，继续挂着。
+4. **§3.16.6 三条（cookie 存储 / 4KB 闸门 / 导出配额）仍只做了取证、没动代码。**
 
 ---
 

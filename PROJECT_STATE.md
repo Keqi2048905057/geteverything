@@ -685,69 +685,71 @@
 ## 最近一次验证
 
 ```text
-验证时间：2026-10-04（第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复）
+验证时间：2026-10-04（第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1327 collected / 1325 passed / 2 skipped / 0 failures / 0 errors（165.99s）
+pytest: 1330 collected / 1328 passed / 2 skipped / 0 failures / 0 errors（163.76s）
 mypy:   Success: no issues found in 72 source files        ← 本轮未新增源文件
 git diff --check: 退出码 0
 路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
-本轮用例数 +4（1321 → 1325 passed；1323 → 1327 collected）：
-        tests/integration/test_api_auth_contract.py  34 → 35
-        · test_anonymous_homepage_does_not_leak_scan_summary
-          （匿名首页不得出现「扫描运行次数/已有目标数/结果总数」，
-            且 ?domain=<目标> 不回显目标名；管理员侧全部照常）
-        tests/integration/test_export_contract.py    30 → 33
-        · test_results_endpoint_does_not_duplicate_subdomain_rows
-        · test_export_row_count_equals_unique_rows_and_csv_has_no_duplicates
-        · test_export_keeps_same_value_from_different_tools_and_times（**反向守卫**：
-          跨工具的同值记录不得被误合并 —— 防「去重去过头」）
-        **4 条在修复前都是红的**（实测 1 failed + 3 failed）。
-        ★ 「修复前」是用 `git show b5a7cb3:<path>` 换成修复前真身造出来的，**不是手工改一行**：
-          我最初手工改 app.py 一处，探针报「用例空转 ❌」——
-          但**空转的是探针不是用例**：这条修复是**两处**（后端不再取数 + 模板包 {% if %}），
-          只手改前者时模板里的标志仍是 False，面板照样不渲染。
-          同一探针还踩了第二个坑：多个 node id 被空格连成**一个** argv → `no tests ran`（exit=4）
-          被误读成「修复前红」，差点输出假 ✅；已把 exit=4 单独判为「判据无效」。
-          ★ **第三个坑（提交后才暴露）**：修订号**不能写 `HEAD`** —— 修复提交之后 `HEAD`
-          就是修复后的代码，探针会静默退化成「拿修复后比修复后」。我提交后复核
-          `exporter.py` docstring 时正是这么踩的（先用 `HEAD` 量到「5 条 → 5 行」，
-          改用 `b5a7cb3` 才对上 `n → 2n`）。现在探针会**先断言真身不含修复特征串**。
-本轮源码改动两处（**都是收紧，方向与红线相反**）：
-        app.py:build_page_context()   新增 is_authenticated=False 形参（默认 False = 失败关闭），
-                                      三个取数点按它短路（get_global_summary /
-                                      get_results_by_domain / get_domain_summary）
-        app.py:index()                把 is_authenticated 提到 build_page_context() **之前**再传入
-                                      —— 原先它排在后面，「取数」这一步根本不知道访客是否登录，
-                                      这才是漏判的**机制性**原因（那个 if 写在了用不上的位置）
-        web/templates/index.html:168-196  汇总面板整块包进 {% if is_authenticated %}（修复前 :166-190 裸渲染）
-        exporter.py:gather_export_rows()  按 (domain, category, tool_name, value, created_at)
-                                          **整键去重**（两条取数路径重叠：get_view_results 只扫
-                                          8 张子域名专属表，_get_tool_results_fallback 遍历
-                                          **全部 17 张表**，同一条记录被加两次）
-实测证据（只读探针，全部在 %TEMP%）：
-        匿名首页汇总 = 管理员首页汇总完全相同（{'扫描运行次数':7,'已有目标数':1,'结果总数':7}）
-          对照：同一页 class="scope-asset 与 id="jobs-table" **不出现**（上一轮修复仍生效）
-                → 排除「整页没过滤」，是**恰好漏了汇总这一块**
-        匿名 GET /?domain=leaktarget.test → 目标名与「当前目标」区块都渲染出来
-        3 条唯一子域名 → gather_export_rows 返回 **6 行 / 唯一 3**；CSV **6 数据行 / 唯一 3**，
-          其中 3 对**逐字节完全相同**（含 created_at）；limit=1/3 不重复（截断掩盖）、
-          limit=4 起重复且 web 类被挤掉 —— 小 limit 让 bug 看不见，同时静默丢掉整个后序分类
-        ★ 证伪了一条子代理修法建议：「去掉 storage.py:777-778 的 break 就能把后序分类带进来」
-          —— 实测 limit=3/4/5 分类分布**一字不差**（因为 fallback 末尾本就是 results[:limit]，
-          而子域名表在 TOOL_DATABASES 里排最前），挡路的是「末尾截断 + 表定义顺序」。
-          **该建议未采纳、未写成修法。**
+本轮用例数 +3（1327 → 1330 collected；1325 → 1328 passed）：
+        tests/integration/test_public_scan_mode.py   125 → 128（实测 --collect-only = 128）
+        · test_scan_center_scope_form_opts_out_of_native_validation
+          （#scope-form 标签上必须有 novalidate；**正则匹配标签本身**，
+            不是 'novalidate' in source —— 注释里就写着这个词）
+        · test_anonymous_scan_center_does_not_leak_backend_jargon
+          （匿名 /scan-center 不得出现 12 个后台术语 + 12 个骨架元素 id；
+            反向断言管理员照常拿到骨架与 python -m jobs.worker）
+        · test_no_real_registrable_placeholder_domain_in_frontend
+          （前端 *.html/*.js/*.css 里所有 example.<tld> 必须落在保留集
+            {com,net,org,test,invalid,localhost,example} 内 —— 白名单判法，
+            *.example.com 放行，下一个 example.cn 立刻被抓住）
+        tests/integration/test_m2_page_scan.py   1 条既有用例被**加强**（函数数不变）：
+        · test_page_without_scope_shows_creation_hint 原先只钉 "/api/scopes" 这个词，
+          现在钉「有指向 /scan-center 的可点去路」+「4 个数据库列名 / 认证头一个不许出现」
+        且 test_scan_center_page_renders_for_anonymous 被**加强**（断言从 3 条到 6 条）：
+          追加 'id="strategy-list"' / 'id="scope-form"' / 「步骤 1 · 输入目标」三个**不得出现**。
+          原先它只断言「授权公网测试模式」在页面上 —— 而那句话正好落在被移走的告警里，
+          不加反向断言的话这次收紧会**静默把它变成一条永远通过的空用例**。
+本轮源码改动（两处，均为收口；服务端校验、Scope/Policy/审计、路由、表结构一行未改）：
+        web/templates/scan_center.html   #scope-form 加 novalidate（唯一的功能修复）
+                                         四步骨架 + 三个面板整段包进 {% if is_authenticated %}
+                                         「真实扫描总开关未开启」告警从匿名分支移进登录分支
+                                         占位域 www.example.cn → www.example.test
+        web/templates/index.html         零授权资产时那段 curl 示例删掉 → 指向 /scan-center 的链接
+        web/static/{scan_center.js,app.css}  注释里的 www.example.cn → www.example.test
+实测证据（%TEMP% 只读探针，均在临时目录建库、不联网、不改仓库、不读 .env）：
+  ① 缺陷五 `%TEMP%\gef_scope_form_required.py`（headless Chrome，注入从**管理员真实渲染结果**
+     里正则截取的 #scope-form 1833 字符）——三状态的 submit 触发次数 / checkValidity：
+         状态 1（全新用户，两下拉皆空）  0 次 / False / :invalid = #job-project + #job-scope
+         状态 2（有项目、无范围）        0 次 / False / :invalid = #job-scope
+         状态 3（项目与范围都有）        1 次 / True  / 无
+     按钮 disabled 三态皆 False，novalidate 三态皆 False → **不是按钮被禁用，是原生约束
+     校验跑在 submit 事件之前把提交吞了**；服务端唯一写入口 api/scopes.py:77 之前无 UI 路径
+  ② 缺陷六 `%TEMP%\gef_tighten_verify.py`（app.py test_client()，匿名 vs 管理员同一时刻）：
+     匿名响应 8833 → **1078** 字符；管理员 8891 → **8953** 字符
+     匿名术语逐词：mock/worker/queued/python -m/GEF_ALLOW_REAL_SCAN/scope_violation/
+       allowed_domains/allowed_cidrs/active_scan/policy/scope/scope_id → **全部 0**
+     匿名仍可见（必须保留）：扫描中心 ×3、401 unauthenticated ×1、登录 ×4
+     管理员等价性：改动前模板的 42 个静态 id 逐个比对，只「缺」jobs-table 与 {{ job.id }}
+       （二者本就由 JS 填行，非本轮引入）；四个步骤标题 / #scope-form / novalidate /
+       python -m jobs.worker / www.example.test 全部在位
 零 DDL 复核：本轮**没有**任何 schema 变更；core/policy.py / core/scope.py / core/jobs.py 一行未改
-未动：agent/（一行未改，「先不开工」未变）、数据库结构与数据、认证授权机制本身、
-        审计字段集合、公网白名单（仍是 subfinder + httpx）、
-        7 个已定的匿名只读 API（DECISIONS D 项）、路由总数、`.env`（LastWriteTime 未变）
-文档校正：AGENTS.md（31 条 / 1325 基线）、SECURITY.md、CHANGELOG.md、docs/{API,CODEBASE_MAP,
-        TEST_REPORT,DECISIONS}.md —— 新增 docs/CODEBASE_MAP.md §9.34 与第 6 节第 31 条症状，
-        §9.33.5 行号漂移说明；docs/TEST_REPORT.md §16；docs/DECISIONS.md §3.16
+未动：agent/（一行未改，「先不开工」未变）、api/（一行未改）、core/（一行未改）、
+        数据库结构与数据、认证授权机制本身、审计字段集合、
+        公网白名单（仍是 subfinder + httpx）、7 个已定的匿名只读 API、路由总数、
+        `.env`（LastWriteTime 未变）、`/api/scopes` 的全放行/UUID 拒绝规则
+文档校正：docs/{DECISIONS,CODEBASE_MAP}.md
+        · DECISIONS.md 第 ⑪ 条「无害」判定就地更正（缺陷不在 checkbox，在同 form 的两个
+          required 下拉）；第 ④ 条「选不到任何范围」的措辞更正（空状态下是「没得选」）
+        · CODEBASE_MAP.md:3359 的「9 个文件」→ **8 个**（实测 --numstat，+538/−59 与
+          DECISIONS.md:598 一致）；:3346/:3347 两条「部分实现」→「刻意改读端点 / 刻意改名」
+          并补上两个端点的 **tools[] 键集实测差**
+        · 新增 docs/DECISIONS.md §3.17（缺陷五、缺陷六、四条残余项复核、新增守卫、待拍板）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → 页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323` → **第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → 页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323` → 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327` → **第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发 `1330`**
 
 > 本轮 +8（`test_tool_parameters.py` 17 → 21、`test_public_scan_mode.py` 122 → 125、
 > `test_assets_api.py` 29 → 30），另有 **2 条既有用例被加强**（函数数不变、断言变严）：

@@ -25,21 +25,37 @@
     </div>
   </header>
 
+  {# 匿名分支**只有**这一段：一句「需先登录」。真实扫描总开关告警原本挂在
+     `{% elif not real_scan_enabled %}` 上，匿名也会看到 `GEF_ALLOW_REAL_SCAN` /
+     `scope_violation` / `mock` 这些内部开关名 —— 只有登录后才有提交动作，
+     那条告警对匿名既无意义、又白送内部模型，因此移进下面的登录分支。 #}
   {% if not is_authenticated %}
     <div class="alert alert-error" role="alert">
       扫描中心涉及授权证据与目标清单，需先登录；未登录时相关接口返回
       <code>401 unauthenticated</code>。
     </div>
-  {% elif not real_scan_enabled %}
-    <div class="alert alert-error" role="alert">
-      真实扫描总开关未开启（<code>GEF_ALLOW_REAL_SCAN=false</code>）：
-      此处提交的公网任务会被 <code>403 scope_violation</code> 拒绝。
-      在项目根 <code>.env</code> 中设为 <code>true</code> 后<strong>重启 Web 服务</strong>，再回来提交。
-      演练可改用「本地验证模式（mock）」。
-    </div>
   {% endif %}
 
   <main class="layout layout-wide">
+    {# 匿名只看到上面那条「需先登录」的提示，四步骨架与项目 / 任务 / 详情面板一律
+       不渲染 —— 与首页同一口径（`app.py` 的 `build_page_context()` 对匿名不下发
+       任何数据）。骨架自己就写着 `mock` / `queued` / `worker` / `python -m` /
+       `allowed_domains` / `allowed_cidrs` / `active_scan` / `Policy` / `Scope`
+       这些后台术语，全量下发给匿名访客等于把内部模型白送出去（方案第 4 节原则 2）。
+
+       **闸门边界**：`<script>` 引入、顶部导航与上面那条登录提示必须在闸门**之外**，
+       否则匿名连页面都点不进来、也看不到「为什么看不到」。
+       页面本身**仍然可达**（返回 200），只是不含骨架。 #}
+    {% if is_authenticated %}
+    {% if not real_scan_enabled %}
+      <div class="alert alert-error" role="alert">
+        真实扫描总开关未开启（<code>GEF_ALLOW_REAL_SCAN=false</code>）：
+        此处提交的公网任务会被 <code>403 scope_violation</code> 拒绝。
+        在项目根 <code>.env</code> 中设为 <code>true</code> 后<strong>重启 Web 服务</strong>，再回来提交。
+        演练可改用「本地验证模式（mock）」。
+      </div>
+    {% endif %}
+
     <section class="panel">
       <h2>创建任务</h2>
 
@@ -55,7 +71,7 @@
         <form class="form" id="check-form" autocomplete="off">
           <label for="job-target">目标（域名 / IP / 网段 / URL，逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
           <!-- placeholder 只是示例，浏览器不会把它当成值提交 —— 页面**没有默认目标**。 -->
-          <input type="text" id="job-target" name="targets" placeholder="www.example.cn" required>
+          <input type="text" id="job-target" name="targets" placeholder="www.example.test" required>
 
           <div class="sc-actions">
             <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
@@ -109,7 +125,18 @@
           </div>
         </details>
 
-        <form class="form" id="scope-form" autocomplete="off">
+        {# ★ 这个 form 同时装着「两个 required 下拉」和「添加授权范围」的 submit 按钮。
+           原生约束校验跑在 submit 事件**之前**：全新用户（两下拉都只有占位项）点按钮时
+           `valueMissing=true`，浏览器直接拦下，`scan_center.js:bindScopeForm` 的
+           submit 回调**一次都不执行** —— 也就是**第一个授权范围在界面上根本建不出来**。
+           实测（headless Chrome，三状态）：状态 1/2 的 `submit` 触发 0 次，状态 3 才 1 次。
+
+           `novalidate` 关掉的只是**浏览器原生**校验，不是服务端校验：提交后仍由
+           `bindScopeForm` 自己给出文案（「还没有授权项目，请先在上面的表单里创建一个」
+           /「至少填一个授权域名或授权网段」），服务端 `POST /api/scopes` 的
+           `*` 全放行拒绝、非法 CIDR 拒绝一条都没少。
+           不要把 `novalidate` 当成「关掉校验」删掉 —— 删了就等于把首次使用锁死。 #}
+        <form class="form" id="scope-form" autocomplete="off" novalidate>
           <label for="job-project">授权项目</label>
           <select id="job-project" name="project_id" required>
             <option value="">还没有授权项目</option>
@@ -136,7 +163,7 @@
             <summary>给这个项目新增一份授权资产</summary>
             <div class="sc-details-body">
               <label for="scope-domains">授权域名（逗号分隔；子域用 *.example.com 或直接写根域）</label>
-              <input type="text" id="scope-domains" name="allowed_domains" placeholder="www.example.cn">
+              <input type="text" id="scope-domains" name="allowed_domains" placeholder="www.example.test">
 
               <label for="scope-cidrs">授权网段（逗号分隔，可选）</label>
               <input type="text" id="scope-cidrs" name="allowed_cidrs" placeholder="203.0.113.0/24">
@@ -279,6 +306,7 @@
         <code>failed</code> / <code>timeout</code> 才是出问题。两者都可能显示 0 条。
       </p>
     </section>
+    {% endif %}
   </main>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

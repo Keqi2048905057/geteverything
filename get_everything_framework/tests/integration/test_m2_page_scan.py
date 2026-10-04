@@ -23,9 +23,22 @@ def test_page_requires_login_for_scan_action(client):
 
 
 def test_page_without_scope_shows_creation_hint(admin_client):
+    """零授权资产时首页给的是**可点的去路**，不是一段 curl。
+
+    这里曾贴一段 `curl -X POST /api/scopes -d '{"allowed_domains":…,"active_scan":…}'`
+    的示例。它有两个问题：① 把 `allowed_domains` / `allowed_cidrs` / `active_scan`
+    这三个**数据库字段名**印在可见文案里，与方案第 4 节「前端不显示数据库字段」
+    相抵触；② 本机联调版的扫描中心步骤 2 本来就有「创建授权项目 / 添加授权范围」
+    两个表单，让用户去手写 API 请求属于「有界面却让人用命令行」。
+
+    所以现在钉的是：文案在 + 指向扫描中心的可点链接在 + 那段 curl 不许复活。
+    """
     home = admin_client.get("/").get_data(as_text=True)
     assert "还没有任何授权范围" in home
-    assert "/api/scopes" in home
+    assert "/scan-center" in home, "零授权资产时首页必须给出去扫描中心的可点去路"
+    # 那段 curl 示例（连同它印出来的数据库字段名）不得复活。
+    for forbidden in ("allowed_domains", "allowed_cidrs", "active_scan", "X-Local-Token"):
+        assert forbidden not in home, f"首页又印出了数据库字段 / 认证头: {forbidden}"
 
 
 def test_page_with_scope_shows_form(admin_client):
