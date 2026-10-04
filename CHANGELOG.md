@@ -1592,7 +1592,7 @@ real 任务入队（三道闸门全过）
 **缺陷二：匿名 `GET /` 下发整份授权资产清单。**
 `app.py` 原先无条件 `context["scopes"] = _load_scope_options()`，而 Phase 1 又把
 `allowed_domains` / `allowed_cidrs` 渲染进首页资产卡片 → 匿名访客能看到
-**范围名 + 覆盖目标 + 是否开启真实扫描**。资产页（`app.py:382`）一直带
+**范围名 + 覆盖目标 + 是否开启真实扫描**。资产页（**当轮** `app.py:382`，当前 `:428`）一直带
 `if is_authenticated else []`，**首页漏了同一个判断** —— 属不一致，不是设计。已统一。
 （未登录时的页面文案也改了：不再说「还没有任何授权范围」——那会让匿名访客
 误以为系统里没有授权资产，与「有但不给你看」是两码事。）
@@ -1765,7 +1765,7 @@ session cookie 里的完整 `SYSTEM_PROMPT`、cookie 4 KB 上限、
 
 **缺陷六：匿名 `/scan-center` 把整个骨架连同后台术语全量下发。**
 
-`app.py:413-440 scan_center()` **不强制登录**（刻意如此，否则匿名连导航都点不进来），
+`app.py:413-440 scan_center()`（**当轮**行号；当前 `:435-463`）**不强制登录**（刻意如此，否则匿名连导航都点不进来），
 但四步骨架与三个面板是**无条件渲染**的。实测（`%TEMP%\gef_tighten_verify.py`，
 `app.py` 的 `test_client()`，匿名与管理员同一时刻对照）：
 
@@ -1779,7 +1779,8 @@ session cookie 里的完整 `SYSTEM_PROMPT`、cookie 4 KB 上限、
 `allowed_domains`×1、`allowed_cidrs`×1、`active_scan`×1、`Policy`×1、`Scope`×1、
 `scope_id`×1、`401`×1；改动后**全部归零**。
 
-**为什么算缺陷**：与首页口径直接冲突 —— `app.py:304-329 build_page_context()` 对匿名
+**为什么算缺陷**：与首页口径直接冲突 —— `app.py:304-329 build_page_context()`（**当轮**行号；
+当前 `:325-354`，见 `docs/CODEBASE_MAP.md` §9.36.6）对匿名
 **不下发任何数据**（`scopes` 按登录态过滤，`tests/integration/test_api_auth_contract.py:171`
 专门钉了「匿名首页不得下发授权资产」），而扫描中心这边整段白送。
 `allowed_domains` / `allowed_cidrs` / `active_scan` 经 `core/db.py:98-104` 确认
@@ -1949,14 +1950,36 @@ CI 是 ubuntu + windows、**没有 Chrome**，①那条必然跳过，因此另�
 反过来，摘掉属性时会先报「属性不见了」（**症状**），而这条判据真正要抓的是它的
 **后果**（回调不执行、按钮点了没反应）。失败信息应当直接说后果。
 
-**四、本轮没做**
+**四、本轮没做，但下一轮的边界已定死**（用户 2026-10-04 答复，详见 `docs/DECISIONS.md` §3.19）
 
-| 没做的 | 为什么 |
-|---|---|
-| Cookie 4 KB 闸门（`MAX_SESSION_PAYLOAD_BYTES`） | 用户**已授权但钦定单独一轮**，且要求与 `app.py:243` 的登录守卫**同批上线** —— 4 KB 上限目前是确认执行闸门的**唯一**屏障 |
-| cookie 存储方式 / 导出配额 | 用户**未授权**；后者优先级低于 4 KB 闸门 |
-| 把 5 个 session 键从 session 里删掉 | 授权范围是「按登录态过滤」，不是改 Agent 行为 |
-| 真实外部扫描 | 全程 mock / 本机 fixture；浏览器验收用受控 `fetch` 桩，**不发任何网络请求** |
+用户明确要求**不要把四件事合并成一个大型重构**：
+
+```text
+session 观测  +  server-side session  +  export quota  +  Agent 重构
+```
+
+**分两批**：第一批 = **session payload 观测 → session 存储治理**；
+第二批 = **export quota**（单独立项）。**Agent 重构不在本批**。
+
+| 项 | 状态 | 要点 |
+|---|---|---|
+| **session payload 观测（4 KB 闸门）** | ✅ 已授权，**下一轮第一批** | 单一常量 `MAX_SESSION_PAYLOAD_BYTES`（**不得靠调大阈值掩盖问题**）；超限时**保持现有业务行为**、产出**一条结构化 warning**、给出**可被 `/health` 或测试观察到的标志**、**不转成异常**；三条测试（未超限无 warning / 超限 warning+flag / 正常会话不受影响） |
+| **session 存储治理** | ✅ 已授权，**下一轮第一批** | `Browser → 最小 session 状态 / session_id → 服务端 session storage → Agent history/context`；不改认证语义、不改 `HttpOnly`/`SameSite`、先梳理全部 session key、迁移**可回滚**、补生命周期/清理/并发测试、**不借机重写 Agent** |
+| **Export quota / retention** | ⛔ **明确暂不授权** | 记为 `[DEFERRED] Export quota / retention`：不做数量配额、不做总大小配额、不做自动清理、不做 retention policy。**后续单独立项**（导出**去重口径**已获确认，不受影响） |
+| 把 5 个 session 键从 session 里删掉 | ⛔ 未授权 | 本轮授权范围是「按登录态过滤」，不是改 Agent 行为 |
+| 真实外部扫描 | ⛔ 硬约束 | 全程 mock / 本机 fixture；浏览器验收用受控 `fetch` 桩，**不发任何网络请求** |
+
+> **4 KB 上限的硬前提（下一轮开工前必读）**：它目前是「确认执行」闸门的**唯一**实际屏障
+> —— `%TEMP%\gef_cookie_verify.py` 实测：单 cookie 超 4096 即被浏览器丢弃 → 两次 chat
+> 都是 HTTP 200 但 `run_tools` **0 次**；对照组（手工缩小 cookie）`run_tools` = **1 次**。
+> 所以下一轮里若顺手做了任何**缩小 cookie** 的动作，**必须与 `app.py:264` 的登录守卫
+> 同批上线**；只做观测/告警则不触发该条件。
+>
+> **膨胀根因也已实测**（下一轮不必重新定位）：`agent/action.py:836` 每轮**无条件**把
+> `SYSTEM_PROMPT`（~4600 字符）覆盖进 `agent_history[0]`，再由 `app.py:315` 写入 session；
+> leave-one-out 实测 `agent_history` 贡献 **5296 B / 96.9 %**（其中 `system` 一条 **5082 B**），
+> 剔掉后 cookie 从 **5464 B → 698 B**。**5464 B 从第 1 轮起就同时超过** werkzeug 的
+> 4093 B 与浏览器的 4096 B —— 是稳定复现，不是偶发。
 
 ### 测试与验收基线
 

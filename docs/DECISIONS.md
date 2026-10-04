@@ -1279,16 +1279,21 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 
 `app.py` 原先无条件 `context["scopes"] = _load_scope_options()`，而 Phase 1 又把
 `allowed_domains` / `allowed_cidrs` 渲染进首页资产卡片 → 匿名访客能看到
-**范围名称 + 覆盖目标 + 是否开启真实扫描**。资产页（`app.py:382`）一直带
+**范围名称 + 覆盖目标 + 是否开启真实扫描**。资产页（当轮 `app.py:382`，当前 `:428`）一直带
 `if is_authenticated else []`，**首页漏了同一个判断**，属不一致。已统一。
 
 #### 3.14.3 改了什么（三处，均不新增/删除路由）
 
 | 文件 | 改动 |
 |---|---|
-| `app.py:227` | `_require_admin_for_page()` 从 `if action in _SCAN_ACTIONS:` **内部**提到 `action` 分支**之前** —— 原写法是「按动作名白名单护」，漏一个动作就漏一个洞；改后新增动作**默认安全** |
-| `app.py:304` | `context["scopes"] = _load_scope_options() if is_authenticated else []`，并把 `local_auth.is_authenticated()` 提为局部变量避免重复比较 Token |
+| `app.py:243`（当轮；当前 `:264`） | `_require_admin_for_page()` 从 `if action in _SCAN_ACTIONS:` **内部**提到 `action` 分支**之前** —— 原写法是「按动作名白名单护」，漏一个动作就漏一个洞；改后新增动作**默认安全** |
+| `app.py:304`（当轮；当前 `:350`） | `context["scopes"] = _load_scope_options() if is_authenticated else []`，并把 `local_auth.is_authenticated()` 提为局部变量避免重复比较 Token |
 | `web/templates/index.html:94-110` | 未登录时不再说「还没有任何授权范围」（那是另一回事），改说「登录后可见」 |
+
+> **本节行号是「当轮」值，已整体漂移。** 之后两轮又改过 `app.py`（第二轮
+> `build_page_context()` 加形参 +16 行，第三/四轮再加 docstring 与 `if/else` +21 行）。
+> 正文按原样保留作为当轮证据；要按**当前**代码定位，用
+> `docs/CODEBASE_MAP.md` §9.36.6 的漂移对照表，或按函数名找。
 
 **未做（有意）**：不改 `GET /` 的匿名可读性（那是有意保持的只读契约）；
 不动 7 个已定的匿名只读 API（属 D 项）；不启动 P0-6 阶段二（你已说「**先不开工**」）——
@@ -1558,7 +1563,8 @@ step1 的 Set-Cookie 头 **5543 B** → 被丢弃；step2 **5335 B** → 被丢�
 `run_tools` = **1 次**。
 ⇒ **`pending_plan` 的「先提议、再确认」在真实浏览器里早已失效**，原因是 4 KB 上限而不是代码。
 `%TEMP%\gef_fix_size.py` 量了 15 轮对话：现状最坏 **7571 B**，剔掉 system 后最坏 **2994 B**。
-**这意味着：任何「缩小 cookie」的改动，都必须与 `app.py:227` 的登录守卫同批上线**，
+**这意味着：任何「缩小 cookie」的改动，都必须与登录守卫同批上线**（该守卫在当前 HEAD
+上位于 `app.py:264`；本节写作时是 `:227`，后续两轮 `app.py` 增行导致整体后移），
 否则等于把一条匿名执行通道重新打开。本 Agent **没有**动 cookie 存储方式。
 
 **(3) 匿名 `GET /api/export` 会真的写盘、登记，且无任何配额。**
@@ -1779,9 +1785,11 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 `allowed_domains`×1、`allowed_cidrs`×1、`active_scan`×1、`Policy`×1、`Scope`×1、
 `scope_id`×1、`401`×1。改动后**全部归零**。
 
-**为什么算缺陷**：与首页的口径直接冲突。`app.py:304-329 build_page_context()` 对匿名
+**为什么算缺陷**：与首页的口径直接冲突。`app.py:304-329 build_page_context()`（**当轮**行号，
+当前为 `:325-354`，见 `docs/CODEBASE_MAP.md` §9.36.6）对匿名
 **不下发任何数据**（`scopes` 按登录态过滤，`tests/integration/test_api_auth_contract.py:171`
 还专门钉了「匿名首页不得下发授权资产」）。而扫描中心这边 `app.py:413-440 scan_center()`
+（**当轮**行号，当前为 `:435-463`）
 **不强制登录**（刻意如此，否则匿名连导航都点不进来），却把骨架整段无条件渲染 ——
 等于同一个项目里两页对匿名给的东西不一样。方案第 4 节原则 2 要的是「不显示数据库字段
 与内部模型」，`allowed_domains` / `allowed_cidrs` / `active_scan` 经 `core/db.py:98-104`
@@ -1923,7 +1931,8 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 
 #### 3.18.2 `build_page_context()` 的 5 个 session 键按登录态过滤（**已落地**）
 
-`app.py:159-170` 的 docstring 与 `:176-191` 的实现都是新的。5 个键：
+`app.py:159-170` 的 docstring 与 `:176-191` 的实现都是新的（**这两段在本轮之后未再漂移** ——
+`build_page_context()` 在 `app.py:138` 起，改动只发生在它内部）。5 个键：
 `agent_history` / `agent_steps` / `pending_plan` / `uploaded_targets` / `agent_context`。
 
 **为什么这不算「扩大改动」**：它们此前**不构成泄漏** —— `web/` 下对 5 个名字的引用实测
@@ -1983,11 +1992,142 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 > `%TEMP%\gef_cookie_verify.py` 实测：单 cookie 超 4096 即被浏览器丢弃 →
 > 两次 chat 都是 HTTP 200 但 `run_tools` **0 次**；对照组（手工缩小 cookie）`run_tools` = **1 次**。
 
-因此**任何「缩小 cookie」的改动，都必须与 `app.py:243` 的登录守卫同批上线**，
+因此**任何「缩小 cookie」的改动，都必须与 `app.py:264` 的登录守卫同批上线**，
 否则等于把一条匿名执行通道重新打开。这一轮开工时的第一条待办就是先复核
-`app.py:243` 的守卫在**当前 HEAD** 上仍然生效（守卫在 §3.16.10 那轮之后未被动过，但不能靠记忆）。
+`app.py:264` 的守卫在**当前 HEAD** 上仍然生效（守卫在 §3.16.10 那轮之后未被动过，但不能靠记忆）。
 开工前会把「常量取值来源」「超限时是失败还是告警」「与守卫的同批顺序」三件事先写进本节。
 **本轮不开工。**
+
+▶ **2026-10-04 用户补了完整答复**：这一轮仍然**排在下一轮做**（本轮先推送、然后停），
+但「超限时怎么表现」已经定死 —— 见 §3.19。三条里的前两条（常量来源 / 超限表现）已有结论，
+第三条（与 `app.py:264` 守卫的同批顺序）**保持上文的硬前提不变**。
+
+---
+
+### 3.19 第四轮：用户授权的下一轮范围与执行边界（2026-10-04，**本轮只登记、不开工**）
+
+> **这一节不是落地记录，是授权边界记录。** 用户明确说了本轮到此为止 ——
+> 「现在推送完就停下来，这几个任务是下一轮的」。所以本节只把答复**写死**，
+> 避免下一轮开工时靠记忆复述（前几轮已经因为「凭印象写数字」返工过，见 §3.16.4 的教训）。
+
+#### 3.19.1 用户指定的执行边界（原话要点）
+
+**不要把下面四件事合并成一个大型重构**：
+
+```text
+session 观测  +  server-side session  +  export quota  +  Agent 重构
+```
+
+要求**分两批**：
+
+1. **第一批**：session payload 观测 → session 存储治理（两者可以同批，但都属「session 这条线」）；
+2. **第二批**：export quota（**单独立项**，不与第一批混）。
+
+并明确 **Agent 重构不在本批内** —— 与 §3.12 的「先不开工」一脉相承。
+
+#### 3.19.2 获授权项 A：session payload 观测（4 KB 闸门，用户给的完整口径）
+
+用**一个明确常量** `MAX_SESSION_PAYLOAD_BYTES` 表达阈值（**不得**把 4 KB 散落成魔数；
+**也不得**靠「把阈值调大」掩盖问题 —— 用户原话：
+「MAX_SESSION_PAYLOAD_BYTES 保持为明确常量，不要通过简单扩大阈值掩盖问题」）。
+
+**超限时的表现（四条，逐条可测）**：
+
+| # | 要求 |
+|---|---|
+| 1 | **保持现有业务行为**：不直接拒绝会话写入，不把超限转换成异常 |
+| 2 | 产生**一条结构化 warning** |
+| 3 | 提供**可被 `/health` 或测试观察到**的状态标志 |
+| 4 | **正常会话行为不受影响**（不是「超限就崩」，而是「照常 + 留痕」） |
+
+**要补的测试（三条）**：
+
+- 未超限 → **无** warning；
+- 超限 → warning **+** observable flag；
+- 正常会话行为（登录 / chat / 页面渲染）**不受影响**。
+
+> ⚠️ 与 §3.18.5 的硬前提**并行成立**：这一条改的是「观测与告警」，**不是**靠缩 cookie
+> 来换空间，所以**不触发**「必须与 `app.py:264` 守卫同批」那个条件 ——
+> 但同一轮里如果顺手做了任何**缩小 cookie** 的动作，那条硬前提立刻生效。
+
+#### 3.19.3 获授权项 B：session 存储治理（把增长型状态移出 cookie）
+
+用户给的目标链路：
+
+```text
+Browser
+  ↓
+最小 session 状态 / session_id
+  ↓
+服务端 session storage
+  ↓
+Agent history / context
+```
+
+**必须先梳理清楚再动手**（当前 5 个键的写入点已实测，见下表）。
+要求逐条：
+
+| # | 要求 |
+|---|---|
+| 1 | **不改变现有认证语义**（仍是单一管理员 Token + Session 的三种入口） |
+| 2 | **不改变 `HttpOnly` / `SameSite` 等既有安全属性**（`app.py:42-43`） |
+| 3 | **先梳理当前所有 session key**，并区分：必须留在客户端的**最小状态** vs 应迁到服务端的**增长型状态** |
+| 4 | 迁移**必须可回滚** |
+| 5 | 补 **session 生命周期 / 清理 / 并发**行为的测试 |
+| 6 | **不要借此任务顺便重写 Agent** |
+
+**最终目标**：从根本上降低客户端 session payload，**不是**把 4 KB 阈值调大。
+
+**当前 session key 全量清单（本轮实测，下一轮据此分类，不必重新 grep）**：
+
+| key | 写入点 | 读取点 | 增长性 |
+|---|---|---|---|
+| `local_admin` | `core/auth.py:87`（`login_with_token`）；`core/auth.py:94` 只 `pop` 它 | `core/auth.py:78`（`is_authenticated`） | **恒定**（`True`）—— 这就是「最小状态」 |
+| `agent_history` | `app.py:315`（`[-40:]` 截断） | `app.py:299`、`app.py:178` | **增长型**，且**单条就有 ~4.6 KB**（`SYSTEM_PROMPT`，见下） |
+| `agent_steps` | `app.py:322`（`[-50:]` 截断） | `app.py:320`、`app.py:179` | **增长型** |
+| `pending_plan` | `app.py:316` | `app.py:300`、`app.py:180` | 增长型（结构化计划对象） |
+| `uploaded_targets` | **无写入点**（全仓只有 `app.py:301` 与 `:181` 两处读、`tests/` 里的注入） | `app.py:301`、`:181` | **实际恒为空** —— 迁移前先确认它是否已是死键，不要顺手保留 |
+| `agent_context` | `app.py:317` | `app.py:302`、`:182` | **增长型** |
+
+**膨胀根因（已实测，不是推断）**：`agent/action.py:836` 每轮**无条件**把
+`conversation_history[0]` 覆盖为约 **4600 字符**的 `SYSTEM_PROMPT`，再由 `app.py:315`
+写进 session。leave-one-out 实测：`agent_history` 贡献 **5296 B / 96.9 %**
+（其中 `system` 一条就 **5082 B**），剔掉后 cookie 从 **5464 B → 698 B**。
+**5464 B 从第 1 轮起就同时超过** werkzeug 的 4093 B **与**浏览器的 4096 B 上限 ——
+也就是说这个告警**不是偶发**，是稳定复现。
+
+> ⚠️ **迁移与认证语义有一处必须显式处理的交叉点**：`uploaded_targets` 已被证实无写入点，
+> 而 `local_admin` 是唯一「必须留在客户端」的 key。把其余四个迁到服务端后，
+> cookie 里应当只剩 `local_admin` + `session_id`。**下一轮开工第一条**：
+> 用实测确认「迁移后 cookie 仍能被 `core/auth.py:78` 正确识别」，
+> 以及**未登录/退出后**服务端 session 记录的清理行为（对应要求 5）。
+
+#### 3.19.4 明确**未**授权项：export quota（记为 DEFERRED）
+
+用户原话：**「暂不授权 export quota」**。暂不做：
+
+- 导出**数量**配额；
+- 导出**总大小**配额；
+- **自动清理**；
+- **retention policy**。
+
+**继续保持现状并记录**：
+
+```text
+[DEFERRED] Export quota / retention
+```
+
+**后续单独立项**（不与 §3.19.2 / §3.19.3 同批，也不与 Agent 重构同批）。
+
+> 这条与 §3.18.4 的登记**不冲突**：那里写的是「未授权」，这里是「明确暂不授权并记为
+> DEFERRED」—— 措辞更硬，且**优先级低于** session 线。`docs/DECISIONS.md` §3.16.6 里
+> 关于导出重复行的**去重口径**（`created_at` 参与整键去重）**已于 §3.16.8 第 3 条获得确认**，
+> 不受本条影响：本次只推迟「配额与清理」，不推翻已定的去重口径。
+
+#### 3.19.5 本轮的收尾动作
+
+只做一件事：**把已完成的工作推送出去，然后停下**。下一轮的第一件事按 §3.19.1 的顺序
+从「session payload 观测」开始。
 
 ---
 

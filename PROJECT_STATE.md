@@ -572,6 +572,22 @@
 - [ ] metrics / trace（方案只要求「基础版本」）
 
 **其他待办（不在里程碑内，但已知）**
+- [ ] **【下一轮 · 第一批】session payload 观测（4 KB 闸门）** —— 已授权，超限表现已定死：
+  单一常量 `MAX_SESSION_PAYLOAD_BYTES`（**不得靠调大阈值掩盖问题**）；超限时**保持现有
+  业务行为**、产出**一条结构化 warning**、给出**可被 `/health` 或测试观察到的标志**、
+  **不转成异常**；三条测试（未超限无 warning / 超限 warning+flag / 正常会话不受影响）。
+  实测膨胀根因：`agent/action.py:836` 每轮无条件把 `SYSTEM_PROMPT`（~4600 字符）写进
+  `agent_history[0]`，再由 `app.py:315` 落进 session；leave-one-out 实测该项占
+  **5296 B / 96.9 %**，剔掉后 cookie 从 **5464 B → 698 B**；**从第 1 轮起就超限**，不是偶发。
+  见 `docs/DECISIONS.md` §3.19.2
+- [ ] **【下一轮 · 第一批】session 存储治理（把增长型状态移出 cookie）** —— 已授权。
+  目标链路 `Browser → 最小 session 状态 / session_id → 服务端 session storage → Agent history/context`；
+  必须：不改认证语义、不改 `HttpOnly`/`SameSite`、先梳理全部 session key 并区分
+  「客户端最小状态」与「服务端增长型状态」、迁移**可回滚**、补 session 生命周期/清理/并发测试、
+  **不借机重写 Agent**。6 个 key 的写入点/读取点/增长性已列表于 `docs/DECISIONS.md` §3.19.3
+- [ ] **【下一轮 · 第二批 · DEFERRED】Export quota / retention** —— 用户**明确暂不授权**：
+  不做导出数量配额、不做导出总大小配额、不做自动清理、不做 retention policy。
+  **后续单独立项**（导出重复行的**去重口径**已获确认，不受影响）
 - [x] `README.md` 未同步 M1～M4（已重写鉴权表、`upload_id`、导出下载示例）
 - [x] `config.py` 中 `FEROXBUSTER_CONFIG.wordlist` 是开发机绝对路径（已修：改为仓库相对路径 +
   `FEROXBUSTER_WORDLIST` 覆盖；字典缺失时以 `config_error` 明确失败，不再静默零结果）
@@ -622,7 +638,7 @@
 
 | 文件 | 错误数 | 当时的备注 |
 |---|---|---|
-| `agent/action.py` | **20** | 最大头。虽然 M7 的命令没写 `agent`，但 `app.py:21` 有 `from agent import handle_agent_message`，mypy 会顺着 import 查进来 |
+| `agent/action.py` | **20** | 最大头。虽然 M7 的命令没写 `agent`，但 `app.py:23` 有 `from agent import handle_agent_message`，mypy 会顺着 import 查进来 |
 | `modules/base.py` | 5 | M4 改过的文件 |
 | `jobs/executor.py` | 2 | |
 | `api/scan.py` | 2 | |
@@ -1072,6 +1088,37 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 ---
 
 ## 下一步该做什么（给接手者）
+
+> **★ 下一轮的第一件事（2026-10-04 用户指定的执行边界，详见 `docs/DECISIONS.md` §3.19）**
+>
+> 用户明确要求**不要把四件事合并成一个大型重构**：
+>
+> ```text
+> session 观测  +  server-side session  +  export quota  +  Agent 重构
+> ```
+>
+> **分两批**：第一批 = **session payload 观测 → session 存储治理**；
+> 第二批 = **export quota**（单独立项）。**Agent 重构不在本批**。
+>
+> 第一批的两项都已获授权，且**超限表现已定死**（不是「超限就拒绝」）：
+> 用**一个明确常量** `MAX_SESSION_PAYLOAD_BYTES`（**不得靠调大阈值掩盖问题**）——
+> 超限时**保持现有业务行为**、产出**一条结构化 warning**、给出**可被 `/health`
+> 或测试观察到的标志**、**不转成异常**；测试要覆盖「未超限 → 无 warning」/
+> 「超限 → warning + flag」/「正常会话行为不受影响」三条。
+>
+> §3.19.3 已把**当前 6 个 session key 的写入点/读取点/增长性**列成表（本轮实测），
+> 下一轮不必重新 grep；膨胀根因（`SYSTEM_PROMPT` 每轮无条件进 `agent_history[0]`，
+> leave-one-out 实测 5296 B / 96.9 %）也已写在那里。
+>
+> ⚠️ **硬前提不变**：4 KB 上限目前是「确认执行」闸门的**唯一**实际屏障。
+> 已实测证据（`%TEMP%\gef_cookie_verify.py`）：单 cookie 超 4096 即被浏览器丢弃 →
+> 两次 chat 都是 HTTP 200 但 `run_tools` **0 次**；对照组（手工缩小 cookie）`run_tools` = **1 次**。
+> 因此这一轮里若顺手做了任何**缩小 cookie** 的动作，**必须与 `app.py:264`
+> 的登录守卫同批上线**；只做观测/告警则不触发该条件。
+>
+> **[DEFERRED] Export quota / retention** —— 用户**明确暂不授权**：不做导出数量配额、
+> 不做导出总大小配额、不做自动清理、不做 retention policy。**后续单独立项。**
+> 注：导出重复行的**去重口径**（`created_at` 参与整键去重）**已获确认**，不受此条影响。
 
 1. **先推进 C 之前的确认**：把上表 A～I 里你能定的定掉，**E 是关键路径**（已按 DECISIONS-E 落地，可回看）。
    **另有一处本轮需你复核的判断**（`docs/DECISIONS.md` §3 末尾）：公网体验版在

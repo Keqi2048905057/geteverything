@@ -229,15 +229,19 @@ app.py:index() 的 action=chat 分支        ← 从表单/会话取 scope_id
 建议 **`scope_id` 必填、不给默认值**：给了默认值 `None` 会把「忘记传」推迟到
 运行期变成 400，而必填能让 mypy 与测试**立刻**报出来。
 
-另需注意首页 UI：改后 `app.py:257-289` 的 `action=chat` 分支**前端没有任何入口**
+另需注意首页 UI：改后 `app.py` 的 `action=chat` 分支**前端没有任何入口**
 （实测 `web/templates/index.html` 与 `web/static/*.js` 里 grep `chat` / `agent` 零命中，
 没有任何 `action=chat` 的表单）。**这是一段只有手搓 POST 才能触发的死代码**——
 它该不该连带补一个带 Scope 下拉的聊天框，属可选项，建议**不同轮做**。
 
-> **2026-10-04 行号与认证口径更新**：chat 分支现在是 `app.py:257-289`（守卫在 `:227`，
-> 即 `POST /` 的两个动作**都要登录**，见 I-5 补记）。
+> **2026-10-04 行号与认证口径更新**：chat 分支现在是 `app.py:294-324`
+> （`elif action == "chat":` 在 `:294`），守卫调用在 `:264`、守卫定义在 `:211`
+> —— 即 `POST /` 的两个动作**都要登录**，见 I-5 补记。
 > 「前端无入口」这一条**仍然成立**（`web/` 里 grep `chat` 依旧零命中）——
 > 也正因如此，它此前是**零测试覆盖 + 无 UI 入口 + 无认证**三者叠加的盲区。
+>
+> ⚠️ **行号会继续漂移**：本节写于 2026-10-04，此后 `app.py` 任何一次增删都会再次移动它。
+> 开工时**按函数名定位**（`index()` 里的 `elif action == "chat":`），不要直接照行号跳。
 
 ### I-7 【双白名单】Agent 自己的域名策略与 Scope 会互相打脸
 
@@ -286,7 +290,7 @@ Agent 的「执行」从此一律是「**提交**」。
 | `agent/action.py` | 删 `:14` / `:16` 两行 import；`_tool_subdomain`（`:401-445`）与 `_tool_httpx`（`:490-528`）改调 `create_scan_job()`；`_format_single_tool_result`（`:714-738`）的 subdomain/httpx 分支改文案；`_attach_storage_info`（`:542-549`）的 storage 指向；`_build_response` 加 `job_ids` | ~90 行 |
 | `agent/action.py:__init__` | 新增 `scope_id` 参数 | ~5 行 |
 | `agent/service.py` | `handle_agent_message()` 透传 `scope_id` | ~3 行 |
-| `app.py:257-289` | `action=chat` 分支传 `scope_id` | ~5 行 |
+| `app.py:294-324` | `action=chat` 分支传 `scope_id`（行号为 2026-10-04 值，**按函数名定位**） | ~5 行 |
 | `agent_cli.py` | 加 `--scope-id`（或环境变量），否则 CLI 无法提交任何任务 | ~10 行 |
 | `tests/unit/test_agent_boundary.py` | 见 §4.2 | ~120 行 |
 

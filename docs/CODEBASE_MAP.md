@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）** + **第 6 节 BUG 索引表 29 条行号全量复核与刷新（22 条漂移、3 条说法已不成立，见第 6 节开头的「行号批量刷新」说明）**（2026-10-03） + **§1～§18 逐节对照审计（无「漏做」的能力项）与 §9.33 页面级认证缺口收口（匿名 `action=chat` 需登录 + 匿名首页不再下发授权资产，第 6 节新增第 30 条症状）**（2026-10-04） + **第二轮「匿名可达面」审计：§9.34 匿名首页汇总泄漏收口 + 导出结果行重复修复（第 6 节新增第 31 条症状）**（2026-10-04） + **第三轮只读审计收口：§9.35 第一个授权范围建不出来（`#scope-form` 原生约束校验吞掉提交）+ 匿名 `/scan-center` 骨架全量下发收起 + 占位域改回 RFC 6761 保留域**（2026-10-04） + **用户答复后收口：§9.36 `novalidate` 四条验收（真实 Chrome + Flask 双层）+ `build_page_context()` 的 5 个 session 键按登录态过滤**（2026-10-04）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）** + **第 6 节 BUG 索引表 29 条行号全量复核与刷新（22 条漂移、3 条说法已不成立，见第 6 节开头的「行号批量刷新」说明）**（2026-10-03） + **§1～§18 逐节对照审计（无「漏做」的能力项）与 §9.33 页面级认证缺口收口（匿名 `action=chat` 需登录 + 匿名首页不再下发授权资产，第 6 节新增第 30 条症状）**（2026-10-04） + **第二轮「匿名可达面」审计：§9.34 匿名首页汇总泄漏收口 + 导出结果行重复修复（第 6 节新增第 31 条症状）**（2026-10-04） + **第三轮只读审计收口：§9.35 第一个授权范围建不出来（`#scope-form` 原生约束校验吞掉提交）+ 匿名 `/scan-center` 骨架全量下发收起 + 占位域改回 RFC 6761 保留域**（2026-10-04） + **用户答复后收口：§9.36 `novalidate` 四条验收（真实 Chrome + Flask 双层）+ `build_page_context()` 的 5 个 session 键按登录态过滤**（2026-10-04） + **§9.36.6 `app.py` 行号全量复核（本轮 +21 行 → 守卫 `:243→:264`、session 写入 `:278→:315`；顺带修 4 处早已漂移的引用，§1 的原仓库基线引用刻意不动）**（2026-10-04）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -116,7 +116,7 @@
 └─────────────────────────────────────────────────────────────────────────┘
 
 旁路（与上主链解耦，且**不经过任何模型**；**2026-10-04 起与主链同级需登录**）：
-  app.py:257 action == "chat" → agent/service.handle_agent_message()
+  app.py:294 action == "chat" → agent/service.handle_agent_message()
     → agent/action.AgentAction.run()
       → agent/intent.analyze_intent()   （正则关键词）
       → agent/planner.build_plan()      （模板拼装）
@@ -140,19 +140,19 @@
 | `app.py` | Flask 应用实例 + 页面路由 + Blueprint 注册 + 页面上下文构建 | `app`、`index()`、`normalize()`、`normalize_domain`、`build_page_context()`、`_to_ui_history()` | WSGI/`python app.py`；`tests/unit/test_smoke.py:21` | `agent`、`config`、`storage`、`tool_runner`、`api`、flask |
 | `config.py` | 全局配置：`Config` 类（从 `.env` 读取）、路径常量、17 个 `*_CONFIG` 工具配置、分类表 | `Config`、`Config.to_dict()`、`Config._mask()`、`build_tool_config()`、`OUTPUT_DIR`、`SQLITE_CONFIG`、`TARGET_CONFIG`、`SCAN_CONFIG`、`TOOL_CATEGORIES`、`TOOL_COMMANDS` | 几乎全部模块 | `dotenv`、`os` |
 | `storage.py` | SQLite 数据访问层（建表 + 写入 + 多维查询） | `TOOL_DATABASES`、`ScanResultStore`（`_init_db`、`_get_connection`、`save_dedicated_results`、`save_tool_results`、`save_results`、`get_dedicated_results`、`get_tool_results`、`get_view_results`、`get_alive_results`、`get_tool_database_overview` 等） | `api/*`、`tool_runner`、`exporter`、`agent/action`、`modules/dnsx|httpx|alterx|shuffledns` | `sqlite3`、`config` |
-| `tool_runner.py` | 编排核心：加载目标 → 校验工具 → 双层循环执行 → 落库 | `load_targets()`、`normalize_tool_names()`、`load_tools()`、`save_runner_results()`、`run_tools()`、`run_single_tool()` | `app.py:110`、`api/scan.py:105,159`、`agent/action.py:379,396` | `config`、`modules`、`storage` |
+| `tool_runner.py` | 编排核心：加载目标 → 校验工具 → 双层循环执行 → 落库 | `load_targets()`、`normalize_tool_names()`、`load_tools()`、`save_runner_results()`、`run_tools()`、`run_single_tool()` | `api/scan.py:105,159`、`agent/action.py:379,396` | `config`、`modules`、`storage` |
 | `target_parser.py` | 目标文件解析与归一化（去协议/去尾点/域名与 IP 校验） | `normalize_target()`、`parse_targets_file()`、`_parse_txt/_parse_csv/_parse_json/_parse_xlsx()`、`save_normalized_targets()`、`DOMAIN_PATTERN`、`IP_PATTERN` | `api/upload.py:56,60` | `csv`/`json`/`re`/`urlparse`、`openpyxl`（延迟导入） |
 | `exporter.py` | 结果聚合与落盘导出 | `ensure_export_dir()`、`gather_export_rows()`、`export_results()` | `api/results.py:138,241`、`agent/action.py:492,493` | `csv`/`json`、`config`、`storage` |
 | `agent_cli.py` | Agent 终端 REPL 入口 | `main()` | `python agent_cli.py` | `agent.AgentAction` |
 
-> 模块级导入副作用提醒：`import storage` 只 import `config`（不建库）；`ScanResultStore()` 才 `_init_db`。但 `import agent`（`agent/__init__.py`）会连带 import `action.py` → `modules.httpx.HttpxRunner` → `storage`，而 `import app`（`app.py:19`）又 import agent，因此**只要启动 Flask 就已经把 LLM 相关模块全部加载**（尽管它们不被使用）。
+> 模块级导入副作用提醒：`import storage` 只 import `config`（不建库）；`ScanResultStore()` 才 `_init_db`。但 `import agent`（`agent/__init__.py`）会连带 import `action.py` → `modules.httpx.HttpxRunner` → `storage`，而 `import app`（`app.py:23`）又 import agent，因此**只要启动 Flask 就已经把 LLM 相关模块全部加载**（尽管它们不被使用）。
 
 
 ### 3.2 `api/`（全部无鉴权、无 Scope、无队列）
 
 | 文件 | 职责 | 关键函数 | 被谁调用 | 依赖谁 |
 |---|---|---|---|---|
-| `api/__init__.py` | 创建并导出 `api_bp`，末尾 import 5 个子模块以完成路由注册 | `api_bp` | `app.py:31` | flask |
+| `api/__init__.py` | 创建并导出 `api_bp`，末尾 import 5 个子模块以完成路由注册 | `api_bp` | `app.py:48` | flask |
 | `api/tools.py` | `GET /api/tools`（**Tool Registry 读出点**：注册表字段 + `groups`）、`GET /api/databases` | `_registry_fields()`（读 `core.tool_registry`，未登记则保守降级）、`_build_tool_payload()`（内部 `build_runner` 实例化 17 个 Runner 取观测类别）、`list_tools()`、`list_databases()` | 前端/curl | `modules`、`storage`、`core.tool_registry` |
 | `api/scan.py` | `POST /api/run`（批量）、`POST /api/tool/<name>/run`（单工具） | `_normalize_domain()`、`execute_scan()`、`execute_single_tool()` | 前端/curl | `tool_runner`、`storage` |
 | `api/results.py` | 结果查询与导出 | `_normalize_domain()`、`_normalize_value()`、`_parse_limit()`、`query_results()`、`query_tool_results()`、`export_data()` | 前端/curl | `storage`、`exporter` |
@@ -201,8 +201,8 @@
 
 | 文件 | 职责 | 关键类/函数 | 被谁调用 | 依赖谁 |
 |---|---|---|---|---|
-| `agent/__init__.py` | 导出 `AgentAction`、`handle_agent_message` | — | `app.py:19`、`agent_cli.py:6` | `.action`、`.service` |
-| `agent/service.py` | Web 侧单次对话门面 | `handle_agent_message()` | `app.py:128` | `AgentAction`、`storage` |
+| `agent/__init__.py` | 导出 `AgentAction`、`handle_agent_message` | — | `app.py:23`、`agent_cli.py:6` | `.action`、`.service` |
+| `agent/service.py` | Web 侧单次对话门面 | `handle_agent_message()` | `app.py:304` | `AgentAction`、`storage` |
 | `agent/action.py` | **Agent 全部行为**：对话状态、意图分发、计划执行、工具handler、文本渲染、域名校验、限流 | `AgentAction`（`run()`、`_handle_pending_plan()`、`_execute_plan()`、`_execute_tool()`、`_tool_subdomain/_tool_summary/_tool_view_results/_tool_alive_results/_tool_httpx/_tool_export_results`、`_validate_domain()`、`_enforce_rate_limit()`、`_save_httpx_metadata()`、`available_tools`、`RATE_LIMIT_CACHE`、`DOMAIN_PATTERN`） | `service.handle_agent_message`、`agent_cli.main` | `exporter`、`modules.httpx.HttpxRunner`、`storage`、`tool_runner`、`.intent/.plan_state/.planner/.system_prompt/.target_ranker` |
 | `agent/intent.py` | 纯正则关键词意图识别 | `UserIntent`、`analyze_intent()`、`extract_domain()`、`extract_org_name()`、`guess_export_format()`、`_extract_set_target()`、`_has_any()`、各 `*_KEYWORDS` | `action.py:126,191`、`plan_state.py:81` | `re` |
 | `agent/planner.py` | 意图 → `AgentPlan`（固定步骤模板） | `PlanStep`、`AgentPlan`、`build_plan()`、`build_passive_plan()`、`build_uploaded_file_plan()`、`strategy_message()`、`_without_excluded_tools()` | `action.py:157,212` | `.intent`、`.strategy_templates` |
@@ -324,7 +324,7 @@
 
 ```
 用户自然语言
-  → app.py:257 action=="chat"                         （form 字段 agent_message）
+  → app.py:294 action=="chat"                         （form 字段 agent_message）
   → agent/service.py:handle_agent_message()           （组装 AgentAction，透传 session 里的 history/pending_plan/agent_context/uploaded_targets）
   → agent/action.py:AgentAction.run(text)
       1) self.steps = []
@@ -482,7 +482,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 7 | 扫描范围/目标校验被绕过（传入任意 file_path 或空目标却扫了别的域名） | ① `tool_runner.py:load_targets`（**`:17`**；直接 `open(file_path)` 在 `:37`，空目标回落 `TARGET_CONFIG` 在 **`:41-47`** —— 旧写的 `:29-41` 跨了收集段）② `config.py:TARGET_CONFIG`（**`:125-130`**，默认 `domains` 已为**空列表 `[]`**；`nfl.com` 全仓已不存在）③ `api/scan.py:execute_scan`（**`:113`**，校验在 `:146` 起；已**拒收 `file_path`**） | **没有 Scope 概念** ~~（grep 全仓无 scope 表/校验器）~~ ▶ **此前提对 Web 已不成立**：`core/scope.py` 与 `scopes` 表（`core/db.py:98`）都在，`/api/public-jobs` 走 `core/policy.py:110 validate_job_targets()`。本条剩下的成立部分只在 `tool_runner` 这一层：`file_path` 可为任意绝对路径、目标全被过滤掉时回落。~~`tools: []` 也会因为 `payload.get("tools") or payload.get("tool")` 变成 `None`，进而 `load_tools` 回落到 `SCAN_CONFIG["enabled_runners"]=["amass"]` 去扫~~ ▶ **规划方案 Phase 2 已修**：`api/scan.py` 改用 `"tools" in payload` 判断（`or` 恰会把 `[]`/`""` 折叠成 `None`），`load_tools` 把 `None`（未指定 → 回落）与 `[]`（明确不要 → 空列表）严格分开，Web 侧一律传 `[]`，**回落路径在 HTTP 上不可达**；空选择现在是 400。见 §9.25.3 与 `tests/unit/test_tool_parameters.py`。**注意 `file_path`/`load_targets` 那两半不属本轮**：`/api/run` 早已拒收 `file_path`（M2），但 `tool_runner.load_targets` 自身的回落仍在（只剩 CLI 可达） |
 | 8 | 设置项保存后「不生效」 | ① `api/settings.py:save_settings`（`:244`）→ `_write_env_file`（**`:137`**，不是旧写的 `:99`）② `config.py:Config` 类属性（`:13-83`，**import 期求值**；旧写的 `:13-39` 只到 `LLM_MODEL_ID`）③ `api/settings.py:KEY_MAPPING`（**`:65-87`**，不是旧写的 `:58-80`；`enscan_*_cookie → FOFA_EMAIL/FOFA_KEY/HUNTER_API_KEY` 死分支在 **`:84-86`**） | `.env` 写成功了，但 `Config.LLM_API_KEY` 等是类属性，进程内已固化，必须重启（响应里的 message 也这么说）；`load_dotenv` 默认**不覆盖**已存在的环境变量；`KEY_MAPPING` 里 `enscan_*_cookie` 映射到 `FOFA_EMAIL/FOFA_KEY/HUNTER_API_KEY` 是**永远不会走到的死分支**（enscan 键在 `save_settings` 里走 yaml 分支），极易误导后来者 |
 | 9 | 导出文件缺字段 / 行重复 / 混入别的工具数据 / `?format=xlsx` 报 500 | ① `exporter.py:gather_export_rows`（`:57-113`）② `storage.py:_get_tool_results_fallback`（**`:739-780`** 逐表遍历**全部 17 张表**，不是旧写的 `:706-747` —— 那段是 `get_tool_results` 自身）③ `exporter.py:export_results`（`:116`，动态 fieldnames `:147`）④ `api/results.py:export_data` 的 fmt 白名单校验（`:206`，白名单 `:254`） | 同一条子域名会先由 `get_view_results` 加入、又被 `_get_tool_results_fallback` 从同一张专属表再加一次 → 重复行；`category` 过滤在专属表分支失效 → 混入其他分类；~~`fmt` 不是 csv/json 时抛 `ValueError`，`api/results.py:export_data` 不捕获 → 500~~ **本轮已修**：调用 `exporter` 前用同一份 `SUPPORTED_FORMATS` 拦下，非法值现在是 400 `bad_request`（原 500 `unknown_error`）。注意 `agent/intent.guess_export_format` 仍会产出 `"xlsx"`，那条链现在拿到的是 400 而不是 500 |
-| 10 | 前端页面 500 / `TemplateNotFound: index.html` | ① `app.py`（`:36`）`template_folder="web/templates"` ② `app.py:308` `render_template("index.html", **context)` ③ `app.py:index()`（**`:184`**）的 `request.values.get("domain")`（**`:207`**） | ▶ **整条已过期，只在旧 clone 上成立**：仓库里 `web/templates/{index,login,assets,scan_center}.html` 与 `web/static/{app,assets,scan_center}.js` 都在（M1 已补齐），`GET /` 返回 200。旧写的「`app.py:108` 会在渲染前同步跑 subfinder」也已被替换成**异步建任务**（`create_scan_job`，`:234-244`），全文件已无 `SystemExit`；`debug=True` 的自动重载仍只在 `python app.py` 直跑时存在。**排「首页 500」请改看 §9.9 与第 29 条**（两个入口的行为漂移） |
+| 10 | 前端页面 500 / `TemplateNotFound: index.html` | ① `app.py`（`:36`）`template_folder="web/templates"` ② `app.py:354` `render_template("index.html", **context)` ③ `app.py:index()`（**`:221`**）的 `request.values.get("domain")`（**`:244`**） | ▶ **整条已过期，只在旧 clone 上成立**：仓库里 `web/templates/{index,login,assets,scan_center}.html` 与 `web/static/{app,assets,scan_center}.js` 都在（M1 已补齐），`GET /` 返回 200。旧写的「`app.py:108` 会在渲染前同步跑 subfinder」也已被替换成**异步建任务**（`create_scan_job`，调用在 **`:276-286`**），全文件已无 `SystemExit`；`debug` 已关闭（`python app.py` 走 `waitress`，`app.py:524-531`），自动重载只在 pytest 的 reloader 场景里存在。**排「首页 500」请改看 §9.9 与第 29 条**（两个入口的行为漂移） |
 | 11 | Agent 规划报错 / 答非所问 | ① `agent/intent.py:analyze_intent`（函数 **`:106-274`**；旧写的 `:118-273` 起点偏了 12 行）② `agent/planner.py:build_plan`（**`:95-215`**，不是旧写的 `:79-199`）③ `agent/action.py:run`（**`:116-190`**，不是旧写的 `:109-182`） | 分支顺序敏感：`确认/执行/开始/继续` 的关键词判断（`:121`，**仍准确**）优先于一切，含"继续"的正常句子会被吞成 `confirm_plan`；`build_plan` 对 `confirm_plan`/`cancel_plan`/`analyze_existing_subdomains` 都返回 `None`，走到 **`:168-171`**（旧写的 `:161` 已是另一分支）就回"我没有识别到明确任务"；`subdomain_scan` 恒用 `scan_tool="subfinder"`，用户说 amass 也不改（除 `plan_state.apply_user_intervention` 的"改用 amass"字面量） |
 | 12 | provider 超时 / 认证失败 | ① `agent/providers/openai_compat.py:_convert_error`（`:133`，按 401/403/429/5xx/404/400 + 文本关键字分类）② `agent/providers/openai_compat.py:_chat_with_retry`（`:52`，退避 `min(2**attempt, 8)`）③ `agent/config.py:validate_llm_config`（`:114`） | **当前 Web/CLI 流程根本不会走到这里**（`LLMClient` 无调用方）。若自行调用：`validate_llm_config` 在 `LLMClient.__init__` 里抛 `LLMConfigError`；`openai` SDK 的 `APITimeoutError` 没有 `status_code`，只能靠 `"timeout" in message.lower()` 命中，`sanitize` 只对 api_key 做替换 |
 | 13 | 子进程路径找不到（Windows `.exe` / `scripts/` 下的工具） | ① `config.py:HTTPX_CONFIG`（**`:218-228`**，`"http-x"` 在 **`:219`**；旧写的 `:171` 是空行）② `modules/base.py:_resolve_command`（**`:469-497`**，不是旧写的 `:98-107`）③ `config.py:GO_BIN_WINDOWS/GO_BIN_POSIX`（**`:122` / `:123`**，不是旧写的 `:91-92`） | **`HTTPX_CONFIG` 的默认 path 是 `"http-x"`**（不是 `httpx`）—— 这是**有意**的：本机 PATH 里 `http-x.CMD` 是 `httpx.exe` 的包装脚本（`config.py:219` 的注释与 `docs/DEPLOYMENT.md:413` 都写明，装脚本会建这个别名），所以「疑似笔误」这个判断**不成立**，别去改成 `httpx`。真正会 `FileNotFoundError` → 静默 `[]` 的是**没建别名又没设 `HTTPX_PATH`** 的机器。另注意：`scripts/` 下**现在只有 6 个脚本文件、一个 `.exe` 都没有**（`git ls-files` 可验），旧写的「`scripts/dirsearch.exe`/`oneforall.exe`/`OneForAll.exe` 明明存在」已过期；`GO_BIN_*` 常量**定义了从未使用**（不注入 PATH）依然成立。只有 `.bat/.cmd` 会被 ComSpec 包裹，`.exe` 依赖 `shutil.which` |
@@ -492,7 +492,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 17 | 工具产物文件堆积 / 临时文件泄漏 | ① `modules/base.py:_write_input_file`（**`:739`**，`delete=False` 在 **`:759`**；旧写的 `:201` 是 docstring）② `modules/shuffledns.py` 的 `words_file`（`:112-127`）与 `NamedTemporaryFile`（`:132`/`:168`）③ `api/upload.py:upload_file`（**`:24`**）—— `file.save(raw_path)` 已迁到 **`core/uploads.py:100`**（`save_upload` 在 `:73`），扩展名白名单在 **`core/uploads.py:36`**；旧写的 `api/upload.py:53,58` 中 `:58` **已越界**（该文件现在只有 54 行） | 基类的临时文件"调用方负责删除"，除 `dnsx/httpx/alterx` 外无人删；`upload` 在解析失败（返回 400）时**不清理已保存的 raw 文件**，`uploads/` 会不断积累；`enscan` 把原始 JSON 复制成 `results/<hash>_enscan.txt` 也从不清理 |
 | 18 | httpx 探测「跑通了」但拿不到状态码/标题/技术栈 | ① `modules/httpx.py:run_scan`（**`:311`**，只 `return [r.get("url") ...]` 在 **`:352-357`**；旧写的 `:213-214` 是 `-rl` 限速参数拼接）② `modules/httpx.py:_read_json_results`（**`:129-177`**，不是旧写的 `:111-155`）③ `agent/action.py:_save_httpx_metadata`（**`:966-969`** 存 `json.dumps(item)`，落到 `httpx_results.endpoint` 列；旧写的 `:908-911` 已是别的回复文案） | 走 `tool_runner` 的路径**丢失所有元数据**（README/设计文档声称有指纹，实际只剩 URL）；只有经 Agent 的 `_tool_httpx` 才把 JSON 字符串塞进结果列——即同一个工具的两条调用链写出的数据形态不同 |
 | 19 | httpx 一执行就把整批任务打挂 | ① `modules/httpx.py`（无候选时抛的是 **`RunnerInputError`**，**`:328-334`**；旧写的 `:177` 现在只是 `return items`）② `modules/httpx.py`（`_execute` 判定 `:344` → **`raise RuntimeError` 在 `:346`**；旧写的 `:211` 已是注释）③ `tool_runner.py`（调用点现在是 `runner.run(target)`，**`:207`**；旧写的 `:137` 已是 `normalize_tool_names` 的调用行） | 与其它 Runner "失败返回 `[]`" 的约定不一致；在 `/api/run` 批量路径上会直接冒泡成 500，**后续目标/工具全部不再执行**；只有在 Agent 路径被 `agent/action.py:_execute_tool`（**`:391`**，宽泛捕获在 **`:395-398`**）兜住。**注意**：`RunnerInputError` 继承自 `RunnerError`，与 `RuntimeError` 不是同一个类，按 `except RuntimeError` 捕不到它 |
-| 20 | Agent 对话「失忆」/ 多轮后上下文丢失 | ① `app.py:278,285`（`session["agent_history"]=...[-40:]`、`session["agent_steps"]=...[-50:]`；旧写的 `:139,146` 与 `:265,272` 都已是别的行）② `app.py:39` 的密钥来源 —— **现在已改为 `resolve_secret_key()`**（`config.py:20` 的 `SECRET_KEY` 默认是**空串**，弱值会告警并生成进程级一次性密钥），不是旧的 `app.secret_key = Config.SECRET_KEY` 默认 `"dev-secret-key"` ③ `agent/action.py:_trim_history`（**`:843`** 上限 30 条；「30」是类属性 `max_history_messages`，**`:48`**；旧写的 `:785` 已是帮助文案） | Flask session 是**签名 Cookie**（客户端存储）；`agent_history`/`agent_steps` 里含完整工具结果文本，很容易超过浏览器 4KB Cookie 上限 → Flask 静默丢弃 Cookie → 下一轮 `session.get("agent_history")` 变空。~~默认密钥还可被伪造~~ ▶ **M1/P1 已修**：默认密钥清空 + 弱值检测，伪造前提不再成立 |
+| 20 | Agent 对话「失忆」/ 多轮后上下文丢失 | ① `app.py:315` / `:322`（`session["agent_history"]=...[-40:]`、`session["agent_steps"]=...[-50:]`；**行号为 2026-10-04 值**，此前写过的 `:278,285`、`:139,146`、`:265,272` 都已是别的行 —— 按 `session["agent_history"] =` 这个赋值定位）② `app.py:39` 的密钥来源 —— **现在已改为 `resolve_secret_key()`**（`config.py:20` 的 `SECRET_KEY` 默认是**空串**，弱值会告警并生成进程级一次性密钥），不是旧的 `app.secret_key = Config.SECRET_KEY` 默认 `"dev-secret-key"` ③ `agent/action.py:_trim_history`（**`:843`** 上限 30 条；「30」是类属性 `max_history_messages`，**`:48`**；旧写的 `:785` 已是帮助文案） | Flask session 是**签名 Cookie**（客户端存储）；`agent_history`/`agent_steps` 里含完整工具结果文本，很容易超过浏览器 4KB Cookie 上限 → Flask 静默丢弃 Cookie → 下一轮 `session.get("agent_history")` 变空。~~默认密钥还可被伪造~~ ▶ **M1/P1 已修**：默认密钥清空 + 弱值检测，伪造前提不再成立。**2026-10-04 追加实测**：根因是 `agent/action.py:836` 每轮无条件把 `SYSTEM_PROMPT`（~4600 字符）覆盖进 `agent_history[0]`，leave-one-out 实测该项占 5296 B / 96.9 %，剔掉后 cookie 5464 B → 698 B；**从第 1 轮起就超限**，不是偶发。处置属**下一轮第一批**（`docs/DECISIONS.md` §3.19.2 / §3.19.3） |
 | 21 | `/api/tools`、`/api/databases` 返回的记录数不对/很慢 | ① `api/tools.py:list_tools`（**`:105-172`**，每个工具都 `build_runner` 实例化在 **`:161`** 附近；旧写的 `:80-88` 已落在 `_build_tool_payload` 的 docstring 里）② `api/tools.py:_build_tool_payload`（**`:76-101`**；旧写的 `:35` 是模块 docstring）③ `storage.py:get_tool_databases`（**`:555-569`**，**不返回任何 count**；旧写的 `:527-541` 已落在 `_query_subdomain_tables` 的 SELECT 段） | **本条正文已按现状改写**（旧写「接口 docstring 宣称返回 `record_count`」：`record_count` 在全仓**已无匹配**，那次 docstring 脱节在 `98ea46f` 已修）。现状：实现只返回 `tool_name/table/result_column/category`；真正的计数方法 `get_tool_database_overview`（**`storage.py:571-604`**）**在 API 层从未被调用**（只有 `tests/unit/test_storage_connection.py` 直接调它）。另外 `build_runner` 会执行 `DnsxRunner/HttpxRunner/AlterxRunner/ShufflednsRunner` 的 `__init__`（各建一个 `ScanResultStore()`，触发建表） |
 | 22 | 子域爆破类工具（shuffledns/alterx/dnsx）总是零结果 | ① `config.py:SHUFFLEDNS_CONFIG` / `FEROXBUSTER_CONFIG` 的 `wordlist` ② `modules/shuffledns.py:_bruteforce_with_dnsx`（字典不存在曾只 print 一句就 `return []`）③ `modules/base.py:require_wordlist`（M5 起统一校验） | **M5 已修**：仓库不分发 `SecLists/`，所以两个默认字典**在本机并不存在**——原先 shuffledns 静默返回空、feroxbuster 把不存在的路径当 `-w` 传进子进程。现在：字典路径按**项目根**解析（与 cwd 无关）+ 环境变量可覆盖；**配置了字典却不存在 → `error_code=config_error` 的显式失败，且不启动子进程**。剩下「真零结果」的正常原因：`alterx`/`dnsx`/`httpx` 的候选来自 `store.get_results_by_domain()`，subfinder 没先跑过就永远是空 |
 | 23 | 任务跑完了，资产页却「一条都没有」/ 少了几条 | ① `jobs/executor.py:execute_job` 里的 `ingest_step_observations` 调用 ② `core/assets.py:CATEGORY_TO_TYPE`（`web`/`alive`/`dns` 的映射）③ 任务详情里的 `step.assets_ingested` 事件（含 `skipped` 与 `reasons`） | **先看事件，不要先看代码**：`step.assets_ingested` 的 `written`/`skipped`/`reasons` 直接说明这批观测落了几条、为什么跳过。三种常见原因：① 工具的 `Observation.category` 不在 `CATEGORY_TO_TYPE` 里（返回 `None` → 整条跳过，不猜类型）；② 步骤只有字符串结果且工具是 `httpx`/`naabu`/`nmap`（形态不确定 → 故意不落，见 §9.12.3）；③ `canonical.normalize()` 判定值非法（如把本地路径当 URL）。**注意落观测是派生产物**：它失败不会让任务变 failed，所以「任务 succeeded 但没资产」是合法状态，必须靠事件区分 |
@@ -502,7 +502,7 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 | 27 | 日志里「找不到一个请求相关的任何记录」/ 结构化字段时有时无 | ① `core/observability.py:log_event`（关联字段来自 contextvar，不是参数）② 绑定处是否成对（`app.py` 的 `before_request`、`jobs/worker.py:startup`、`jobs/executor.py` 的 `with observability.bind(...)`）③ `configure_logging()` 是否在**进程入口**调过（`app.py:__main__` / `jobs/worker.py:__main__`）| 三个高发点：① 直接 `python -c "import app"` 或 `waitress-serve app:app` 起服务**不会**调 `configure_logging()`，事件只进 root logger（没人看）；② `Worker` 只 `startup()` 没 `shutdown()` → `worker_id` 一直挂着，同线程后续代码/测试会继承一个已死 worker 的身份；③ 用行号/字符串去 `grep "print("` 会撞上 `Blueprint("api", …)` 这类同形标识符，实际 print 清单以 `tests/unit/test_observability.py` 的 AST 守卫为准。**另注意**：401 的 `error_message` 里 `X-Local-Token` 后面的词会被脱敏规则打码（见 §9.18.3），不是日志丢了内容 |
 | 28 | 对比两次任务时，Web Server / 技术栈明明变了却**报不出 `changed`**（`status_code` / `title` / URL 却能报） | ① `core/assets.py:DIFFABLE_ATTRIBUTES`（白名单用的是哪个键名）② `core/assets.py:ATTRIBUTE_ALIASES` 与 `_canonical_attributes()` ③ `modules/httpx.py:_read_json_results` **实际产出的键名** | **已修**，但复发方式很隐蔽：httpx 产出的是 `webserver` / `tech`，而白名单早期写的是 `server` / `technology` —— 两边对不上，白名单永远匹配不到，`_changed_attributes()` 返回 `{}`。**判别点：只有 `status_code` / `title` / `url` 三项会报变化**。最危险的是单测若用「文档体例」的键名（`server`/`technology`）而不是工具真实键名，测试会全绿而线上失效。以后新增可 diff 属性，先确认工具真实产出的键名 |
 | 29 | 「创建任务」的两个入口行为不一致（错误码/文案/限流口径对不上） | ① `core/application.py:create_scan_job()`（唯一编排入口）② `api/jobs.py:create_job` 是否又被写回了内联编排 ③ `app.py:index()` 的扫描分支是否又反向导入 `api.jobs` 的私有函数 | 这类退化**不会让任何功能测试变红**（两条路各自都"能用"），只会让两个入口慢慢漂移。`tests/unit/test_application_service.py` 的三条源码守卫专拦这个：`api/jobs.py` 里不许再出现 `validate_job_targets` / `create_job_with_status` / `normalize_idempotency_key` / `resolve_mode` / `audit.record(job_created)`；`app.py` 里不许再出现 `from api.jobs import _resolve_targets`；`core/application.py` 里不许出现 `allowed_domains` / `allowed_cidrs` / `fnmatch`。**守卫失败时该改的是那段新写的内联代码，不是守卫** |
-| 30 | 「某个页面动作不用登录也能跑」/ 「匿名也能看到授权资产清单」 | ① `app.py:index()` 的 `_require_admin_for_page()`（`:190` 定义）是否还在 **`action` 分支之前**（`:243`）—— 若又被塞回 `if action in _SCAN_ACTIONS:` 里面，`action=chat` 就会重新裸奔 ② `app.py:329` 的 `context["scopes"]` 是否又变成无条件 `_load_scope_options()`（正确写法带 `if is_authenticated else []`，与 `:407` 的资产页同口径）③ 新增页面动作时**有没有顺手加守卫** | 症状是「功能全对、就是不用登录」。这类洞**不会让功能测试变红**，因为功能本身是好的。三道守卫：`tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login`（匿名 chat 必须 401）、`::test_any_page_post_action_requires_login`（**5 条参数化，含 3 个未知动作** —— 这是「守卫是否前置」的**权威行为探针**，旧代码下未知动作返回 200 会立刻变红）、`::test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现范围名/目标/资产卡片类名/`id="scope_id"`）；另有 `ADMIN_ONLY` 参数化清单（逐个方法绑定实测响应码）。修法与实测证据见 §9.33。**注意守卫失败时该改的是 `app.py`，不是守卫** |
+| 30 | 「某个页面动作不用登录也能跑」/ 「匿名也能看到授权资产清单」 | ① `app.py:index()` 的 `_require_admin_for_page()`（**`:211`** 定义）是否还在 **`action` 分支之前**（**`:264`**）—— 若又被塞回 `if action in _SCAN_ACTIONS:` 里面，`action=chat` 就会重新裸奔 ② `app.py:350` 的 `context["scopes"]` 是否又变成无条件 `_load_scope_options()`（正确写法带 `if is_authenticated else []`，与 **`:428`** 的资产页同口径）③ 新增页面动作时**有没有顺手加守卫**（行号为 2026-10-04 值；`app.py` 每次增删都会整体后移，**按函数名定位**） | 症状是「功能全对、就是不用登录」。这类洞**不会让功能测试变红**，因为功能本身是好的。三道守卫：`tests/integration/test_api_auth_contract.py::test_page_chat_action_requires_login`（匿名 chat 必须 401）、`::test_any_page_post_action_requires_login`（**5 条参数化，含 3 个未知动作** —— 这是「守卫是否前置」的**权威行为探针**，旧代码下未知动作返回 200 会立刻变红）、`::test_anonymous_homepage_does_not_leak_authorized_assets`（匿名首页不得出现范围名/目标/资产卡片类名/`id="scope_id"`）；另有 `ADMIN_ONLY` 参数化清单（逐个方法绑定实测响应码）。修法与实测证据见 §9.33。**注意守卫失败时该改的是 `app.py`，不是守卫** |
 | 31 | 「匿名首页能看到『跑过几次 / 覆盖几个目标 / 命中多少条』」/ 「`/?domain=<目标>` 匿名也能回显目标名」/ 「导出的 CSV 里有逐字节重复的行，`row_count` 还虚高」 | ① `app.py:build_page_context()` 的三个取数点（`get_global_summary` / `get_results_by_domain` / `get_domain_summary`）是否都按 `is_authenticated` 短路 ② `web/templates/index.html` 的「汇总」面板是否仍**裸渲染**（正确写法是整块包在 `{% if is_authenticated %}` 里）③ `exporter.py:gather_export_rows()` 的**整键去重**是否还在（`seen` 集合 + 键含 `created_at`） | 两个症状同源：**「该过滤的地方漏了一处」**。① 与第 30 条② 是同一个形状 —— `scopes` / `recent_jobs` 都带 `if is_authenticated`，汇总三处漏了；判别点：同一页面上 `class="scope-asset` 与 `id="jobs-table"` **不出现**，但「扫描运行次数」出现，就是这一条。② 的根因是 `get_view_results()`（只扫 8 张子域名表）与 `_get_tool_results_fallback()`（**遍历全部 17 张表**）**重叠**，实测 3 条唯一子域名导出成 6 行。**判别点：`row_count` 恰好是唯一记录数的整数倍、且 CSV 里出现逐字节相同的行**。★ 去重键**必须含 `created_at`**（同值不同时间是两条真实观测）；**不要**改成「`category == "subdomain"` 就跳过」—— `tool_name` 传一个未注册名字时 `get_view_results()` 返回空（`storage.py:419` 逐表 `continue`），按分类一概跳过会把子域名行全丢光。守卫：`tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does_not_leak_scan_summary`（3 段断言）+ `test_export_contract.py` 的三条唯一性用例（含一条「跨工具同值不得被误合并」的反向守卫）。修法与实测证据见 §9.34 |
 | 32 | 「点了『添加授权范围』**一点反应都没有**：没有请求、没有报错、没有文案，按钮看着是好的」 | ① `web/templates/scan_center.html` 的 `#scope-form` **标签上有没有 `novalidate`**（`:139`）② 该 form 里是否仍同时装着两个 `required` 下拉（`#job-project` `:141` / `#job-scope` `:146`）与 `type=submit` 按钮（`:176`） | 症状是「**静默**无反应」——这也是它藏得久的原因：给它报错的那段 JS 根本没跑。**根因不是按钮被禁用、也不是事件没绑上**（实测三态 `disabled` 皆 `False`），而是**原生约束校验（constraint validation）跑在 `submit` 事件之前**：两下拉只有占位项 `<option value="">` 时 `valueMissing=true`，浏览器直接吞掉提交。**判别点：DevTools 里点按钮，Network 与 Console 都毫无动静，但按钮本身是 enabled。** 触发条件是「全新用户」或「有项目、无范围」——**正是最需要这个按钮的两次**。`novalidate` 只关浏览器原生校验，服务端 `POST /api/scopes` 的 `*` 全放行拒绝与非法 CIDR 拒绝一条没少，`bindScopeForm` 自己的文案反而从死代码变活。**别把它当脏东西删掉。** 守卫：`tests/integration/test_public_scan_mode.py::test_scan_center_scope_form_opts_out_of_native_validation`（**正则匹配 form 标签本身**，不是 `'novalidate' in source` —— 注释里就写着这个词）。修法与实测证据见 §9.35.2 |
 | 33 | 「匿名 `GET /scan-center` 返回 200，还渲染出完整的四步表单与项目/任务面板」/ 「匿名页面里出现 `mock` / `queued` / `worker` / `python -m` / `allowed_domains` / `active_scan`」 | ① `web/templates/scan_center.html` 的四步骨架与三个面板是否仍在 `{% if is_authenticated %}` **之外**（闸门从 `:49` 开始）②「真实扫描总开关未开启」那条告警是否又回到 `{% if not is_authenticated %}…{% elif not real_scan_enabled %}` 的形状（正确写法：匿名分支只有一句「需先登录」，告警挂在登录分支里）③ `<script>` 引入与顶部导航是否**被误包进闸门**（那会让匿名点不进来） | 与第 30、31 条同源：**「该过滤的地方漏了一处」**，但这一处漏的是**骨架与内部模型**，不是数据。判别点：匿名响应长度与管理员响应**只差几十字符**（实测 8833 vs 8891），且匿名页面上 `mock` 出现 4 次 —— 正常应为 **1078** 字符、术语 0 次。★ 变量名 `scope`/`scope_id` 也在黑名单里，而**匿名仍必须看到**「扫描中心」（导航与标题）与 `401 unauthenticated`（「为什么看不到」）—— 收紧时别把它们一起收掉。守卫：`tests/integration/test_public_scan_mode.py::test_anonymous_scan_center_does_not_leak_backend_jargon`（12 术语 + 12 元素 id，**含管理员侧反向断言**）、`::test_scan_center_page_renders_for_anonymous`（追加 3 条「不得出现」）。修法与实测证据见 §9.35.3 |
@@ -522,7 +522,8 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 1. **失败被吞成空结果**：`modules/base.py:_execute` 与 `_execute_stdout` 把 `FileNotFoundError`/`TimeoutExpired`/`CalledProcessError` 全部降级为 `return False`，Runner 再 `return []`。调用方无法区分"工具没装""超时""非 0 退出""本来就没结果"。这在设计文档里被列为 P0，代码未改。
    ▶ **M4 已解决**：统一 `RunnerResult` + `error_code`，详见 §9.10。
 2. **异常冒泡路径不一致**：`tool_runner.py:137` 对 `runner.run_scan` 无保护，而 `modules/httpx.py:177,211` 会 `raise RuntimeError`、`modules/shuffledns.py` 会抛 `FileNotFoundError/TimeoutExpired`、`modules/amass.py:76` 会抛 `ValueError` → 在 `api/scan.py` 直接 500，在 Agent 路径被 `agent/action.py:366` 兜住，行为取决于从哪个入口进来。
-3. **`SystemExit` 与 HTTP 混用**：`tool_runner.py:111/117/121` 用 `raise SystemExit(1)` 表达"无目标/无工具"，这是 CLI 语义；`api/scan.py:execute_scan` 不捕获 `BaseException`，Web 场景下表现为 500 或被 dev server 中断。`app.py:112` 是唯一显式处理 `SystemExit` 的地方。
+3. **`SystemExit` 与 HTTP 混用**：`tool_runner.py:111/117/121` 用 `raise SystemExit(1)` 表达"无目标/无工具"，这是 CLI 语义；`api/scan.py:execute_scan` 不捕获 `BaseException`，Web 场景下表现为 500 或被 dev server 中断。旧基线里 `app.py:112` 是唯一显式处理 `SystemExit` 的地方。
+   ▶ **本仓库已不成立**：`app.py` **全文件零 `SystemExit`**（实测 0 命中），首页也不再同步跑工具 —— 它改为 `create_scan_job()` 建异步任务（当前 `:276`）。坑留在 `tool_runner.py` / `api/scan.py` 那条旧同步链上。
 4. **`_execute_tool` 的宽泛捕获**：`agent/action.py:366` `except Exception as exc: result = {"ok": False, "error": str(exc), "tool": action}` —— 会把 `KeyError`/`AttributeError` 这类编程错误伪装成"工具执行失败"反馈给用户，排查时容易走错方向。
 5. **`api/results.py:export_data` 未捕获 `export_results` 的 `ValueError`**（`exporter.py:116`），非法 `format` 直接 500。
    ▶ **本轮已解决**：改为在调用 `exporter` **之前**用 `exporter.SUPPORTED_FORMATS` 拦下，返回 400 `bad_request`
@@ -558,7 +559,8 @@ CREATE INDEX idx_<table>_domain ON <table>(domain);
 
 ### 7.5 配置与密钥
 
-23. **`SECRET_KEY` 默认固定值**：`config.py:17` `os.getenv("SECRET_KEY", "dev-secret-key")` + `app.py:166` `debug=True`。Session 可伪造，且 Web 调试器暴露。
+23. **`SECRET_KEY` 默认固定值**：旧基线 `config.py:17` `os.getenv("SECRET_KEY", "dev-secret-key")` + `app.py:166` `debug=True`。Session 可伪造，且 Web 调试器暴露。
+    ▶ **两条都已修**：`app.py:39` 改为 `resolve_secret_key()`（`config.py:20` 默认**空串**，弱值告警 + 生成进程级一次性密钥，`secret_key_is_ephemeral()` 可查），`debug=True` 已关闭 —— 当前 `app.py:524` 走 `waitress.serve`，`:531` 是「关闭 debug」那句注释（全文 `debug` 只剩这一处注释）。**伪造前提已不成立**。
 24. **`/api/settings` 可匿名写 `.env`**：`api/settings.py:save_settings`（`:187`）无任何鉴权。`_write_env_file`（`:99`）把请求体里的值**原样拼进 `KEY=VALUE` 行**，未做引号/换行转义 —— 值里带 `\n` 就能注入任意环境变量（例如覆盖 `LLM_BASE_URL`）。写入也不是原子操作（直接 `open(..., "w")` 覆盖）。
 25. **`_write_enscan_yaml` 用 `re.sub` 回填 Cookie**（`api/settings.py:150-166`）：替换串 `rf'\1"{cookie}"'` 未转义，Cookie 中的 `\`、`\g`、`"`、换行都会破坏 YAML 或产生错误替换；读取侧的正则 `rf'{source}:\s*\n\s+cookie:\s*"(.*?)"'`（`:144`）也依赖模板的精确缩进格式。
 26. **`KEY_MAPPING` 里 `enscan_*_cookie` → `FOFA_EMAIL/FOFA_KEY/HUNTER_API_KEY`**（`api/settings.py:77-79`）是永远不会执行的映射（enscan 键在保存逻辑里走 yaml 分支），注释也自相矛盾，是典型的踩坑点。
@@ -3769,7 +3771,8 @@ Token 在 `import app` 之后才设，而 `config` 导入期已跑完 `load_dote
 同夜第二轮（§9.34）又改了 `app.py`（`build_page_context()` 加形参、`is_authenticated`
 提前），行号整体后移：`_require_admin_for_page()` 定义 `:174 → :190`、调用 `:227 → :243`、
 `context["scopes"]` `:304 → :329`、资产页 `:382 → :407`。
-**本文正文按原样保留不改**（它是当轮的证据记录）；要按当前代码定位请用第 6 节第 30 条。
+**本文正文按原样保留不改**（它是当轮的证据记录）；
+**最新一次漂移（`:243 → :264` 等）见 §9.36.6 的对照表**，要按当前代码定位请用第 6 节第 30 条。
 
 ### 9.34 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复（2026-10-04，无人值守）
 
@@ -3967,7 +3970,7 @@ argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据�
 | # | 症状 | 根因位置 | 触发条件 |
 |---|---|---|---|
 | 32 | 点「添加授权范围」**毫无反应**：无请求、无报错、无文案；按钮看起来完好 | `web/templates/scan_center.html` 的 `#scope-form` 把两个 `required` 下拉与 `type=submit` 按钮装在**同一个 form** 里，而**原生约束校验跑在 `submit` 事件之前** | 全新用户（两下拉皆占位项）或「有项目、无范围」时 |
-| 33 | 匿名 `GET /scan-center` 返回 200 且**完整渲染四步骨架**，连同 `allowed_domains`/`allowed_cidrs`/`active_scan`（`scopes` 表字面列名）与 `mock`/`queued`/`worker`/`python -m` | `app.py:413-440 scan_center()` 刻意不强制登录，但骨架整段**无条件渲染** | 未登录访问该页 |
+| 33 | 匿名 `GET /scan-center` 返回 200 且**完整渲染四步骨架**，连同 `allowed_domains`/`allowed_cidrs`/`active_scan`（`scopes` 表字面列名）与 `mock`/`queued`/`worker`/`python -m` | `app.py:413-440 scan_center()`（**当轮**行号，当前为 `:435-463`，见 §9.36.6）刻意不强制登录，但骨架整段**无条件渲染** | 未登录访问该页 |
 
 #### 9.35.2 缺陷五：首次建授权范围的按钮被原生校验吞掉（**已修**）
 
@@ -4002,7 +4005,8 @@ argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据�
 
 #### 9.35.3 缺陷六：匿名 `/scan-center` 骨架全量下发（**已修**）
 
-`app.py:413-440 scan_center()` 刻意不强制登录（否则匿名连导航都点不进来），但骨架无条件渲染。
+`app.py:413-440 scan_center()`（**当轮**行号；当前 `:435-463`，见 §9.36.6）
+刻意不强制登录（否则匿名连导航都点不进来），但骨架无条件渲染。
 实测（`%TEMP%\gef_tighten_verify.py`，`app.py` 的 `test_client()`，同一时刻对照）：
 
 | 指标 | 改动前 | 改动后 |
@@ -4014,7 +4018,8 @@ argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据�
 `allowed_cidrs`×1、`active_scan`×1、`Policy`×1、`Scope`×1、`scope_id`×1、`401`×1 → 改动后**全部 0**；
 匿名仍可见（刻意保留）`扫描中心`×3、`401 unauthenticated`×1、`登录`×4。
 
-**为什么算缺陷**：与首页口径直接冲突 —— `app.py:304-329 build_page_context()` 对匿名
+**为什么算缺陷**：与首页口径直接冲突 —— `app.py:304-329 build_page_context()`（**当轮**行号；
+当前 `:325-354`，见 §9.36.6）对匿名
 **不下发任何数据**（`scopes` 按登录态过滤，守卫在 `test_api_auth_contract.py:171`）。
 `allowed_domains`/`allowed_cidrs`/`active_scan` 经 `core/db.py:98-104` 确认是 `scopes` 表**字面列名**，
 正是方案第 4 节原则 2 的禁止项。
@@ -4082,7 +4087,7 @@ argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据�
 本节**没有新增症状**：第 6 节仍是 **33 条**。这轮是把「已认可的修法」补上**能证明它成立的判据**，
 不是又发现一个缺陷 —— 把落地轮硬塞进症状表会让索引表从「症状 → 位置」退化成「变更日志」。
 
-#### 9.36.1 `app.py:138-202`：`build_page_context()` 的 5 个 session 键按登录态过滤
+#### 9.36.1 `app.py:138-210`：`build_page_context()` 的 5 个 session 键按登录态过滤
 
 改动只有一处：原来**无条件**读 session 的 5 个键，现在整段包进 `if is_authenticated:`。
 
@@ -4162,8 +4167,47 @@ argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据�
 
 | 没做的 | 为什么 |
 |---|---|
-| Cookie 4 KB 闸门（`MAX_SESSION_PAYLOAD_BYTES`） | 用户**已授权但指定「单独一轮」**，且要求与 `app.py:243` 的登录守卫**同批上线**（4 KB 上限目前是确认执行闸门的**唯一**屏障）。本轮不开工，见 `DECISIONS.md` §3.18.5 |
-| cookie 存储方式 / 导出配额 | 用户**未授权**。前者属架构改动；后者优先级低于 4 KB 闸门 |
+| Cookie 4 KB 闸门（`MAX_SESSION_PAYLOAD_BYTES`） | 用户**已授权但指定「单独一轮」**，且要求与 `app.py:264` 的登录守卫**同批上线**（4 KB 上限目前是确认执行闸门的**唯一**屏障）。本轮不开工，见 `DECISIONS.md` §3.18.5 与 §3.19.2 |
+| session 存储治理（把增长型状态移出 cookie） | 用户**已授权**，与 4 KB 闸门同属**下一轮第一批**；本轮只登记，见 `DECISIONS.md` §3.19.3 |
+| 导出配额 / retention | 用户**明确暂不授权**，记为 `[DEFERRED] Export quota / retention`，**后续单独立项**（见 `DECISIONS.md` §3.19.4） |
 | 把 5 个 session 键从 session 里删掉 | 授权范围是「按登录态过滤」，不是改 Agent 行为 |
 | 真实外部扫描 | 全程 mock / 本机 fixture；浏览器验收用**受控 `fetch` 桩**，不发任何网络请求 |
+
+#### 9.36.6 行号漂移说明（本轮 `app.py` +21 行）
+
+本轮在 `build_page_context()` 里加了 **docstring 一段 + `if/else` 两个分支**，
+`app.py` 从 **511 行 → 532 行**。**`build_page_context()` 函数体之前的行号一格没动**，
+但它**之后**（即从 `_require_admin_for_page()` 开始）的全部行号**整体 +21**：
+
+| 锚点 | 本轮前 `ab17fbe` | 本轮后 | 漂移 |
+|---|---|---|---|
+| `from flask import …`（`:21`）、`template_folder=`（`:36`）、`app.secret_key=`（`:39`） | 21 / 36 / 39 | 21 / 36 / 39 | **0** |
+| `def build_page_context(` | 138 | 138 | **0** |
+| `def _require_admin_for_page(` | 190 | **211** | +21 |
+| `def index(` | 200 | **221** | +21 |
+| `_require_admin_for_page()` 调用（**登录守卫**） | 243 | **264** | +21 |
+| `elif action == "chat":` | 273 | **294** | +21 |
+| `handle_agent_message(` | 283 | **304** | +21 |
+| `session["agent_history"] =` | 294 | **315** | +21 |
+| `session["agent_steps"] =` | 301 | **322** | +21 |
+| `context["scopes"]` | 329 | **350** | +21 |
+| `def assets_page(` / 资产页 `scopes=…` | 390 / 407 | **411 / 428** | +21 |
+| `def scan_center(` | 414 | **435** | +21 |
+| `if __name__ == "__main__":` | 503 | **524** | +21 |
+
+**处置原则**（与本文件既有做法一致）：**历史章节的「当轮行号」原样保留**，
+只在**面向未来定位的地方**（§2/§3 总览表、§6 定位表、`docs/AGENT_ASYNC_IMPACT.md`
+的改动清单）改成当前值，并在改过的地方注明「行号为 2026-10-04 值 / 按函数名定位」。
+**本节已经把当前值全部落表** —— 下一次再漂移时，请先对照本表，再决定要不要逐处刷。
+
+> 顺带修掉**四处早已漂移、与本轮无关**的错引（都属「面向未来定位」的地方）：
+> §3.1 的 `tool_runner.py` 被 `app.py:110` 调用（`app.py` 现在只 `import ScanResultStore`，
+> 首页建任务已在 M3 改为 `create_scan_job()`）、`api/__init__.py` 的 `app.py:31 → :48`、
+> `agent/__init__.py` 的 `app.py:19 → :23`、`agent/service.py` 的 `app.py:128 → :304`。
+>
+> **刻意不改**：§1 那几行的 `app.py:17` / `:26` / `:160` / `:165-166` 是**原仓库基线**
+> 的引用（本节开头的说明写着「第 1～8 节记录改动前的原仓库基线」，那一版 `app.py`
+> **不在本仓库历史里** —— 本仓库是独立干净历史，其首个提交 `61b0f9b` 的 `app.py`
+> 已与上游基线不同：Flask 导入在 `:19`、`app = Flask(...)` 在 `:31`）。
+> 把它们改成当前值会把「基线描述」伪装成「现状描述」，所以只在此处说明，不动正文。
 

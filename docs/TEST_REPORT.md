@@ -1826,9 +1826,12 @@ FAILED tests/integration/test_api_auth_contract.py::test_anonymous_homepage_does
 
 | 文件 | 改动 | 为什么这么改 |
 |---|---|---|
-| `app.py:227` | `_require_admin_for_page()` 从 `if action in _SCAN_ACTIONS:` **内部**提到 `action` 分支**之前** | 原来是「按动作名白名单护」，漏一个动作就漏一个洞。改成「所有 POST 一律先认证」，新增动作时**默认是安全的**，要开匿名反而得显式写 |
-| `app.py:304` | `context["scopes"] = _load_scope_options() if is_authenticated else []` | 与 `/assets`（`app.py:382`）**同一口径**；同时把 `local_auth.is_authenticated()` 提出为局部变量，避免重复比较 Token |
+| `app.py:227`（**当轮**行号；当前 `:264`，见 `docs/CODEBASE_MAP.md` §9.36.6） | `_require_admin_for_page()` 从 `if action in _SCAN_ACTIONS:` **内部**提到 `action` 分支**之前** | 原来是「按动作名白名单护」，漏一个动作就漏一个洞。改成「所有 POST 一律先认证」，新增动作时**默认是安全的**，要开匿名反而得显式写 |
+| `app.py:304`（**当轮**；当前 `:350`） | `context["scopes"] = _load_scope_options() if is_authenticated else []` | 与 `/assets`（**当轮** `app.py:382`，当前 `:428`）**同一口径**；同时把 `local_auth.is_authenticated()` 提出为局部变量，避免重复比较 Token |
 | `web/templates/index.html:94-110` | 未登录时不再说「还没有任何授权范围」（那是**另一回事**），改说「登录后可见」 | 原文案会让匿名访客以为「系统里没有授权资产」，与「有但不给你看」是两码事 |
+
+> **本节的行号一律是「当轮」值，已整体漂移**（之后两轮 `app.py` 共增 37 行）。
+> 正文按原样保留作为当轮证据；要按**当前**代码定位请用 `docs/CODEBASE_MAP.md` §9.36.6 的对照表。
 
 ### 15.4 修复后的**五次独立复核**（不止测试通过）
 
@@ -2135,17 +2138,25 @@ git diff --check: 退出码 0
 | 缺口 | 为什么 |
 |---|---|
 | 状态 3「合法目标经**真实浏览器**走完整流程」没有端到端用例 | 浏览器那条的 `fetch` 是**受控桩**，它只证明「请求原样发出 + 服务端理由被显示」；合法性判定在 Flask 侧。要真端到端得把 Flask 真跑起来再让 Chrome 连过去（不再是 `--dump-dom` 的一次性渲染），属于**另一套测试基建**，本轮没做 |
-| `MAX_SESSION_PAYLOAD_BYTES`（4 KB 闸门）**没有任何用例** | 该轮**已授权但被指定单独开工**，本轮一行未写。见 `docs/DECISIONS.md` §3.18.5 |
-| cookie 存储方式、导出配额 | 用户**未授权** |
+| `MAX_SESSION_PAYLOAD_BYTES`（4 KB 闸门）**没有任何用例** | 该轮**已授权但被指定单独开工**，本轮一行未写。下一轮的**验收清单已定死**（见 `docs/DECISIONS.md` §3.19.2）：未超限 → 无 warning；超限 → warning **+** 可观察 flag；正常会话行为不受影响 |
+| session 存储治理（把增长型状态移出 cookie）**没有任何用例** | 同上，下一轮第一批。要补的是 **session 生命周期 / 清理 / 并发**三类行为（`docs/DECISIONS.md` §3.19.3 要求 5） |
+| **导出配额 / retention** | 用户**明确暂不授权**，记为 `[DEFERRED] Export quota / retention` —— 本轮与下一轮都不会有用例，**后续单独立项** |
 | `test_scope_form_acceptance.py` 的浏览器分支只在本机 Windows 生效 | CI 无 Chrome。这是仓库既有惯例（`test_runner_interface.py:379` 的 `skipif(os.name != "nt", ...)`），不是本节新引入的 |
 
-### 18.5 本轮**没做**的
+### 18.5 本轮**没做**的（下一轮的边界已定死）
 
-| 没做的 | 为什么 |
+| 没做的 | 状态与理由 |
 |---|---|
-| Cookie 4 KB 闸门 | 用户已授权但钦定**单独一轮**，且要求与 `app.py:243` 的登录守卫**同批上线** —— 4 KB 上限目前是确认执行闸门的**唯一**屏障 |
-| cookie 存储方式 / 导出配额 | 未授权 |
-| 把 5 个 session 键从 session 里删掉 | 授权范围是「按登录态过滤」，不是改 Agent 行为 |
-| 真实外部扫描 | 全程 mock / 本机 fixture；浏览器验收用受控 `fetch` 桩，**不发任何网络请求** |
+| **session payload 观测（4 KB 闸门）** | ✅ 已授权，**下一轮第一批**。超限表现已定死：单一常量 `MAX_SESSION_PAYLOAD_BYTES`（**不得靠调大阈值掩盖问题**）→ 保持现有业务行为 + 一条结构化 warning + 可被 `/health` 或测试观察到的 flag + **不转成异常** |
+| **session 存储治理** | ✅ 已授权，**下一轮第一批**。`Browser → 最小 session 状态 / session_id → 服务端 session storage → Agent history/context`；不改认证语义 / 不改 `HttpOnly`·`SameSite` / 先梳理全部 session key / **可回滚** / 补生命周期·清理·并发测试 / **不借机重写 Agent** |
+| **Export quota / retention** | ⛔ **明确暂不授权** → `[DEFERRED] Export quota / retention`，**后续单独立项** |
+| **Agent 重构** | ⛔ 不在本批（用户原话把四件事并列为「不要合并成一个大型重构」） |
+| 把 5 个 session 键从 session 里删掉 | ⛔ 授权范围是「按登录态过滤」，不是改 Agent 行为 |
+| 真实外部扫描 | ⛔ 硬约束：全程 mock / 本机 fixture；浏览器验收用受控 `fetch` 桩，**不发任何网络请求** |
+
+> **为什么把「没做」写成带验收判据的清单**：这四条里有两条**已获授权、下一轮就要开工**，
+> 且它们的验收点（尤其是「超限不转成异常」）不是显然的默认行为 —— 如果只写「未做」，
+> 下一轮极易照着「超限就报错」的直觉实现，正好与用户要求相反。
+> 完整口径见 `docs/DECISIONS.md` §3.19。
 
 
