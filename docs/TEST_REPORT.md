@@ -2069,4 +2069,83 @@ DB / 导出目录全部重定向到 `tempfile.mkdtemp()`；不联网、不读 `.
 | 改 `app.py` / `api/` / `core/` 任何一行 | 本轮两处修复**全部在前端模板与静态资源**；服务端校验、Scope、Policy、审计、路由、表结构一行未改 |
 | Agent 改走 Job Service（P0-6 阶段二） | 用户明确「先不开工」，本轮未碰 `agent/` 一行 |
 
+---
+
+## 18. 用户答复后的收口：`novalidate` 四条验收 + 5 个 session 键按登录态过滤（1340）
+
+> 与 §15～§17 是**两类不同的轮次**：前三节是**审计发现的缺陷**，本节是**用户答复之后的落地**。
+> 本节没有修任何新缺陷 —— 它补的是「已认可的修法凭什么算成立」的判据。
+> 详见 `docs/DECISIONS.md` §3.18、`docs/CODEBASE_MAP.md` §9.36。
+
+### 18.1 实测结果
+
+```text
+ruff:   All checks passed!
+pytest: 1340 collected / 1338 passed / 2 skipped / 0 failures / 0 errors（169.68s）
+mypy:   Success: no issues found in 72 source files
+git diff --check: 退出码 0
+路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
+```
+
+本轮 **+10**（1328 → 1338）：
+
+| 新增 | 条数 | 说明 |
+|---|---|---|
+| `tests/integration/test_scope_form_acceptance.py` | **+9** | 新文件；其中 1 条标 `slow` 且 `skipif` 无 Chrome。含一条**加强** ④ 的用例：四组非法输入的理由必须彼此不同 |
+| `tests/integration/test_api_auth_contract.py` | **+1** | `test_agent_session_keys_are_not_handed_to_anonymous_visitors` |
+
+收集数 1330 → 1340 与通过数 1328 → 1338 **同步 +10**，`skipped` 仍是 **2** ——
+本机有 Chrome，那条浏览器用例**真跑了**、没有落进 skip（否则通过数只会 +9 而 skipped 变 3）。
+这是本节最容易糊过去的一处：单看「passed +10」不能区分「浏览器用例真跑」与
+「它被跳过、而别处多了一条」，两处数字必须一起看。
+
+### 18.2 四条验收分别在哪一层测（用户指定的判据）
+
+| 条 | 层 | 用例 | 为什么必须在这一层 |
+|---|---|---|---|
+| ① 空表单点击 → JS 明确错误 | **真实 Chrome** | `test_scope_form_novalidate_acceptance_in_real_browser` | 被测的是「原生校验 vs `submit` 事件的**先后顺序**」，源代码里读不出来 |
+| ② 非法目标 → 拒绝 | 浏览器 + Flask **各一半** | 同上（转发与显示）+ `test_direct_api_bypass_is_still_rejected_by_the_server` | JS **不判定合法性**；合法性只由服务端判。合成一条就必然有一半是假的 |
+| ③ 合法目标 → 正常提交 | Flask | `test_legitimate_scope_submits_and_attaches_to_project` | 必须走**两步**（建 Scope → 关联到项目）；只测第一步会放过**孤儿范围** |
+| ④ 绕过 JS 直接调 API → 仍拒绝 | Flask | 上面的参数化用例 + `..._for_anonymous` | 关键断言是**库里 Scope 数没变**，不是状态码 —— 只看 400 会放过「先写入再报错」 |
+| ④（加强） | Flask | `test_illegal_scope_payloads_are_rejected_for_four_distinct_reasons` | 四条理由必须**互不相同**（+ 关键短语仍在）—— 只钉 `error_code` 时，`invalid_target` 那三组在「模型层统一回同一句」下**照样全绿**，参数化退化成同一件事测三遍 |
+
+①/② 在 CI 上必然跳过（ubuntu + windows，无 Chrome），因此另加**不依赖浏览器**的源码契约
+`test_scope_form_js_error_paths_are_wired` 兜底：两条 JS 文案仍在、仍写在
+`setText("scope-feedback", …)` 上、`#scope-feedback` 元素真的存在
+（否则 `setText` 静默什么都不做 —— 与缺陷本身同一个症状）。
+它**不重复** `test_public_scan_mode.py:807` 那条 `novalidate` 正则守卫，只锚「接线是否完整」。
+
+### 18.3 反证：守卫在修复被回退时会红
+
+只报「新增 N 条、全绿」不足以说明守卫有效 —— 在已经是绿的代码上写断言，怎么写都绿。
+三处守卫都做了**回退验证**：
+
+| 回退动作 | 期望 | 实测 |
+|---|---|---|
+| `app.py:176` 的 `if is_authenticated:` 改回 `if True:` | 5 键守卫变红 | ✅ `匿名上下文下发了 agent_history 的内容: [{'content': 'probe-leak-marker', 'role': 'user'}]` |
+| 只把 `else` 分支的 `agent_history` 改回 `session.get(...)` | 「漏传参数」断言变红 | ✅ `漏传 is_authenticated 时下发了 agent_history —— 默认值不再是失败关闭` |
+| 从 `#scope-form` 摘掉 `novalidate` | 浏览器用例变红 | ✅ `状态 1 的 submit 触发 0 次 —— novalidate 失效…` |
+
+第三条的**断言顺序是刻意排的**：先断言 `submit_events`、后断言 `novalidate` 属性。
+反过来的话，摘掉属性时用例会先报「属性不见了」（**症状**），而这条判据真正要抓的是它的
+**后果**（回调不执行、按钮点了没反应）。失败信息应当直接说后果。
+
+### 18.4 覆盖缺口（本节新增，如实列出）
+
+| 缺口 | 为什么 |
+|---|---|
+| 状态 3「合法目标经**真实浏览器**走完整流程」没有端到端用例 | 浏览器那条的 `fetch` 是**受控桩**，它只证明「请求原样发出 + 服务端理由被显示」；合法性判定在 Flask 侧。要真端到端得把 Flask 真跑起来再让 Chrome 连过去（不再是 `--dump-dom` 的一次性渲染），属于**另一套测试基建**，本轮没做 |
+| `MAX_SESSION_PAYLOAD_BYTES`（4 KB 闸门）**没有任何用例** | 该轮**已授权但被指定单独开工**，本轮一行未写。见 `docs/DECISIONS.md` §3.18.5 |
+| cookie 存储方式、导出配额 | 用户**未授权** |
+| `test_scope_form_acceptance.py` 的浏览器分支只在本机 Windows 生效 | CI 无 Chrome。这是仓库既有惯例（`test_runner_interface.py:379` 的 `skipif(os.name != "nt", ...)`），不是本节新引入的 |
+
+### 18.5 本轮**没做**的
+
+| 没做的 | 为什么 |
+|---|---|
+| Cookie 4 KB 闸门 | 用户已授权但钦定**单独一轮**，且要求与 `app.py:243` 的登录守卫**同批上线** —— 4 KB 上限目前是确认执行闸门的**唯一**屏障 |
+| cookie 存储方式 / 导出配额 | 未授权 |
+| 把 5 个 session 键从 session 里删掉 | 授权范围是「按登录态过滤」，不是改 Agent 行为 |
+| 真实外部扫描 | 全程 mock / 本机 fixture；浏览器验收用受控 `fetch` 桩，**不发任何网络请求** |
+
 

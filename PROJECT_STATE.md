@@ -684,9 +684,77 @@
 
 ## 最近一次验证
 
+> **本轮（§18）与上一轮（§17）是两类不同的轮次**：§17 是**审计发现的缺陷**，本轮是
+> **用户答复之后的落地** —— 没有修任何新缺陷，补的是「已认可的修法凭什么算成立」的判据。
+> §17 的验证块原样保留在下方「上一轮」里，便于回溯。
+
 ```text
-验证时间：2026-10-04（第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发）
+验证时间：2026-10-04（用户答复后收口：novalidate 四条验收 + 5 个 session 键按登录态过滤）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
+
+ruff:   All checks passed!
+pytest: 1340 collected / 1338 passed / 2 skipped / 0 failures / 0 errors（169.68s）
+mypy:   Success: no issues found in 72 source files        ← 未新增源文件
+git diff --check: 退出码 0
+路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
+本轮用例数 +10（1330 → 1340 collected；1328 → 1338 passed）：
+        tests/integration/test_scope_form_acceptance.py   **新文件 9 条**
+        · test_legitimate_scope_submits_and_attaches_to_project          （③ 两步调用链）
+        · test_direct_api_bypass_is_still_rejected_by_the_server ×4      （④ 四组输入）
+        · test_illegal_scope_payloads_are_rejected_for_four_distinct_reasons
+          （④ 的四组必须给出**四条互不相同**的理由 + 关键短语仍在 ——
+            否则「无论什么非法输入都回同一句」会让参数化退化成同一件事测三遍）
+        · test_direct_api_bypass_is_still_rejected_for_anonymous         （④ 绕过登录）
+        · test_scope_form_js_error_paths_are_wired                       （①/② 的 CI 兜底）
+        · test_scope_form_novalidate_acceptance_in_real_browser          （①/②/③ 真实 Chrome）
+        tests/integration/test_api_auth_contract.py   +1 条
+        · test_agent_session_keys_are_not_handed_to_anonymous_visitors
+          （5 个 session 键匿名侧必须为空、且**键仍在**；管理员侧必须有内容；
+            漏传 is_authenticated 时也必须为空 —— 默认值失败关闭）
+本轮源码改动（一处判断 + 两处 docstring；api/、core/、jobs/、modules/、storage.py 一行未改）：
+        app.py   build_page_context() 的 5 个 session 键整段包进 if is_authenticated:
+                 （匿名侧取 [] / None，**键保留**，模板拿到空列表而不是 Undefined）
+反证（守卫不是在「已经对的代码」上顺手写的）：
+        · app.py:176 改回 if True: → 5 键守卫红：
+          「匿名上下文下发了 agent_history 的内容: [{'content': 'probe-leak-marker', ...}]」
+        · 只把 else 分支的 agent_history 改回 session.get(...) → 红：
+          「漏传 is_authenticated 时下发了 agent_history —— 默认值不再是失败关闭」
+        · 从 #scope-form 摘掉 novalidate → 浏览器用例红：
+          「状态 1 的 submit 触发 0 次 —— novalidate 失效…」
+实测证据（%TEMP% 探针，临时库、不联网、不改仓库、不读 .env）：
+  ① 四条验收的层次（详见 docs/TEST_REPORT.md §18.2）——
+     ①空表单点击→JS 明确错误  真实 Chrome（顺序在源码里读不出来）
+     ②非法目标→拒绝           浏览器（转发+显示）+ Flask（真的拒绝），各一半
+     ③合法目标→正常提交       Flask，必须走两步；只测第一步会放过「孤儿范围」
+     ④绕过 JS 直接调 API      Flask，判据是**库里 Scope 数没变**，不是状态码
+  ② ①的修复前后对照（headless Chrome，内联从磁盘读出的 scan_center.js 原文，
+     #scope-form 从真实渲染结果正则原样截取）：
+        状态 1 空表单      submit 0 → **1** 次；文案「还没有授权项目，请先…」；0 条请求
+        状态 2 有项目无域名 submit 0 → 2 次（累计）；「至少填一个授权域名或授权网段。」；0 条
+        状态 3 填 *        3 次（累计）；「添加失败: 不允许使用全放行通配符…」；1 条请求
+     状态 1 另断言 checkValidity() is False 且 :invalid 含 #job-project ——
+     原生校验**仍认为表单无效**，绕的是**事件**不是**校验**（与删 required 不同）
+  ③ ④的服务端实测（%TEMP%\gef_novalidate_server.py）：
+        空 allow 规则                    400 bad_request      新建 0
+        allowed_domains ["*"]            400 invalid_target   新建 0
+        allowed_domains ["not a domain"] 400 invalid_target   新建 0
+        allowed_cidrs ["0.0.0.0/0"]      400 invalid_target   新建 0
+        allowed_domains ["www.example.test"]  201            新建 **1**
+        匿名 + 完全合法 payload          **401 unauthenticated**  新建 0
+     四组非法输入覆盖**两条不同拒绝路径**（api/scopes.py:55-56 / core/scope.py:__post_init__）
+零 DDL 复核：本轮**没有**任何 schema 变更；core/policy.py / core/scope.py / core/jobs.py 一行未改
+未动：agent/（一行未改）、api/（一行未改）、core/（一行未改）、jobs/、modules/、storage.py、
+        数据库结构与数据、认证授权机制本身、审计字段集合、
+        公网白名单（仍是 subfinder + httpx）、7 个已定的匿名只读 API、路由总数、
+        `.env`（LastWriteTime 未变）、`/api/scopes` 的全放行/UUID 拒绝规则
+文档校正：docs/{DECISIONS,CODEBASE_MAP,TEST_REPORT}.md
+        · DECISIONS.md §3.16.8 四条 + §3.17.6 四条**就地标注用户答复**（不删原问答，便于回溯）
+        · DECISIONS.md 新增 §3.18（四条验收 / 5 键过滤 / 新增守卫 / 未做项 / 4KB 闸门待开工）
+        · CODEBASE_MAP.md 新增 §9.36；§9.35.6 加指向 §9.36 的「随后用户已答复」行
+        · TEST_REPORT.md 新增 §18（含本节最易糊过去的一处：passed +9 与 skipped 仍为 2
+          必须一起看，才能区分「浏览器用例真跑了」与「它被跳过、别处多了一条」）
+
+上一轮（§17，第三轮只读审计收口）的验证快照，原样保留：
 
 ruff:   All checks passed!
 pytest: 1330 collected / 1328 passed / 2 skipped / 0 failures / 0 errors（163.76s）
@@ -749,7 +817,7 @@ git diff --check: 退出码 0
         · 新增 docs/DECISIONS.md §3.17（缺陷五、缺陷六、四条残余项复核、新增守卫、待拍板）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → 页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323` → 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327` → **第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发 `1330`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → 页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323` → 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327` → 第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发 `1330` → **用户答复后收口：`novalidate` 四条验收 + 5 个 session 键按登录态过滤 `1340`**
 
 > 本轮 +8（`test_tool_parameters.py` 17 → 21、`test_public_scan_mode.py` 122 → 125、
 > `test_assets_api.py` 29 → 30），另有 **2 条既有用例被加强**（函数数不变、断言变严）：
@@ -811,12 +879,16 @@ git status -sb                  # ## main...origin/main [ahead N]，N 同上
 > **判断待推送量一律用 `git rev-list --count origin/main..HEAD`，不要抄本节数字。**
 > 下面表格只列**不含**本文件改动的那些提交（即 `docs: 状态板…` / `docs(state):…` 之外的全部）。
 
-与 `origin/main` 的关系：**本轮待推送的提交仍未推送**（用户原话「有需要我确认的
-等我起床找你的时候再让我确认」，推送属需确认项，本轮不推）。
+与 `origin/main` 的关系：**上一批已全部推送完毕** —— `ef33ab6..ab17fbe main -> main`（纯快进，
+无 force），之后 `git rev-list --count origin/main..HEAD` 实测 **0**，`git status -sb` 显示
+`## main...origin/main`（无 `[ahead N]`）。**本轮的新提交是这条推送之后产生的**，
+所以推送前请照旧先跑七项安全审计；推送命令仍必须显式 `git push origin main`。
+★ 下面这一段是**推送之前**写下的记录，如实保留以便回溯当时的口径
+（当时的待推送量是 36；`git ls-remote --tags origin` 实测为空，本地标签未随行）。
 `git rev-list --count origin/main..HEAD` 的**实际值以命令输出为准**：写这段时
 命令给的是 **36**（**七项推送前安全审计已跑五次**：`docs/DECISIONS.md`
 §3.13.7 = 22 个提交、§3.15 = 27 个、**§3.16.10 = 32 与 33 个各跑一次**、
-**§3.16.11 = 36 个**，五次都全过 —— 只等你一句话即可执行推送）。
+**§3.16.11 = 36 个**，五次都全过）。
 ★ 审计结论**带时点**：本文件自己也要提交，所以本节数字与 §3.16.10 / §3.16.11 的数字
 **永远比实际少 1 或更多**；推送前请**自己复跑** `python %TEMP%\gef_push_audit2.py`
 （只读、约 1 分钟，第一行就打印它实际审了多少个提交），以其输出为准。

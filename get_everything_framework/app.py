@@ -156,14 +156,39 @@ def build_page_context(
     **失败关闭**：将来新增调用方忘传这个参数，结果也只是少显示一块汇总，
     不会把扫描结果递给匿名访客。
 
+    自第二轮审计起，**另外 5 个 session 键**（``agent_history`` / ``agent_steps`` /
+    ``pending_plan`` / ``uploaded_targets`` / ``agent_context``）也按同一标志过滤。
+    这 5 个键在 ``web/`` 里**没有任何渲染点**（实测 grep 命中 0），所以当时
+    **不构成泄漏** —— 但「不下发」比「不渲染」可靠：少下发一个键，就少一次
+    「将来加了个渲染点、忘了它没过滤」的机会。它们装的是 Agent 对话历史、
+    待确认计划、上传目标与上下文，与授权资产同级。
+    **键仍然保留**（取空值 ``[]`` / ``None``），只是值为空 —— 这样将来新增的
+    模板渲染点拿到的是空列表而不是 ``Undefined``，故障形态从「静默泄露内容」
+    变成「显示空」，方向与收紧一致。
+
     调用点见 ``index()``：它在调本函数之前就已经把登录态取好并复用，
     因此这里不需要（也不应该）再读一次 Session。
     """
     summary = store.get_global_summary() if is_authenticated else None
     domain_results = store.get_results_by_domain(domain) if (is_authenticated and domain) else []
     domain_summary = store.get_domain_summary(domain) if (is_authenticated and domain) else None
-    raw_history = session.get("agent_history", [])
-    raw_steps = session.get("agent_steps", [])
+
+    if is_authenticated:
+        agent_state = {
+            "agent_history": _to_ui_history(session.get("agent_history", [])),
+            "agent_steps": session.get("agent_steps", []),
+            "pending_plan": session.get("pending_plan"),
+            "uploaded_targets": session.get("uploaded_targets"),
+            "agent_context": session.get("agent_context"),
+        }
+    else:
+        agent_state = {
+            "agent_history": [],
+            "agent_steps": [],
+            "pending_plan": None,
+            "uploaded_targets": None,
+            "agent_context": None,
+        }
 
     return {
         "current_domain": domain or "",
@@ -173,11 +198,7 @@ def build_page_context(
         "summary": summary,
         "domain_summary": domain_summary,
         "domain_results": domain_results,
-        "agent_history": _to_ui_history(raw_history),
-        "agent_steps": raw_steps,
-        "pending_plan": session.get("pending_plan"),
-        "uploaded_targets": session.get("uploaded_targets"),
-        "agent_context": session.get("agent_context"),
+        **agent_state,
     }
 
 

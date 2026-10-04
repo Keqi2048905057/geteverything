@@ -20,8 +20,11 @@
 - 测试：在项目根执行 `python -m pytest -q`（`pyproject.toml` 已配 `pythonpath = ["."]`，测试内可直接 `import storage`）
 - 静态检查：`ruff check .`；类型检查：`mypy app.py core api jobs storage.py modules scripts`
 - 环境自检：`python scripts/check_env.py`（**只读**，不建库、不执行任何扫描；退出码 0/1/2）
-- 基线：pytest **1328 项通过 / 2 skipped**（收集 1330），ruff 全过，mypy 0 error（72 source files）。
+- 基线：pytest **1338 项通过 / 2 skipped**（收集 1340），ruff 全过，mypy 0 error（72 source files）。
   基线会随每轮推进变化，**以 `PROJECT_STATE.md` 的「最近一次验证」为准**（本行容易过期）。
+  ★ **`skipped` 恒为 2 是本仓库的一条有效信号**：新增用例若因环境缺失（CI 无 Chrome、
+  非 Windows）被跳过，`passed` 的增量会**少于** `collected` 的增量。只报「passed +N」
+  区分不出「用例真跑了」与「它被跳过、别处多了一条」，两个数字必须一起看。
 - 跑测试的口径：**`python -m pytest -o addopts="" -q`**。
   `pyproject.toml` 里已有 `addopts = "-q"`；若命令行再写一个 `-q`，两者会**叠成 `-qq`**，
   连最后那行 `N passed in X.XXs` 汇总都被压掉（实测：不写 `-o addopts=""` 时，

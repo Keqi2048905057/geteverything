@@ -1846,11 +1846,123 @@ session cookie 里的完整 `SYSTEM_PROMPT`、cookie 4 KB 上限、
 `created_at` 去重口径 / 三条要不要各开一轮）与 §3.16.6 三条（cookie 存储 / 4 KB 闸门 / 导出配额）
 **仍全部未答、未动手**；§3.17.6 新增两条待拍板。
 
+> ▶ **随后用户已全部答复**（2026-10-04）：§3.16.8 第 1～3 条全「认」；§3.17.6 第 1 条
+> 「选 1，再补一个验收」；§3.16.6 只授权了 4 KB 闸门、且钦定**单独一轮**。
+> 落地见下一节「用户答复后的收口」。
+
+### 用户答复后的收口：`novalidate` 四条验收 + 5 个 session 键按登录态过滤（2026-10-04）
+
+> **与前三节是两类不同的轮次**：前三节都是**审计发现的缺陷**，本节是**用户答复之后的落地**。
+> 本节**没有修任何新缺陷** —— 它补的是「已认可的修法凭什么算成立」的判据。
+> 详见 `docs/DECISIONS.md` §3.18、`docs/CODEBASE_MAP.md` §9.36、`docs/TEST_REPORT.md` §18。
+
+**一、`novalidate` 的四条验收（用户指定，新增 `tests/integration/test_scope_form_acceptance.py`）**
+
+用户在 §3.17.6 第 1 条上答复「选 1，再补一个验收」，给了四条判据，理由是
+**「这样 `novalidate` 只是 UX 修复，不会成为安全漏洞」**。四条各自放在**能真正观察到
+该行为的那一层**：
+
+| 条 | 层 | 为什么必须在这一层 |
+|---|---|---|
+| ① 空表单点击 → JS 明确错误 | **真实 Chrome** | 被测的是「原生校验 vs `submit` 事件的**先后顺序**」，源代码里读不出来 |
+| ② 非法目标 → 拒绝 | 浏览器 + Flask **各一半** | JS **不判定合法性**（前端不是安全边界）；合法性只由服务端判。合成一条必有一半是假的 |
+| ③ 合法目标 → 正常提交 | Flask | 必须走**两步**（建 Scope → 关联项目）；只测第一步会放过**孤儿范围** |
+| ④ 绕过 JS 直接调 API → 仍拒绝 | Flask | 关键断言是**库里 Scope 数没变**，不是状态码 —— 只看 400 会放过「先写入再报错」 |
+| ④（加强） | Flask | 四组输入的理由必须**彼此不同**（逐条比对 `error_message` + 关键短语）—— 只钉 `error_code` 的话，`invalid_target` 那三组在「模型层统一回同一句」时照样全绿 |
+
+①的**修复前后对照**（headless Chrome，harness 内联**从磁盘读出的** `scan_center.js` 原文，
+`#scope-form` 从真实渲染结果正则原样截取）：
+
+| 状态 | `submit` 触发（前 → 后） | `#scope-feedback` | 发出的请求 |
+|---|---|---|---|
+| 1 空表单（全新用户） | **0 → 1** | 「还没有授权项目，请先在上面的表单里创建一个。」 | 0 |
+| 2 有项目、无域名 | **0 → 2**（累计） | 「至少填一个授权域名或授权网段。」 | 0 |
+| 3 填 `*` | 3（累计） | 「添加失败: 不允许使用全放行通配符，请显式列出允许的域名」 | 1 条，body 里 `allowed_domains: ["*"]` |
+
+状态 1 另断言 `checkValidity() is False` 且 `:invalid` 含 `#job-project` ——
+原生校验**仍认为表单无效**，我们绕的是**事件**不是**校验**；这与「删掉 `required`」
+是两件不同的事，那种修法会让这条断言变红。
+
+**harness 的两个关键点**（上一版探针踩过或差点踩到）：
+
+1. **表单是页面里那一份，不是每状态重建的**。上一版用 `stage.innerHTML = REAL_FORM`
+   逐状态重建表单 —— 那样测到的是浏览器原生校验，`bindScopeForm` 的监听器根本不在新元素上，
+   等于「测了个假对象」。
+2. **`scan_center.js` 内联进 harness**，不写 `<script src="file://…">`：file:// 之间是
+   opaque origin，Chrome 对 file→file 的资源加载有额外策略；内联的仍是**从磁盘读出的原文**。
+   同时把 `fetch` 换成**受控桩**（GET→401 让 `loadMetadata()` 走它自己那条安静跳过分支、
+   POST→记录请求并回 400 真实形状），于是「JS 有没有吞掉服务端理由」可断言，
+   而「payload 合不合法」仍由 Flask 用例判定。
+
+④的**服务端实测**（`%TEMP%\gef_novalidate_server.py`）：
+
+| 输入 | 状态码 | `error_code` | 新建 Scope 数 |
+|---|---|---|---|
+| 空 allow 规则 | 400 | `bad_request` | 0 |
+| `allowed_domains: ["*"]` | 400 | `invalid_target` | 0 |
+| `allowed_domains: ["not a domain"]` | 400 | `invalid_target` | 0 |
+| `allowed_cidrs: ["0.0.0.0/0"]` | 400 | `invalid_target` | 0 |
+| `allowed_domains: ["www.example.test"]` | 201 | — | **1** |
+| 匿名 + 完全合法的 payload | **401** | `unauthenticated` | 0 |
+
+四组非法输入覆盖**两条不同的拒绝路径**（`api/scopes.py:55-56` 的 API 层 /
+`core/scope.py:__post_init__` 的模型层），不是同一句的重复：只拦一层、忘了另一层，
+其中几组立刻变红。**「不是同一句」这件事本身也写成了判据** ——
+`test_illegal_scope_payloads_are_rejected_for_four_distinct_reasons` 要求四条
+`error_message` **互不相同**并钉住关键短语：参数化只钉 `error_code`，而
+`invalid_target` 一个码对应三组输入，模型层若改成「无论什么非法输入都回同一句」，
+那三组照样全绿、参数化退化成「同一件事测三遍」。最后一行是「绕过 JS **并且**绕过登录」
+——payload 完全合法，证明拦住它的是登录态而不是目标非法。
+
+CI 是 ubuntu + windows、**没有 Chrome**，①那条必然跳过，因此另加**不依赖浏览器**的源码契约
+`test_scope_form_js_error_paths_are_wired` 兜底（两条 JS 文案仍在、仍写在
+`setText("scope-feedback", …)` 上、`#scope-feedback` 元素真的存在 —— 否则 `setText`
+静默什么都不做，与缺陷本身同一个症状）。
+
+**二、`build_page_context()` 的 5 个 session 键按登录态过滤（唯一源码改动）**
+
+`app.py:176-191`：原来**无条件**读 session 的 5 个键，现在整段包进 `if is_authenticated:` ——
+`agent_history` / `agent_steps` 匿名侧取 `[]`，`pending_plan` / `uploaded_targets` /
+`agent_context` 取 `None`。**键保留、值为空**，不是删键：将来新增的模板渲染点拿到的是
+空列表而不是 `Undefined`，故障形态从「静默泄露内容」变成「显示空」。
+
+**为什么不算「扩大改动」**：这 5 个键此前**不构成泄漏** —— `web/` 下对这 5 个名字的引用
+实测 **0 命中**。改的理由是「不下发」比「不渲染」可靠：少下发一个键，就少一次
+「将来加了个渲染点、忘了它没过滤」的机会。`is_authenticated` 的默认值仍是 **False**
+（失败关闭），漏传参数的后果是**少显示**而不是**多泄露**。
+
+**可观察路径**（守卫能成立的原因）：`core/auth.py:92-94 logout()` 只 `pop("local_admin")`，
+**不清**这 5 个键 —— 于是「登录过 → 退出 → 仍带着那份 cookie 浏览」的访客，
+会话里有内容而请求是匿名的，旧的 `build_page_context()` 会把内容原样下发。
+
+**三、三条反证（守卫不是在「已经对的代码」上顺手写的）**
+
+在已经是绿的代码上写断言，怎么写都绿。三处守卫都做了回退验证：
+
+| 回退动作 | 实测 |
+|---|---|
+| `app.py:176` 改回 `if True:` | ✅ 红：`匿名上下文下发了 agent_history 的内容: [{'content': 'probe-leak-marker', ...}]` |
+| 只把 `else` 分支的 `agent_history` 改回 `session.get(...)` | ✅ 红：`漏传 is_authenticated 时下发了 agent_history —— 默认值不再是失败关闭` |
+| 从 `#scope-form` 摘掉 `novalidate` | ✅ 红：`状态 1 的 submit 触发 0 次 —— novalidate 失效…` |
+
+第三条的**断言顺序是刻意排的**：先断言 `submit_events`、后断言 `novalidate` 属性。
+反过来，摘掉属性时会先报「属性不见了」（**症状**），而这条判据真正要抓的是它的
+**后果**（回调不执行、按钮点了没反应）。失败信息应当直接说后果。
+
+**四、本轮没做**
+
+| 没做的 | 为什么 |
+|---|---|
+| Cookie 4 KB 闸门（`MAX_SESSION_PAYLOAD_BYTES`） | 用户**已授权但钦定单独一轮**，且要求与 `app.py:243` 的登录守卫**同批上线** —— 4 KB 上限目前是确认执行闸门的**唯一**屏障 |
+| cookie 存储方式 / 导出配额 | 用户**未授权**；后者优先级低于 4 KB 闸门 |
+| 把 5 个 session 键从 session 里删掉 | 授权范围是「按登录态过滤」，不是改 Agent 行为 |
+| 真实外部扫描 | 全程 mock / 本机 fixture；浏览器验收用受控 `fetch` 桩，**不发任何网络请求** |
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1328 passed, 2 skipped, 0 failures（-o addopts=""，收集 1330）
+$ python -m pytest           # 1338 passed, 2 skipped, 0 failures（-o addopts=""，收集 1340）
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期
@@ -1871,6 +1983,11 @@ $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py  
 → **第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发 `1330`**（+3 条用例，
 另 **2 条既有用例被加强**：`test_page_without_scope_shows_creation_hint`
 与 `test_scan_center_page_renders_for_anonymous`，函数数不变）。
+→ **用户答复后收口：`novalidate` 四条验收 + 5 个 session 键按登录态过滤 `1340`**（+10 条用例：
+`test_scope_form_acceptance.py` 新文件 +9，`test_api_auth_contract.py` +1）。
+★ 收集数与通过数**同步 +10**、`skipped` **仍是 2** —— 本机有 Chrome，那条
+`skipif` 无 Chrome 的浏览器用例**真跑了**、没有落进 skip（否则 passed 只会 +9 而 skipped 变 3）。
+单看「passed +10」区分不出这两种情况，两处数字必须一起看。
 
 本轮 +3 = `tests/integration/test_public_scan_mode.py` **125 → 128**（+3）。
 ★ 其中 `test_scan_center_page_renders_for_anonymous` 的加强不是可选项：

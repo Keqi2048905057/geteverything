@@ -244,3 +244,99 @@ def test_anonymous_homepage_does_not_leak_scan_summary(admin_client, client, sto
     admin_focus = admin_client.get("/?domain=leaktarget.test").get_data(as_text=True)
     assert "当前目标" in admin_focus
     assert "leaktarget.test" in admin_focus
+
+
+#: ``build_page_context()`` 里按登录态过滤的 5 个 session 键（§3.16.5 第 1 条，
+#: 用户在 §3.16.8 第 2 问上确认「一并过滤」）。
+AGENT_SESSION_KEYS = [
+    "agent_history",
+    "agent_steps",
+    "pending_plan",
+    "uploaded_targets",
+    "agent_context",
+]
+
+
+def test_agent_session_keys_are_not_handed_to_anonymous_visitors(app_module, admin_client, client, monkeypatch):
+    """匿名首页**不得**拿到那 5 个 Agent 会话键的**内容**；管理员照常。
+
+    这 5 个键装的是 Agent 对话历史、待确认计划、上传目标与上下文。它们此前
+    **不构成泄漏**：``web/`` 下对这 5 个名字的引用是 0 命中（既没有渲染点、
+    也没有 JS 读它们）。但「不下发」比「不渲染」可靠 —— 少下发一个键，就少一次
+    「将来加了个渲染点、忘了它没过滤」的机会。所以按 ``is_authenticated`` 过滤。
+
+    ★ 怎么测才有意义：这 5 个键**没有渲染点**，所以不能断言「页面上看不到」——
+    那种断言在改动前后都通过，等于什么都没锁。能观察到的差别只有一处：
+    **上下文里这个键的值**。于是这里给 ``app.build_page_context`` 装一个**探针**：
+    它照常调用真函数并原样返回，只是顺手把返回的字典记下来。这样被观察的对象
+    就是模板**真正拿到**的那份上下文，而不是另造一个近似场景。
+
+    ★ 匿名侧**必须自带内容**，否则这条断言是空转：新建的匿名 ``client`` 会话本来
+    就是空的，「匿名上下文里没有 agent_history」在修复前后都成立。所以先用
+    ``session_transaction()`` 往匿名客户端里塞满这 5 个键 —— 这**不是**人为构造的
+    场景，而是一个真实状态：``core/auth.logout()`` 只 ``pop("local_admin")``，
+    **不清** ``agent_history`` 等键，于是「登录过 → 退出 → 仍带着那份 cookie 浏览」
+    的访客，会话里就有这些内容，而请求本身是匿名的。旧的 ``build_page_context()``
+    在这种请求上会把内容原样下发。
+
+    ★ 反向断言（管理员必须拿到）不是可有可无的：只钉「匿名为空」的话，
+    把整个键删掉、或者让 ``build_page_context()`` 永远返回空，都能通过。
+    """
+    probe_history = [{"role": "user", "content": "probe-leak-marker"}]
+    probe_plan = {"plan_id": "plan_probe", "message": "probe-leak-marker"}
+    probe_targets = ["probe-leak-marker.test"]
+    probe_context = {"note": "probe-leak-marker"}
+
+    def _seed(test_client):
+        """给这个客户端塞满 5 个键（不影响它是否已登录）。"""
+        with test_client.session_transaction() as sess:
+            sess["agent_history"] = list(probe_history)
+            sess["agent_steps"] = [{"step": "probe-leak-marker"}]
+            sess["pending_plan"] = dict(probe_plan)
+            sess["uploaded_targets"] = list(probe_targets)
+            sess["agent_context"] = dict(probe_context)
+
+    seen = []
+    real = app_module.build_page_context
+
+    def _spy(*args, **kwargs):
+        context = real(*args, **kwargs)
+        # ③ 顺手再问一次「漏传 is_authenticated 会怎样」：默认值是 False（失败关闭），
+        #    所以它必须与匿名侧一样空。同一次调用、同一个会话，差别只在那个参数。
+        without_flag = real(*args, **{key: value for key, value in kwargs.items() if key != "is_authenticated"})
+        seen.append((context, without_flag))
+        return context
+
+    monkeypatch.setattr(app_module, "build_page_context", _spy)
+
+    # ① 匿名首页 —— 会话里有内容，请求本身未登录。
+    _seed(client)
+    assert client.get("/").status_code == 200
+    assert len(seen) == 1, seen
+    anon_context, anon_without_flag = seen[0]
+
+    for key in AGENT_SESSION_KEYS:
+        assert not anon_context[key], f"匿名上下文下发了 {key} 的内容: {anon_context[key]!r}"
+        assert not anon_without_flag[key], f"漏传 is_authenticated 时下发了 {key} —— 默认值不再是失败关闭"
+    # 键**在**（不是被删掉）：模板拿到空列表 / None，而不是 Undefined。
+    assert "agent_history" in anon_context and "pending_plan" in anon_context
+    assert anon_context["agent_history"] == [] and anon_context["agent_steps"] == []
+    assert anon_context["pending_plan"] is None and anon_context["uploaded_targets"] is None
+    # 连内容本身都不能出现在上下文里（防止有人「只把 history 清掉、其余照发」）。
+    assert "probe-leak-marker" not in repr(anon_context), "匿名上下文里还残留着会话内容"
+
+    # ② 管理员首页：同一批键必须有内容 —— 修的是「谁看得见」，不是把功能删了。
+    seen.clear()
+    _seed(admin_client)
+    assert admin_client.get("/").status_code == 200
+    assert len(seen) == 1, seen
+    admin_context, admin_without_flag = seen[0]
+
+    assert admin_context["agent_history"] == probe_history, "管理员丢了 Agent 对话历史"
+    assert admin_context["agent_steps"] == [{"step": "probe-leak-marker"}]
+    assert admin_context["pending_plan"] == probe_plan
+    assert admin_context["uploaded_targets"] == probe_targets
+    assert admin_context["agent_context"] == probe_context
+    # ③ 的另一半：同一个带内容的会话，只要漏传标志，立刻退回空 —— 失败关闭。
+    for key in AGENT_SESSION_KEYS:
+        assert not admin_without_flag[key], f"漏传 is_authenticated 时下发了 {key} —— 默认值不再是失败关闭"

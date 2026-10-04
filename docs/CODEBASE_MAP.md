@@ -6,7 +6,7 @@
 > 凡提到「设计文档/方案」的地方，指的是开发机上的本机联调过程材料 —— 那两份文档
 > **不随仓库分发**，此处仅保留历史引用以说明当时的依据来源。
 >
-> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）** + **第 6 节 BUG 索引表 29 条行号全量复核与刷新（22 条漂移、3 条说法已不成立，见第 6 节开头的「行号批量刷新」说明）**（2026-10-03） + **§1～§18 逐节对照审计（无「漏做」的能力项）与 §9.33 页面级认证缺口收口（匿名 `action=chat` 需登录 + 匿名首页不再下发授权资产，第 6 节新增第 30 条症状）**（2026-10-04） + **第二轮「匿名可达面」审计：§9.34 匿名首页汇总泄漏收口 + 导出结果行重复修复（第 6 节新增第 31 条症状）**（2026-10-04） + **第三轮只读审计收口：§9.35 第一个授权范围建不出来（`#scope-form` 原生约束校验吞掉提交）+ 匿名 `/scan-center` 骨架全量下发收起 + 占位域改回 RFC 6761 保留域**（2026-10-04）**
+> **last-mapped：本机联调版 @ M4 + P0 加固 + P1（资产/观测/Diff/迁移，含前端对比）+ M7（mypy 清零、Diff 可点、SQLite 并发、本地 fixture HTTP 全链路 E2E、**测试报告**）+ M5 字典可移植性 + P0-7 幂等键/重试退避 + §16 Windows CI + P1 §19 Observability（结构化日志/关联 ID）+ §14 文档三件套与导出格式 400 收口 + Diff 属性别名归一 + P0-6 阶段一（Application Service 入口收拢）+ M6 环境自检脚本 + M7 测试报告 `docs/TEST_REPORT.md` + 测试运行期目录隔离修复 + P0-6 阶段二前置件 `docs/AGENT_ASYNC_IMPACT.md` + 公网授权测试模式体验版（见 §9.22）+ 下一阶段体验优化 Phase 1～3：UI 清理 / 公网授权入口（只读试算）/ Scan Profile = 工具组合 + 节奏（见 §9.23）+ Phase 4：结果体验 —— `GET /api/jobs/<id>/results` + `core/findings.py`（见 §9.24）+ 下一阶段规划方案 Phase 1（四步流程，`548d196`）+ Phase 2：Tool Registry —— 工具分组/说明、`/api/tools` 加 `groups`、`load_tools` 参数标准化（见 §9.25）+ **Phase 3：公网授权测试完善 —— 操作者 / 授权备注 / 扫描策略 / 限速 / 超时，五项全部走 `job.created` 事件 detail（**零 DDL**，见 §9.26）** + **规划方案第 6 节：目标自动匹配授权资产（`applyMatchedScope`，隐藏 Scope 而不删 Scope，见 §9.27）** + **方案第 13 节后端安全边界缺口回填 + 注册表两个读出点的分组视图收口（实现零改动，见 §9.28）** + **执行期双开关复检（`jobs/executor.py` 现在同时查 Scope 与环境开关，见 §9.29）+ Phase 1 四处审计缺口收口（提交当前输入 / 无协议 URL 归一 / `scope_id` 不再进文案 / 死代码清理）** + **第二轮只读审计的四处守卫/口径缺口收口（`tools`/`tool` 的 `or` 折叠、工具名守卫从注册表派生、策略说明副本、`rate_limit` 生效面如实写明，见 §9.30）** + **第 6 节 BUG 索引表 29 条行号全量复核与刷新（22 条漂移、3 条说法已不成立，见第 6 节开头的「行号批量刷新」说明）**（2026-10-03） + **§1～§18 逐节对照审计（无「漏做」的能力项）与 §9.33 页面级认证缺口收口（匿名 `action=chat` 需登录 + 匿名首页不再下发授权资产，第 6 节新增第 30 条症状）**（2026-10-04） + **第二轮「匿名可达面」审计：§9.34 匿名首页汇总泄漏收口 + 导出结果行重复修复（第 6 节新增第 31 条症状）**（2026-10-04） + **第三轮只读审计收口：§9.35 第一个授权范围建不出来（`#scope-form` 原生约束校验吞掉提交）+ 匿名 `/scan-center` 骨架全量下发收起 + 占位域改回 RFC 6761 保留域**（2026-10-04） + **用户答复后收口：§9.36 `novalidate` 四条验收（真实 Chrome + Flask 双层）+ `build_page_context()` 的 5 个 session 键按登录态过滤**（2026-10-04）**
 > 第 1～8 节记录的是改动前的**原仓库基线**（主线 `main` / `d86578a`），仍然准确描述 `modules/`、`agent/`、`storage.py` 与旧库结构；
 > **第 9 节**记录本机联调版新增/改写的部分（M0→M4 及之后的 P0 加固）。两者冲突时，第 9 节更新。
 
@@ -4069,4 +4069,101 @@ argv 传进去 → `no tests ran`（**exit=4**），而 `exit≠0` 会被判据�
 | 把 `#scope-form` 拆表单或移按钮 | 改动面与回归风险都大；`novalidate` 已修好且服务端校验一条没少。若更认可结构化解法，说一声即可改（`DECISIONS.md` §3.17.6 第 1 条） |
 | 匿名扫描中心改成「骨架可见、术语不可见」的中间态 | 我按「与首页同口径」选了完全收起；若要匿名**预览**流程当产品介绍，说一声即可改（`DECISIONS.md` §3.17.6 第 2 条） |
 | 改 `app.py` / `api/` / `core/` 任何一行 | 本轮两处修复**全在前端模板与静态资源**；服务端校验、Scope、Policy、审计、路由、表结构一行未改 |
+
+> ▶ **本节写作时**（第三轮审计收口）的状态就是上表，如实保留。**随后用户已答复全部待确认项**，
+> 落地见 §9.36 与 `docs/DECISIONS.md` §3.18（`novalidate` 四条验收 + 5 个 session 键过滤）。
+
+### 9.36 用户答复后的收口：`novalidate` 四条验收 + 5 个 session 键按登录态过滤（2026-10-04）
+
+依据：用户对 `docs/DECISIONS.md` §3.17.6 第 1 条答复「选 1（`novalidate`），再补一个验收」，
+给了四条判据；对 §3.16.8 第 1～3 条全部答复「认」；对 §3.16.6 只授权了 4 KB 闸门（单独一轮）。
+落地细节见 `docs/DECISIONS.md` §3.18、`docs/TEST_REPORT.md` §18。
+
+本节**没有新增症状**：第 6 节仍是 **33 条**。这轮是把「已认可的修法」补上**能证明它成立的判据**，
+不是又发现一个缺陷 —— 把落地轮硬塞进症状表会让索引表从「症状 → 位置」退化成「变更日志」。
+
+#### 9.36.1 `app.py:138-202`：`build_page_context()` 的 5 个 session 键按登录态过滤
+
+改动只有一处：原来**无条件**读 session 的 5 个键，现在整段包进 `if is_authenticated:`。
+
+| 键 | 匿名侧取值 | 管理员侧取值 |
+|---|---|---|
+| `agent_history` | `[]` | `_to_ui_history(session.get("agent_history", []))` |
+| `agent_steps` | `[]` | `session.get("agent_steps", [])` |
+| `pending_plan` | `None` | `session.get("pending_plan")` |
+| `uploaded_targets` | `None` | `session.get("uploaded_targets")` |
+| `agent_context` | `None` | `session.get("agent_context")` |
+
+**键保留、值为空**，不是删键：将来新增的模板渲染点拿到空列表而不是 `Undefined`，
+故障形态从「静默泄露内容」变成「显示空」。`is_authenticated` 的默认值仍是 **False**（失败关闭），
+漏传参数的后果是**少显示**而不是**多泄露**。
+
+**为什么这不是「扩大改动」**：`web/` 下对这 5 个名字的引用实测 **0 命中**
+（`grep -rn "agent_history\|agent_steps\|pending_plan\|uploaded_targets\|agent_context" web/` 无结果）
+—— 它们此前**不构成泄漏**。改的理由是「不下发」比「不渲染」可靠。
+
+**可观察路径**（这条值得记进地图，因为它解释了守卫为什么能成立）：
+`core/auth.py:92-94 logout()` 只 `pop("local_admin")`，**不清**这 5 个键。
+于是「登录过 → 退出 → 仍带着那份 cookie 浏览」的访客，会话里有内容而请求是匿名的 ——
+旧的 `build_page_context()` 在这种请求上会把内容原样下发。守卫正是用这个状态做前置于的，
+不是人为构造（探测证据见 §9.36.3）。
+
+#### 9.36.2 `tests/integration/test_scope_form_acceptance.py`（**新文件，9 条**）
+
+| 用例 | 层次 | 关键判据 |
+|---|---|---|
+| `test_legitimate_scope_submits_and_attaches_to_project` | Flask | ③ 走**两步**：`POST /api/scopes` 201 → `POST /api/projects/<id>/scopes` 201；再查列表与项目详情 |
+| `test_direct_api_bypass_is_still_rejected_by_the_server`（4 个参数） | Flask | ④ 状态码 + `error_code` + **库里 Scope 数没变** |
+| `test_illegal_scope_payloads_are_rejected_for_four_distinct_reasons` | Flask | ④ 的四组输入必须给出**四条互不相同**的 `error_message`，且关键短语（通配符 / 网段 / `allowed_domains`）仍在 —— 防止「无论什么非法输入都回同一句」把参数化退化成「同一件事测三遍」 |
+| `test_direct_api_bypass_is_still_rejected_for_anonymous` | Flask | ④（续）合法 payload 的匿名请求必须 401，管理员同 payload 必须 201 |
+| `test_scope_form_js_error_paths_are_wired` | 源码契约 | ①/② 的 CI 兜底：两条文案仍写在 `setText("scope-feedback", …)` 上、`#scope-feedback` 存在、`novalidate` 在 form 标签上 |
+| `test_scope_form_novalidate_acceptance_in_real_browser` | **真实 Chrome** | ①/②/③ 的浏览器侧；标 `slow` + `skipif` 无 Chrome |
+
+四条判据为何分居不同层，逐条理由写在文件 docstring 的表格里（**不重复 §9.35.2 的机制说明**）。
+两个实现细节值得单独记：
+
+1. **harness 里的表单是页面里那一份**。上一轮探针用 `stage.innerHTML = REAL_FORM` **逐状态重建**
+   表单 —— 那样测到的是浏览器原生校验，`bindScopeForm` 的监听器根本不在新元素上，
+   等于「测了个假对象」。新 harness 把 `#scope-form` 直接写在 body 里，之后的改动都是**改活 DOM**。
+2. **`scan_center.js` 内联进 harness**，不写 `<script src="file://…">`：file:// 之间是 opaque
+   origin，Chrome 对 file→file 的资源加载有额外策略；内联的仍是**从磁盘读出来的那一份原文**
+   （测试里直接 `read_text`）。同时把 `fetch` 换成**受控桩**（GET→401 让 `loadMetadata()`
+   走它自己那条安静跳过分支、POST→记录请求并回 400 真实形状），于是「JS 有没有吞掉服务端理由」
+   可断言，而「payload 合不合法」仍由 Flask 用例判定。
+
+**①的实测结果**（修复后，本机 Chrome）：
+
+| 状态 | `submit` 触发 | `#scope-feedback` | 发出的请求 |
+|---|---|---|---|
+| 1 空表单 | **1**（修复前 **0**） | 「还没有授权项目，请先在上面的表单里创建一个。」 | 0 |
+| 2 有项目无域名 | 2（累计；修复前 **0**） | 「至少填一个授权域名或授权网段。」 | 0 |
+| 3 填 `*` | 3（累计） | 「添加失败: 不允许使用全放行通配符，请显式列出允许的域名」 | 1 条，body 里 `allowed_domains: ["*"]` |
+
+状态 1 另断言 `checkValidity() is False` 且 `:invalid` 含 `#job-project` —— 原生校验**仍认为表单无效**，
+我们绕的是**事件**不是**校验**；这与「删掉 `required`」是两件不同的事，那种修法会让这条变红。
+
+#### 9.36.3 探测证据（`%TEMP%`，不入库）
+
+| 探针 | 量了什么 | 结论 |
+|---|---|---|
+| `gef_novalidate_server.py` | ⑥ 组输入打 `POST /api/scopes` 的状态码 / `error_code` / **新建 Scope 数** | 空 allow 规则 → 400 `bad_request`；`*`、`not a domain`、`0.0.0.0/0` → 400 `invalid_target`；合法 → 201 且新建 1 个；匿名合法 payload → 401 且 0 个。**四组非法输入覆盖两条不同拒绝路径**（`api/scopes.py:55-56` 与 `core/scope.py:215-224`） |
+| 临时改回修复前（`if is_authenticated:` → `if True:`） | 5 键过滤守卫会不会红 | **会**：`匿名上下文下发了 agent_history 的内容: [{'content': 'probe-leak-marker', 'role': 'user'}]` |
+| 只把 `else` 分支的 `agent_history` 改回 `session.get(...)` | 「漏传 `is_authenticated`」那条断言会不会红 | **会**：`漏传 is_authenticated 时下发了 agent_history —— 默认值不再是失败关闭` |
+
+后两条是**反证**：守卫不是在「已经对的代码」上顺手写的，把修复回退一步它就会红。
+
+#### 9.36.4 路由 / 表结构 / 接口
+
+**零变更**。48 rules / 50 bindings / 42 个 `/api/*` 不变；无 DDL、无新迁移；
+`api/`、`core/`、`jobs/`、`modules/`、`storage.py` **一行未改**。
+本轮只改 `app.py`（1 处判断 + docstring）与两个测试文件（1 新增 / 1 追加）。
+
+#### 9.36.5 本轮**没做**的
+
+| 没做的 | 为什么 |
+|---|---|
+| Cookie 4 KB 闸门（`MAX_SESSION_PAYLOAD_BYTES`） | 用户**已授权但指定「单独一轮」**，且要求与 `app.py:243` 的登录守卫**同批上线**（4 KB 上限目前是确认执行闸门的**唯一**屏障）。本轮不开工，见 `DECISIONS.md` §3.18.5 |
+| cookie 存储方式 / 导出配额 | 用户**未授权**。前者属架构改动；后者优先级低于 4 KB 闸门 |
+| 把 5 个 session 键从 session 里删掉 | 授权范围是「按登录态过滤」，不是改 Agent 行为 |
+| 真实外部扫描 | 全程 mock / 本机 fixture；浏览器验收用**受控 `fetch` 桩**，不发任何网络请求 |
 
