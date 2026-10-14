@@ -256,6 +256,9 @@ def _step_to_dict(row) -> dict:
         "duration_ms": row["duration_ms"] if "duration_ms" in keys else None,
         "command_preview": row["command_preview"] if "command_preview" in keys else None,
         "parser_version": row["parser_version"] if "parser_version" in keys else None,
+        # 「工具为什么什么都没找到」的唯一线索：数据源不可用 / DNS 失败 /
+        # 缺 API Key / 网络错误基本只会出现在 stderr 里。已由 runner 脱敏截断。
+        "stderr_preview": row["stderr_preview"] if "stderr_preview" in keys else None,
     }
 
 
@@ -1113,12 +1116,17 @@ def finish_step(
     duration_ms: int | None = None,
     command_preview: str | None = None,
     parser_version: str | None = None,
+    stderr_preview: str | None = None,
 ) -> None:
     """写入步骤结果。
 
     M4 起除 M3 的字段外，还写入结构化观测（``observations_json``）与执行
     元数据（``duration_ms`` / ``command_preview`` / ``parser_version``），
     任务详情页据此展示状态码、标题、技术栈与原始证据入口。
+
+    ``stderr_preview`` 是**脱敏后**的 stderr 截断预览（由 runner 侧
+    ``scrub_text`` 处理，见 ``core/runner_result.py``）。它是「工具零结果
+    到底是数据源不可用、还是目标真的没资产」的唯一线索。
     """
     with db.transaction() as conn:
         conn.execute(
@@ -1128,7 +1136,7 @@ def finish_step(
                    error_code = ?, error_message = ?, exit_code = ?,
                    artifact_id = COALESCE(?, artifact_id),
                    observations_json = ?, duration_ms = ?, command_preview = ?,
-                   parser_version = ?
+                   parser_version = ?, stderr_preview = ?
              WHERE id = ?
             """,
             (
@@ -1144,6 +1152,7 @@ def finish_step(
                 duration_ms,
                 command_preview,
                 parser_version,
+                stderr_preview,
                 step_id,
             ),
         )

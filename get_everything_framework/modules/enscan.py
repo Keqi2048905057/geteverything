@@ -13,6 +13,50 @@ from core.errors import ErrorCode
 
 from .base import BaseRunner, _decode, _exit_code_to_error
 
+#: ENScan 的查询渠道要求「安全验证」时，打在输出里的特征串。
+#:
+#: 真实样本（``results/artifacts`` 里那次真实运行留下的 stderr，ANSI 颜色
+#: 转义原样保留）::
+#:
+#:     [ERR] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！
+#:     https://aiqicha.baidu.com/
+#:
+#: 只认「安全验证」一个短语：它同时覆盖 ``需要安全验证`` 与
+#: ``请打开浏览器进行验证`` 两种措辞。这个判断只在 enscan 自己的输出上跑，
+#: 不会误伤别的工具。
+_SECURITY_VERIFICATION_MARKER = "安全验证"
+
+#: 命中特征时给使用者看的话。**它必须与「零结果」区分开**：查询没有做完，
+#: 不是「目标没有资产」。前半句是结论，后半句是使用者自己能做的处置。
+_AQC_BLOCKED_MESSAGE = (
+    "爱企查（AQC）要求安全验证，本次查询未完成："
+    "请先在浏览器完成验证，或在设置页配置有效的 AQC Cookie 后重试"
+)
+_SOURCE_BLOCKED_MESSAGE = "外部数据源要求安全验证，本次查询未完成：请先在浏览器完成验证后重试"
+
+#: 消息里点名具体渠道对使用者更有用；命中这些串说明拦路的是爱企查。
+_AQC_MARKERS = ("AQC", "aiqicha")
+
+
+def _security_verification_notice(*streams):
+    """在工具输出里找「外部数据源要求安全验证」的证据。
+
+    为什么单独做一个函数：这段判断在三条路径上都要用（非零退出、超时、
+    退出码 0），散着写三份迟早会漏掉一条。
+
+    Args:
+        *streams: 子进程的 stderr / stdout；``None`` 与空串都安全。
+
+    Returns:
+        str | None: 命中的中文说明；没命中返回 ``None``。
+    """
+    for text in streams:
+        if text and _SECURITY_VERIFICATION_MARKER in text:
+            if any(marker in text for marker in _AQC_MARKERS):
+                return _AQC_BLOCKED_MESSAGE
+            return _SOURCE_BLOCKED_MESSAGE
+    return None
+
 
 class ENScanRunner(BaseRunner):
     def __init__(self):
@@ -127,13 +171,33 @@ class ENScanRunner(BaseRunner):
             )
             return []
         except subprocess.TimeoutExpired as exc:
+            stdout = _decode(exc.stdout)
+            stderr = _decode(exc.stderr)
+            # 真实运行里最常见的就是这一条：ENScan 每 10 秒重试一次 AQC 的
+            # 安全验证，永远等不到它自己退出，于是**由我们**在超时后掐掉。
+            # 只报「执行超过 120 秒」会把人引向「工具太慢」，而真正的原因是
+            # 数据源要求人工验证 —— 必须如实点名。
+            notice = _security_verification_notice(stderr, stdout)
+            if notice:
+                print(f"[!] enscan 被安全验证阻断（{self._timeout_seconds()} 秒内未完成）")
+                self._record_execution(
+                    self.build_command(keyword),
+                    started=started,
+                    exit_code=None,
+                    stdout=stdout,
+                    stderr=stderr,
+                    error_code=ErrorCode.SOURCE_BLOCKED,
+                    error_message=f"{notice}（进程在 {self._timeout_seconds()} 秒后被强制终止）",
+                    status="timeout",
+                )
+                return []
             print("[!] enscan 扫描超时")
             self._record_execution(
                 self.build_command(keyword),
                 started=started,
                 exit_code=None,
-                stdout=_decode(exc.stdout),
-                stderr=_decode(exc.stderr),
+                stdout=stdout,
+                stderr=stderr,
                 error_code=ErrorCode.TIMEOUT,
                 error_message=f"执行超过 {self._timeout_seconds()} 秒，已强制终止",
                 status="timeout",
@@ -155,6 +219,22 @@ class ENScanRunner(BaseRunner):
             print(f"[!] enscan 退出码 {returncode}")
             print(f"    stdout: {(stdout or '')[:500]}")
             print(f"    stderr: {(stderr or '')[:500]}")
+            # 非零退出**未必**是「未知错误」：被安全验证拦下时 ENScan 也会
+            # 以非零码收场。那时如实报「数据源受阻」比报「工具退出码 1」
+            # 有用得多 —— 后者会让人去查工具安装，而问题根本不在本机。
+            notice = _security_verification_notice(stderr, stdout)
+            if notice:
+                self._record_execution(
+                    self.build_command(keyword),
+                    started=started,
+                    exit_code=returncode,
+                    stdout=stdout,
+                    stderr=stderr,
+                    error_code=ErrorCode.SOURCE_BLOCKED,
+                    error_message=f"{notice}（工具退出码 {returncode}）",
+                    status="failed",
+                )
+                return []
             self._record_execution(
                 self.build_command(keyword),
                 started=started,
@@ -165,6 +245,30 @@ class ENScanRunner(BaseRunner):
                 error_message=f"工具退出码 {returncode}",
                 status="failed",
             )
+            return []
+
+        # 退出码 0 也不代表查询做完了：ENScan 在 AQC 被拦时可能一边打印
+        # 验证提示、一边以 0 退出（真实样本见 ``results/artifacts``）。
+        # 这一条必须在**任何「成功」记录之前**判掉，否则会落到下面
+        # ``_record_execution(..., status 默认 success)`` 上，被
+        # ``RunnerResult.ok([])`` 翻译成 ``no_results`` —— 页面上就成了
+        # 「执行成功但零结果」，与「目标真的没有资产」完全无法区分。
+        notice = _security_verification_notice(stderr, stdout)
+        if notice:
+            print("[!] enscan 被安全验证阻断（进程退出码为 0，但查询未完成）")
+            self._record_execution(
+                self.build_command(keyword),
+                started=started,
+                exit_code=returncode,
+                stdout=stdout,
+                stderr=stderr,
+                error_code=ErrorCode.SOURCE_BLOCKED,
+                error_message=notice,
+                status="failed",
+            )
+            # **不解析、不返回任何域名**：被拦截时那点输出不是完整结果，
+            # 把它当成「查到的资产」等于用残缺数据冒充完整答案。
+            # 但证据照旧留在 last_execution 里，由 executor 落盘。
             return []
 
         self._record_execution(

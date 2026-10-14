@@ -175,8 +175,15 @@ def test_httpx_tolerates_broken_json_lines(results_dir):
     assert [item["url"] for item in items] == ["https://a.example.test", "https://b.example.test"]
 
 
-def test_httpx_without_candidates_reports_no_results(results_dir, monkeypatch):
-    """没有候选目标 = 前置数据缺失，不能算工具故障。"""
+def test_httpx_without_candidates_reports_no_input(results_dir, monkeypatch):
+    """没有候选目标 = 前置数据缺失，**这一步根本没执行**。
+
+    这里曾经断言 ``status == "success"`` / ``error_code == no_results``，
+    于是页面上出现「成功 / 结果数 0 / no_results / 耗时 0ms / 命令 —」，
+    与「httpx 跑了一遍、确实没有存活站点」完全分不开（见
+    ``tests/unit/test_result_pipeline_diagnosis.py`` 的 D2 用例）。
+    正确语义是 ``skipped`` + ``no_input``：既不是成功，也不是工具故障。
+    """
     from modules.httpx import HttpxRunner
 
     runner = HttpxRunner()
@@ -184,21 +191,21 @@ def test_httpx_without_candidates_reports_no_results(results_dir, monkeypatch):
 
     with pytest.raises(RunnerInputError) as excinfo:
         runner.run_scan("example.test")
-    assert excinfo.value.error_code == ErrorCode.NO_RESULTS
-    assert excinfo.value.status == "success"
+    assert excinfo.value.error_code == ErrorCode.NO_INPUT
+    assert excinfo.value.status == "skipped"
 
 
-def test_httpx_run_wraps_missing_candidates_as_success_no_results(results_dir, monkeypatch):
-    """经 ``run()`` 包装后：status=success + error_code=no_results。"""
+def test_httpx_run_wraps_missing_candidates_as_skipped(results_dir, monkeypatch):
+    """经 ``run()`` 包装后：status=skipped + error_code=no_input，且不算失败。"""
     from modules.httpx import HttpxRunner
 
     runner = HttpxRunner()
     monkeypatch.setattr(runner, "_load_candidates", lambda domain: [])
     result = runner.run("example.test")
 
-    assert result.status == "success"
-    assert result.error_code == ErrorCode.NO_RESULTS
-    assert not result.is_failure
+    assert result.status == "skipped"
+    assert result.error_code == ErrorCode.NO_INPUT
+    assert not result.is_failure, "「上游没有目标」不是工具失败"
 
 
 def test_httpx_cleans_up_input_file_on_failure(results_dir, monkeypatch):

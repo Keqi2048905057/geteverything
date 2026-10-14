@@ -46,6 +46,7 @@
 
   var ERROR_CODE_LABELS = {
     no_results: "执行成功但零结果（不是失败）",
+    no_input: "缺少上游目标，未执行（先跑子域发现工具）",
     tool_not_found: "工具未安装或不在 PATH",
     permission_denied: "没有执行权限",
     invalid_target: "目标非法",
@@ -56,6 +57,7 @@
     rate_limited: "被限流",
     partial_success: "部分成功",
     config_error: "配置指向的文件缺失（例如字典未下载）",
+    source_blocked: "外部数据源要求安全验证，本次查询未完成（不是零结果）",
     unknown_error: "未知错误",
   };
 
@@ -319,7 +321,15 @@
       row.appendChild(el("td", "mono", step.target));
       row.appendChild(el("td", null, (STEP_STATUS_LABELS[step.status] || step.status)));
       row.appendChild(el("td", "mono", step.found_count));
-      row.appendChild(el("td", "mono" + (step.error_code ? " err" : ""), step.error_code || "—"));
+      // 错误码列：显示中文口径并把原始码放进 title。
+      // 「跑了但零结果」（no_results）与「上游没目标、这一步没执行」（no_input）
+      // 是两种完全不同的情况，只用英文码并列显示时很容易被当成同一回事。
+      var codeCell = el("td", "mono" + (step.error_code ? " err" : ""), step.error_code || "—");
+      var codeHint = errorHint(step.error_code);
+      if (codeHint) {
+        codeCell.title = codeHint;
+      }
+      row.appendChild(codeCell);
       row.appendChild(el("td", "mono", step.duration_ms === null || step.duration_ms === undefined ? "—" : step.duration_ms + " ms"));
       row.appendChild(el("td", "mono preview", step.command_preview || "—"));
 
@@ -358,6 +368,19 @@
         msgCell.textContent = step.error_message;
         msgRow.appendChild(msgCell);
         tbody.appendChild(msgRow);
+      }
+
+      // 工具自己的 stderr（已脱敏截断）。「零结果」到底是因为数据源不可用、
+      // 缺 API Key、还是目标真的没有资产，往往只有这一段能说明白 ——
+      // 没有它，页面上「成功 / 0」和「真的没有资产」长得一模一样。
+      if (step.stderr_preview) {
+        var errRow = el("tr", "step-message");
+        var errCell = el("td", "hint");
+        errCell.colSpan = 8;
+        errCell.appendChild(el("strong", null, "工具输出（stderr）："));
+        errCell.appendChild(el("pre", "mono preview", step.stderr_preview));
+        errRow.appendChild(errCell);
+        tbody.appendChild(errRow);
       }
     });
     table.appendChild(tbody);

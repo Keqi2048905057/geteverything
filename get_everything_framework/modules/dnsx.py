@@ -46,16 +46,28 @@ class DnsxRunner(BaseRunner):
 
     def _load_candidates(self, domain):
         """
-        从 ScanResultStore 加载已有子域名候选列表。
+        加载 DNS 解析的候选域名列表。
 
-        如果存储中没有该域名的子域名记录，则退化为仅返回目标域名本身。
+        来源优先级（这是修「上游结果传不到下游」的关键）：
+
+        1. **本次任务的上游观测** —— 执行器在 ``run()`` 之前通过
+           :meth:`BaseRunner.set_upstream_candidates` 注入。只要有注入
+           （哪怕是空列表），就以它为准：它代表「这个任务里前面的工具实际
+           扫到了什么」，而不是历史库里陈旧的记录；
+        2. 旧库 ``ScanResultStore`` —— 兼容 `/api/tool/<n>/run` 这类
+           不经任务链的单工具直跑（老路径，行为保持不变）；
+        3. 仍然为空时退化为仅返回目标域名本身。
 
         Args:
             domain: 目标域名字符串
 
         Returns:
-            去重后的子域名候选列表，至少包含目标域名
+            去重后的域名候选列表，至少包含目标域名
         """
+        if self.has_upstream_candidates():
+            injected = list(self.upstream_candidates or [])
+            return injected or [domain]
+
         rows = self.store.get_results_by_domain(domain)
         candidates = list(dict.fromkeys(subdomain for subdomain, _, _ in rows))
         if not candidates:

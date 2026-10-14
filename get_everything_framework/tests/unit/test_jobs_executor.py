@@ -267,6 +267,171 @@ def test_real_step_rechecks_target_still_in_scope(scope_id, monkeypatch):
     assert result["status"] == jobs_store.STATUS_SUCCEEDED
 
 
+# ── 同任务内的上下游依赖（subfinder → httpx / dnsx） ──────────
+#
+# 历史缺陷：``httpx`` / ``dnsx`` 的候选列表来自 ``ScanResultStore``（旧同步链的
+# 库），而异步任务链从不写那个库，于是同一个任务里 ``subfinder`` 明明扫到了
+# 子域名，紧接着的 ``httpx`` 依然报「没有可供 httpx 探测的目标」。
+# 下面两条用例钉住修复后的两种语义。
+
+
+def _active_scope(domains=("example.test",)):
+    from core import scope_store
+
+    return scope_store.create(
+        name="上下游依赖范围", allowed_domains=list(domains), active_scan=True
+    ).id
+
+
+def test_downstream_step_receives_upstream_candidates(scope_id, monkeypatch):
+    """任务按 subfinder → httpx 跑：httpx 必须拿到 subfinder 扫出来的子域名。"""
+    import modules.registry as registry
+    from core.runner_result import Observation, RunnerResult
+
+    seen: dict = {}
+
+    class _Upstream:
+        tool_name = "subfinder"
+        category = "subdomain"
+        last_execution: dict = {}
+
+        def set_upstream_candidates(self, values):
+            seen["upstream_called_on_subfinder"] = values
+
+        def run(self, target):
+            return RunnerResult.ok(
+                [Observation(category="subdomain", value="api.example.test")]
+            )
+
+    class _Downstream:
+        tool_name = "httpx"
+        category = "web"
+        last_execution: dict = {}
+
+        def set_upstream_candidates(self, values):
+            seen["httpx_candidates"] = values
+
+        def run(self, target):
+            assert seen.get("httpx_candidates"), "httpx 没有拿到上游候选"
+            return RunnerResult.ok([])
+
+    monkeypatch.setattr(
+        registry,
+        "build_runner",
+        lambda name: _Downstream() if name == "httpx" else _Upstream(),
+    )
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+
+    active = _active_scope()
+    job = _make_job(active, targets=["example.test"], tools=["subfinder", "httpx"], mode="real")
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+    execute_job(job["id"])
+
+    # 上游工具（subfinder）自己不需要候选清单，不该被注入。
+    assert "upstream_called_on_subfinder" not in seen
+    # 下游工具拿到的是上游真正产出的那条子域名。
+    assert seen.get("httpx_candidates") == ["api.example.test"]
+
+
+def test_downstream_step_without_candidates_is_skipped_not_succeeded(scope_id, monkeypatch):
+    """上游确实一条都没扫到：下游应报 ``skipped`` / ``no_input``，不是成功。"""
+    import modules.registry as registry
+    from core.runner_result import RunnerResult
+
+    class _Upstream:
+        tool_name = "subfinder"
+        category = "subdomain"
+        last_execution: dict = {}
+
+        def run(self, target):
+            return RunnerResult.ok([])  # 工具跑通、零结果
+
+    class _Downstream:
+        tool_name = "httpx"
+        category = "web"
+        last_execution: dict = {}
+        upstream_candidates: list = []
+
+        def set_upstream_candidates(self, values):
+            # 执行器必须明确告知「上游是空的」，而不是不告知。
+            assert values == [], f"上游为空时应注入空列表，实际: {values!r}"
+            self.upstream_candidates = values
+
+        def run(self, target):
+            # 忠实重现真实 HttpxRunner 的行为：没有候选就抛
+            # ``RunnerInputError``（这一步没执行）。真实 runner 的异常由
+            # ``BaseRunner.run()`` 经 ``result_from_exception`` 翻译成
+            # ``RunnerResult``，这里用同一个函数做同样的翻译，
+            # 而不是自己编一个结果。
+            from core.errors import ErrorCode
+            from core.runner_result import STATUS_SKIPPED, RunnerInputError, result_from_exception
+
+            if not self.upstream_candidates:
+                raise_this = RunnerInputError(
+                    ErrorCode.NO_INPUT,
+                    f"没有可供 httpx 探测的目标: {target}",
+                    status=STATUS_SKIPPED,
+                )
+                return result_from_exception(
+                    raise_this, tool_name="httpx", target=target
+                )
+            raise AssertionError("上游为空时不该产出结果")
+
+    monkeypatch.setattr(
+        registry,
+        "build_runner",
+        lambda name: _Downstream() if name == "httpx" else _Upstream(),
+    )
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+
+    active = _active_scope()
+    job = _make_job(active, targets=["example.test"], tools=["subfinder", "httpx"], mode="real")
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+    execute_job(job["id"])
+
+    steps = {step["tool_name"]: step for step in jobs_store.list_steps(job["id"])}
+    assert steps["subfinder"]["status"] == jobs_store.STEP_SUCCEEDED
+    assert steps["httpx"]["error_code"] == "no_input"
+
+
+def test_standalone_downstream_step_keeps_legacy_path(scope_id, monkeypatch):
+    """任务里**只有** httpx（没有上游步骤）时不注入，runner 沿用老路径。
+
+    这是「我已经有子域名清单，只想跑 httpx」的用法：此时没有上游可言，
+    注入空列表会让 httpx 直接报 no_input，把合法用法打断。
+    """
+    import modules.registry as registry
+    from core.runner_result import RunnerResult
+
+    seen: dict = {}
+
+    class _Runner:
+        tool_name = "httpx"
+        category = "web"
+        last_execution: dict = {}
+
+        def set_upstream_candidates(self, values):  # pragma: no cover
+            seen["injected"] = values
+
+        def run(self, target):
+            return RunnerResult.ok([])
+
+    monkeypatch.setattr(registry, "build_runner", lambda name: _Runner())
+    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+
+    active = _active_scope()
+    job = _make_job(active, targets=["example.test"], tools=["httpx"], mode="real")
+    jobs_store.claim_next_job("w1", lease_seconds=300)
+    execute_job(job["id"])
+
+    assert "injected" not in seen, "没有上游步骤时不该注入候选"
+#
+# 创建期的两道闸门（`core.safety.resolve_mode` / `Scope.require_active_scan`）都在
+# **任务落库那一刻**就结束了。任务在队列里排队、租约过期被重试、worker 重启补做
+# 的期间，环境开关可能被关掉、Scope 的 active_scan 可能被收紧。下面两条用例造出
+# 「下单时合规、出餐时不合规」的时间差，钉住执行期必须各自再读一次。
+
+
 # ── 执行期的「真实扫描」双开关复检（方案第 13 节 Real Mode 控制） ──
 #
 # 创建期的两道闸门（`core.safety.resolve_mode` / `Scope.require_active_scan`）都在

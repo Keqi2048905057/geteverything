@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from config import HTTPX_CONFIG, OUTPUT_DIR
 from core.errors import ErrorCode
-from core.runner_result import Observation, RunnerInputError
+from core.runner_result import STATUS_SKIPPED, Observation, RunnerInputError
 from storage import ScanResultStore
 
 from .base import BaseRunner
@@ -65,14 +65,22 @@ class HttpxRunner(BaseRunner):
 
     def _load_candidates(self, domain: str) -> List[str]:
         """
-        从 ScanResultStore 加载已有子域名候选列表。
+        加载 HTTP 探测的候选目标列表。
 
-        Args:
-            domain: 目标域名字符串
+        来源优先级（这是修「上游结果传不到下游」的关键）：
 
-        Returns:
-            去重后的子域名候选列表
+        1. **本次任务的上游观测** —— 执行器在 ``run()`` 之前通过
+           :meth:`BaseRunner.set_upstream_candidates` 注入。历史实现的致命
+           问题就在这一步：``ScanResultStore`` 是**旧同步链**的库，而异步任务
+           链只写 ``observations`` / ``assets`` / ``job_steps``，从不写那个库。
+           于是同一个任务里 ``subfinder`` 扫到 62 条子域名，紧接着的 ``httpx``
+           仍然报「没有可供探测的目标」；
+        2. 旧库 ``ScanResultStore`` —— 兼容单工具直跑的老路径；
+        3. 都没有则返回空列表，由 ``run_scan`` 如实报告「没有目标」。
         """
+        if self.has_upstream_candidates():
+            return list(self.upstream_candidates or [])
+
         rows = self.store.get_results_by_domain(domain)
         return list(dict.fromkeys(subdomain for subdomain, _, _ in rows))
 
@@ -326,11 +334,18 @@ class HttpxRunner(BaseRunner):
         """
         targets = list(dict.fromkeys(candidates or self._load_candidates(domain)))
         if not targets:
-            # 没有候选目标属于「前置数据缺失」，不是工具故障。
+            # 没有候选目标 = **前置数据缺失，进程根本没启动**。
+            #
+            # 这里曾经用 ``status="success"``，后果是页面上出现
+            # 「状态=成功 / 结果数=0 / 错误码=no_results / 耗时=0ms / 命令=—」——
+            # 与「httpx 真的跑了一遍、确实没有存活站点」完全无法区分，
+            # 排查时会把矛头指向数据源或目标本身。
+            # 现在用 ``skipped`` + ``no_input`` 如实表达「这一步没有执行」。
             raise RunnerInputError(
-                ErrorCode.NO_RESULTS,
-                f"没有可供 httpx 探测的目标: {domain}（请先跑子域发现工具）",
-                status="success",
+                ErrorCode.NO_INPUT,
+                f"没有可供 httpx 探测的目标: {domain}"
+                f"（本次任务的上游步骤没有产出任何子域名，此步骤未执行）",
+                status=STATUS_SKIPPED,
             )
 
         output_file = self._build_json_output_file(domain)

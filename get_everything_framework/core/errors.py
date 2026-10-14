@@ -27,10 +27,26 @@ class ErrorCode:
 
     # 非工具类错误码：本机联调版在 API 层直接使用。
     NO_RESULTS = "no_results"
+    # **前置数据缺失**：这一步压根没有执行（进程未启动），因为它的上游没有
+    # 产出任何可用的目标。与 ``no_results``（工具跑通了、但确实没发现东西）
+    # 必须分开：前者要看上游，后者要看数据源/目标本身，排查方向完全相反。
+    NO_INPUT = "no_input"
     # 配置指向的外部资源缺失（当前只有一处：字典文件不存在）。
     # 语义上既不是「工具没装」（tool_not_found）也不是「目标非法」
     # （invalid_target），而是**使用者的配置问题**，必须能单独报出来。
     CONFIG_ERROR = "config_error"
+    # **外部数据源受阻**：查询渠道本身要求先通过「安全验证」（人机校验 /
+    # 登录态失效），于是这次查询**没有完成**。
+    #
+    # 为什么不能复用既有错误码：
+    # * ``no_results`` 是「跑通了、确实没有」——把它当成零结果就是本码要修
+    #   的那个 bug（页面上会显示成「执行成功但零结果」）；
+    # * ``rate_limited`` 是「被限流、等一会儿再来」，而安全验证**再等也不会
+    #   自己好**，必须由人去完成验证，混用会把使用者引向无限重试；
+    # * ``network_error`` 不成立（网络是通的，服务端明确回了校验要求）；
+    # * ``config_error`` 是「本机配置指向的文件缺失」，而这里可能压根不是
+    #   配置问题（有 Cookie 也会被风控拦）。
+    SOURCE_BLOCKED = "source_blocked"
     UNAUTHENTICATED = "unauthenticated"
     BAD_REQUEST = "bad_request"
     NOT_FOUND = "not_found"
@@ -49,7 +65,9 @@ class ErrorCode:
         PARTIAL_SUCCESS,
         UNKNOWN_ERROR,
         NO_RESULTS,
+        NO_INPUT,
         CONFIG_ERROR,
+        SOURCE_BLOCKED,
         UNAUTHENTICATED,
         BAD_REQUEST,
         NOT_FOUND,

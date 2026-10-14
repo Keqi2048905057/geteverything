@@ -1,0 +1,13 @@
+[[34mINF[0m] 【1/1】正在获取 ⌈example.test⌋ 信息 [icp weibo wechat app wx_app]
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 
+[[31mERR[0m] 【AQC】需要安全验证，请打开浏览器进行验证后操作，10秒后重试！ https://aiqicha.baidu.com/ 

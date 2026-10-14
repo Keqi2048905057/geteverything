@@ -78,6 +78,51 @@ class BaseRunner:
         self.last_execution: dict = {}
         # 执行前清理旧输出文件失败时的警告（见 _clear_stale_output）。
         self._stale_output_warning: str | None = None
+        # 本次任务**上游**已经产出的候选目标（见 set_upstream_candidates）。
+        # ``None`` 表示「调用方没给」，此时下游工具沿用历史上的老行为
+        # （去读旧库 ScanResultStore）。
+        self.upstream_candidates: list[str] | None = None
+
+    # ── 上游候选注入（同任务内的工具链依赖） ────────────────
+
+    def set_upstream_candidates(self, values) -> None:
+        """把**同一个任务里上游工具已经产出的目标**交给本 runner。
+
+        为什么需要这个入口：``dnsx`` / ``httpx`` 这类工具本身不接受「一个域名
+        扫全网」，它们要的是一份候选清单。历史实现让它们去读
+        ``storage.ScanResultStore``（``results/scan_results.db``），但
+        **异步任务链从不写那个库**（``storage.save_results`` 在生产代码里已无
+        调用方），于是同一个任务里 ``subfinder`` 明明扫到了几十条子域名，
+        紧接着的 ``httpx`` 仍然报「没有可供 httpx 探测的目标」——
+        上游结果永远传不到下游。
+
+        这里只提供一个**显式注入点**：由执行器在 ``run()`` 之前把本任务已有的
+        上游观测交进来。谁读、怎么读由各子类的 ``_load_candidates`` 决定，
+        基类不替它们做选择，也不改变任何工具的参数语义。
+
+        Args:
+            values: 候选字符串列表（可为 ``None`` / 空，含义是「上游确实没有
+                产出任何可用目标」——这与「调用方没给」是两件事，见
+                :meth:`has_upstream_candidates`）。
+        """
+        cleaned: list[str] = []
+        for value in values or []:
+            text = str(value or "").strip()
+            if text:
+                cleaned.append(text)
+        self.upstream_candidates = list(dict.fromkeys(cleaned))
+
+    def has_upstream_candidates(self) -> bool:
+        """调用方是否**明确**提供了上游候选（哪怕提供的是空列表）。
+
+        区分两种 ``None`` 语义：
+
+        * ``upstream_candidates is None`` —— 没有注入过，是老调用路径
+          （例如 ``/api/tool/<n>/run`` 单工具直跑），沿用旧库回退；
+        * ``upstream_candidates == []`` —— 任务链明确说了「上游一条都没有」，
+          此时下游不该再去翻旧库捞历史数据，而应如实报告「没有目标可测」。
+        """
+        return self.upstream_candidates is not None
 
     # ── M4 统一接口（方案第 8.1 节） ────────────────────────
 

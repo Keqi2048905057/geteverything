@@ -89,6 +89,8 @@ def _execute_real_step(
     scope_id: str | None = None,
     pace: str = DEFAULT_PACE,
     limits: JobLimits | None = None,
+    *,
+    has_upstream: bool = False,
 ) -> dict:
     """real 步骤：调用真实 runner 的统一入口 ``run()``。
 
@@ -189,6 +191,19 @@ def _execute_real_step(
             apply_limits_to_runner(runner, limits)
         except Exception:  # noqa: BLE001 - 收紧是策略，不是执行前提
             pass
+        # 把**同一个任务里上游步骤已经产出的目标**交给这一步。
+        #
+        # 不这么做的话，``httpx`` / ``dnsx`` 只能去读 ``ScanResultStore``
+        # （旧同步链的库），而异步任务链从不写那个库 —— 结果就是「subfinder
+        # 明明扫到了几十条子域名，紧接着的 httpx 依然报没有目标」。
+        # 只有「本步骤确实有上游步骤」时才注入；任务里只有这一步（单工具直跑）
+        # 时保持 ``None``，让 runner 走它原来的老路径（读旧库）。
+        upstream = _upstream_candidates_for(step, tool_name, target, scope_id, has_upstream)
+        if upstream is not None:
+            try:
+                runner.set_upstream_candidates(upstream)
+            except Exception:  # noqa: BLE001 - 假 Runner / 旧 Runner 没有这个入口
+                pass
         result = runner.run(target)
     except Exception as exc:  # noqa: BLE001 - 兜底：任何异常都不能带走 worker
         return _failed_outcome(ErrorCode.UNKNOWN_ERROR, f"{type(exc).__name__}: {exc}")
@@ -227,6 +242,86 @@ def _execute_real_step(
 
 # 结果文件只读这么多字节作为证据，避免把超大文件整份读进内存。
 MAX_RESULT_EVIDENCE_BYTES = 1024 * 1024
+
+
+#: 需要「一份目标清单」才能工作的工具 —— 上游没产出时它们根本无事可做。
+#: 其余工具（如 subfinder / assetfinder）只要给一个根域名就能自己跑，
+#: 给它们注入候选没有意义，也会改变它们的语义。
+_CANDIDATE_CONSUMING_TOOLS = frozenset({"httpx", "dnsx", "alterx", "shuffledns"})
+
+
+def _upstream_steps_by_step(job_id: str) -> dict[str, list[str]]:
+    """算出「每个步骤之前有哪些步骤」（按任务展开顺序）。
+
+    任务的步骤顺序就是 ``job_steps`` 的 rowid 顺序（``core.jobs.list_steps``
+    保证），也就是页面上「工具 × 目标」的展开顺序。下游工具只能看到排在自己
+    前面的步骤产出的东西。
+    """
+    try:
+        ordered = [step["id"] for step in jobs_store.list_steps(job_id)]
+    except Exception:  # noqa: BLE001 - 读不到步骤顺序时按「没有上游」处理
+        return {}
+
+    result: dict[str, list[str]] = {}
+    for index, step_id in enumerate(ordered):
+        result[step_id] = ordered[:index]
+    return result
+
+
+def _upstream_candidates_for(step, tool_name: str, target: str, scope_id, has_upstream: bool):
+    """收集**本次任务**里已经产出的子域名，交给下游工具当候选。
+
+    为什么必须走任务自己观测过的资产（``assets_store.list_job_assets``）而不是
+    ``ScanResultStore``：后者是旧同步链的库，异步任务链从不写它，
+    所以「同一任务内 subfinder → httpx」这条依赖在旧实现里永远是断的
+    （实测：``job_36c4e0e…`` 里 subfinder 找到 62 条，同任务 httpx 依然
+    报「没有可供 httpx 探测的目标」）。
+
+    Args:
+        has_upstream: 本步骤在任务里**是否存在更早的步骤**。这一点决定了
+            「空候选」的含义，必须区分清楚：
+
+            * ``True`` —— 任务先跑了别的工具。它们没产出子域名，就是
+              **本任务上游确实没有目标**，此时返回空列表（而不是 ``None``）：
+              下游应该如实报 ``no_input``，绝不能回头去翻旧库捞历史数据 ——
+              那正是「拿陈旧数据当本次结果」的老坑；
+            * ``False`` —— 任务里只有这一步（例如「已验证过子域名、只跑
+              httpx」）。此时没有上游可言，返回 ``None``，让 runner 沿用
+              它原来的老路径（读旧库 / 单工具直跑）。
+
+    Returns:
+        list[str] | None: 候选清单；``None`` 表示本函数不参与这一步。
+    """
+    if tool_name not in _CANDIDATE_CONSUMING_TOOLS:
+        return None
+    if not has_upstream:
+        return None
+
+    job_id = step.get("job_id")
+    if not job_id:
+        return None
+
+    try:
+        from core import assets as assets_store
+
+        rows = assets_store.list_job_assets(job_id, scope_id=scope_id)
+    except Exception:  # noqa: BLE001 - 查不到上游等于没有上游，绝不因此中断执行
+        return []
+
+    values: list[str] = []
+    for row in rows or []:
+        # 只取子域名。``httpx`` / ``dnsx`` 要的是「能解析/能访问的主机名」，
+        # 把 URL、IP、证书之类的其它资产类型塞进候选只会让工具白跑。
+        if str(row.get("type") or "") != "subdomain":
+            continue
+        value = str(row.get("value") or "").strip()
+        if not value:
+            continue
+        # 只保留本步骤目标自己或它的子域，避免把别的目标的资产串进来。
+        if value == target or value.endswith("." + target):
+            values.append(value)
+
+    return list(dict.fromkeys(values))
 
 
 def _output_file_of(runner) -> str | None:
@@ -270,8 +365,21 @@ def _known_tools() -> list[str]:
     return _TOOL_CACHE
 
 
-def aggregate_status(step_statuses: list[str], *, cancelled: bool = False) -> tuple[str, str | None]:
+def aggregate_status(
+    step_statuses: list[str],
+    *,
+    cancelled: bool = False,
+    step_error_codes: list[str | None] | None = None,
+) -> tuple[str, str | None]:
     """把若干步骤状态聚合为任务状态。
+
+    Args:
+        step_statuses: 各步骤的终态状态。
+        cancelled: 任务是否被取消（取消优先于一切）。
+        step_error_codes: 与 ``step_statuses`` **一一对应**的步骤错误码，可选。
+            只用来在「全部失败」时区分「所有失败都是外部数据源受阻」与
+            「普通的未知失败」—— 否则任务顶部会写「未知错误」，而正下方的
+            步骤行写着「爱企查要求安全验证」，两句话互相打架。
 
     Returns:
         tuple[str, str | None]: ``(job_status, error_code)``。
@@ -286,9 +394,22 @@ def aggregate_status(step_statuses: list[str], *, cancelled: bool = False) -> tu
     if not failures:
         return jobs_store.STATUS_SUCCEEDED, None
     if len(failures) == len(step_statuses):
+        # 失败原因若**全部**是外部数据源受阻，任务级就照实报受阻。
+        # 只在「全都受阻」时才改口径：混着别的失败原因时，``unknown_error``
+        # 反而是更准确的概括，具体原因由各步骤行各自说明。
+        codes = [code for code in (step_error_codes or []) if code]
+        blocked = bool(codes) and all(code == ErrorCode.SOURCE_BLOCKED for code in codes)
+
         # 全失败：超时与普通失败要分开报（方案 M4 验收项）。
         if all(status == jobs_store.STEP_TIMEOUT for status in step_statuses):
+            # 状态仍如实报「超时」—— 进程确实是被我们掐掉的，这一点没变。
+            # 变的只是**原因**：被数据源的安全验证拖到超时，与「工具本身太慢」
+            # 是两件事，前者重试多少次都一样，报 `timeout` 会把人引向调大超时。
+            if blocked:
+                return jobs_store.STATUS_TIMEOUT, ErrorCode.SOURCE_BLOCKED
             return jobs_store.STATUS_TIMEOUT, ErrorCode.TIMEOUT
+        if blocked:
+            return jobs_store.STATUS_FAILED, ErrorCode.SOURCE_BLOCKED
         return jobs_store.STATUS_FAILED, ErrorCode.UNKNOWN_ERROR
     return jobs_store.STATUS_PARTIAL, ErrorCode.PARTIAL_SUCCESS
 
@@ -328,6 +449,7 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
     steps = jobs_store.pending_steps(job_id)
     total = len(jobs_store.list_steps(job_id))
     done = total - len(steps)
+    upstream_step_ids = _upstream_steps_by_step(job_id)
 
     mode = job["mode"]
     scenario = job["scenario"]
@@ -362,9 +484,16 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         pace=pace,
     )
 
-    step_statuses: list[str] = [
-        step["status"] for step in jobs_store.list_steps(job_id) if step["status"] != jobs_store.STEP_PENDING
+    # 一次读出来，再拆成两个**下标对齐**的列表。分两次 ``list_steps`` 读会有
+    # 中间态：若期间正好有步骤落库，两次结果长度不同，``aggregate_status``
+    # 里按下标配对的错误码就会整体错位，把 A 步的原因安到 B 步头上。
+    finished_steps = [
+        step for step in jobs_store.list_steps(job_id) if step["status"] != jobs_store.STEP_PENDING
     ]
+    step_statuses: list[str] = [step["status"] for step in finished_steps]
+    # 与 ``step_statuses`` 一一对应。上一轮（retry 前）已完成的步骤也要算进来，
+    # 否则「全部失败且全是受阻」在重试后的那一轮会被误判成 ``unknown_error``。
+    step_error_codes: list[str | None] = [step["error_code"] for step in finished_steps]
     cancelled = False
     # 本**轮执行**里是否已经真跑完过至少一步。只用来判断「该不该在两步之间等」：
     # retry 之后 pending_steps 只剩没跑的步骤，第一步入场等待没有意义。
@@ -374,6 +503,12 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         if jobs_store.is_cancel_requested(job_id):
             cancelled = True
             break
+
+        # 这一步在**整个任务**里是不是第一步（按 rowid 展开顺序）。
+        # 不能直接用 ``step_index > 0``：retry 之后 ``pending_steps`` 只剩
+        # 没跑的步骤，它的第一项很可能不是任务的第一步，那时上游结果
+        # 依然应该被继承。
+        has_upstream = bool(upstream_step_ids.get(step["id"]))
 
         # ── 步骤之间的礼貌间隔（低频档） ──
         # 与 ``--step-delay`` 同一个位置、同一层：必须在**真正发起请求之前**，
@@ -408,7 +543,9 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         with observability.bind(step_id=step["id"]):
             if mode == "real":
                 # real 步骤在执行前重新读一次 Scope 并复检目标（方案第 5.3 节）。
-                outcome = _execute_real_step(step, scope_id, pace, limits)
+                outcome = _execute_real_step(
+                    step, scope_id, pace, limits, has_upstream=has_upstream
+                )
             else:
                 outcome = _execute_mock_step(step, scenario)
 
@@ -432,6 +569,7 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
             duration_ms=outcome.get("duration_ms"),
             command_preview=outcome.get("command_preview"),
             parser_version=outcome.get("parser_version"),
+            stderr_preview=outcome.get("stderr_preview"),
         )
         jobs_store.add_event(
             job_id,
@@ -480,6 +618,9 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
             )
 
         step_statuses.append(outcome["step_status"])
+        # 与 ``step_statuses`` 一一对应，供任务级聚合区分「外部数据源受阻」
+        # 与「普通的未知失败」。两者长度必须始终相同。
+        step_error_codes.append(outcome.get("error_code"))
 
         done += 1
         progress = jobs_store.update_progress(job_id, done, total)
@@ -504,12 +645,12 @@ def _execute_job(job_id: str, *, renew=None, step_delay: float = 0.0) -> dict:
         )
         return jobs_store.get_job_or_raise(job_id)
 
-    status, error_code = aggregate_status(step_statuses)
+    status, error_code = aggregate_status(step_statuses, step_error_codes=step_error_codes)
     jobs_store.finish_job(
         job_id,
         status=status,
         error_code=error_code,
-        error_message=None if error_code is None else _status_message(status),
+        error_message=None if error_code is None else _job_error_message(status, error_code),
     )
     observability.log_event(
         observability.EVENT_JOB_FINISHED,
@@ -529,3 +670,17 @@ def _status_message(status: str) -> str:
         jobs_store.STATUS_TIMEOUT: "所有步骤均超时",
         jobs_store.STATUS_PARTIAL: "部分步骤失败",
     }.get(status, "")
+
+
+def _job_error_message(status: str, error_code: str | None) -> str:
+    """任务级错误说明。
+
+    「所有步骤均失败」/「所有步骤均超时」在数据源受阻时是**误导**的：它们听起来
+    像本机或工具出了问题（太慢、装错了），而真实情况是外部站点要求人工验证,
+    再怎么调超时或重装都不会好。任务顶部与步骤行必须说同一件事。
+    """
+    if error_code == ErrorCode.SOURCE_BLOCKED:
+        if status == jobs_store.STATUS_TIMEOUT:
+            return "所有步骤均因外部数据源的安全验证而超时，本次查询未完成"
+        return "所有步骤均被外部数据源的安全验证阻断，本次查询未完成"
+    return _status_message(status)

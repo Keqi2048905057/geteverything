@@ -34,8 +34,13 @@ STATUS_SUCCESS = "success"
 STATUS_PARTIAL = "partial"
 STATUS_FAILED = "failed"
 STATUS_TIMEOUT = "timeout"
+# **未执行**：前置数据缺失（上游没产出目标），进程根本没有启动。
+# 与上面四种的区别是「有没有跑过」——它既不是成功也不是失败，
+# 更不是「跑通了但零结果」，必须能在页面上区分开，
+# 否则会把人引向「数据源坏了」或「目标没有资产」这两个错误方向。
+STATUS_SKIPPED = "skipped"
 
-STATUSES = (STATUS_SUCCESS, STATUS_PARTIAL, STATUS_FAILED, STATUS_TIMEOUT)
+STATUSES = (STATUS_SUCCESS, STATUS_PARTIAL, STATUS_FAILED, STATUS_TIMEOUT, STATUS_SKIPPED)
 
 # 命令行里出现这些参数名时，紧跟其后的值必须被打码。
 _SECRET_FLAG_RE = re.compile(
@@ -60,14 +65,36 @@ _LONG_TOKEN_RE = re.compile(r"(?<![\w./\\-])[A-Za-z0-9_\-]{20,}(?![\w./\\-])")
 # 路径片段兜底：``E:\a\long_dir_name\out.txt`` 这类长目录名同样不能打码。
 # 上面的 lookaround 已覆盖大多数情况，这里额外保护带盘符的 Windows 路径尾巴。
 
+# 终端的 ANSI 转义序列（CSI：颜色、光标、擦除……）。
+#
+# 为什么必须在这里剥掉：这些字节是**给终端**的，不是给人看的。真实证据里
+# ENScan 的报错长这样（``results/artifacts`` 里那次真实运行）::
+#
+#     [\x1b[31mERR\x1b[0m] 【AQC】需要安全验证……
+#
+# 前端用 ``textContent`` 渲染（不解析 HTML），于是页面上会原样显示
+# ``[[31mERR[0m]`` 这种乱码，而它恰好紧挨着「为什么零结果」这个最关键的
+# 判断依据。**只剥转义序列，不动正文**——正文才是证据。
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
+
 REDACTED = "***"
 
 # 命令预览的最大长度：命令很长时只保留头部，避免把整份目标列表塞进数据库。
 MAX_COMMAND_PREVIEW = 300
 
+# stderr 落到 ``job_steps.stderr_preview`` 时的上限。比命令预览宽松
+# （错误信息常常是多行的堆栈/超时说明），但仍然要能塞进任务详情页一行。
+STDERR_STEP_PREVIEW_LIMIT = 600
+
 
 def _redact(text: str) -> str:
-    """只做脱敏，不做长度限制（长度策略由调用方决定）。"""
+    """只做脱敏，不做长度限制（长度策略由调用方决定）。
+
+    第一步先剥 ANSI 转义：它是终端控制字节，不是证据内容，留着既让预览
+    变成乱码，又会让转义序列插进 ``Key=Value`` 中间、把脱敏正则拆散
+    （``Cookie: abc\\x1b[0mdef…`` 这类）。先剥再脱敏，两个问题一起解决。
+    """
+    text = _ANSI_ESCAPE_RE.sub("", text)
     text = _URL_CREDENTIAL_RE.sub(rf"\1:{REDACTED}@", text)
     text = _SECRET_FLAG_RE.sub(rf"\1{REDACTED}", text)
     text = _SECRET_PAIR_RE.sub(rf"\1{REDACTED}", text)
@@ -293,10 +320,17 @@ class RunnerResult:
 
     @property
     def is_failure(self) -> bool:
-        """真正的失败（超时或带非 ``no_results`` 错误码）。"""
+        """真正的失败（超时或带非 ``no_results`` / ``no_input`` 错误码）。
+
+        ``no_input``（上游没有目标、这一步没执行）**不算失败**：
+        它既没有把工具跑挂，也不是工具的问题，把它算成失败会让整个任务
+        被聚合判成 failed，而真实原因只是「上游确实没扫到东西」。
+        """
         if self.status == STATUS_TIMEOUT:
             return True
-        return self.error_code not in (None, ErrorCode.NO_RESULTS)
+        if self.status == STATUS_SKIPPED:
+            return False
+        return self.error_code not in (None, ErrorCode.NO_RESULTS, ErrorCode.NO_INPUT)
 
     # ── 序列化 ─────────────────────────────────────────────
 
@@ -332,6 +366,10 @@ class RunnerResult:
             STATUS_PARTIAL: "succeeded",
             STATUS_FAILED: "failed",
             STATUS_TIMEOUT: "timeout",
+            # 「未执行」直接落成任务层的 ``skipped``（``core/jobs.py`` 里同名
+            # 常量），于是「上游没产出目标」与「跑了但零结果」在
+            # ``job_steps.status`` 这一列上就能分开。
+            STATUS_SKIPPED: "skipped",
         }[self.status]
         return {
             "step_status": step_status,
@@ -345,6 +383,9 @@ class RunnerResult:
             "duration_ms": self.duration_ms,
             "command_preview": self.command_preview,
             "parser_version": self.parser_version,
+            # 脱敏截断后的 stderr：任务详情页据此看出「零结果」到底是
+            # 数据源不可用、还是目标真的没有资产。
+            "stderr_preview": preview_text(self.stderr_preview, limit=STDERR_STEP_PREVIEW_LIMIT),
         }
 
 

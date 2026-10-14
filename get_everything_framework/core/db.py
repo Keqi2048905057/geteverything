@@ -393,6 +393,11 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
         "duration_ms": "INTEGER",
         "command_preview": "TEXT",
         "parser_version": "TEXT",
+        # 「工具为什么没找到东西」几乎只出现在 stderr 里（数据源不可用、
+        # DNS 失败、缺 API Key、网络错误）。旧实现只把它落成 artifact，
+        # 而三轮证据全空时 artifact 根本不会生成，于是页面上只剩一个
+        # 「成功 / 0」，完全看不出原因。这一列存**脱敏并截断**后的预览。
+        "stderr_preview": "TEXT",
     },
     # P0-7a / P0-7b（用户弹窗预授权，DECISIONS 3.1）：
     #   * idempotency_key  —— 同一把幂等键只允许存在一个**未终结**的任务；
