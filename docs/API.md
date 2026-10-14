@@ -13,7 +13,7 @@
 | 计数项 | 数值 |
 |---|---|
 | `app.url_map` 规则总数 | **48** |
-| 含方法展开的路由绑定 | 50（`/` 与 `/login` 各支持 GET + POST） |
+| 含方法展开的路由绑定 | 49（`/login` 支持 GET + POST；`GET /` 只做 302 跳转，**没有 POST 分支**） |
 | `/api/*` 接口 | **42** |
 | 其中**需要本地管理员认证** | **32** |
 | 其中**匿名可读**（有意保持，契约测试锁定） | 7 |
@@ -97,12 +97,12 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 
 | 方法 | 路径 | 认证 | 说明 |
 |---|---|---|---|
-| GET | `/` | 无 | 首页骨架：扫描表单 + Agent 对话 + 登录入口 + 任务列表。匿名可打开，但**不下发任何数据** —— 授权资产、任务列表、**扫描汇总与目标明细**（`?domain=<目标>` 也不再回显目标名）都只对本地管理员可见，匿名只显示登录提示 |
-| POST | `/` | **所有动作都需登录** | 表单 `action=scan` 创建 mock 任务、`action=chat` 进 Agent；**两者未登录都 401**。chat 曾按「只读浏览」匿名放行，但 Agent 当前能绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope 直接执行（`docs/AGENT_ASYNC_IMPACT.md` I-5），故 2026-10-04 起与 scan 同级 |
-| GET | `/assets` | 无 | 资产页骨架。匿名可打开但只显示提示，**不下发 Scope 名称**；数据由 `static/assets.js` 调 `/api/assets` |
-| GET | `/scan-center` | 无 | 扫描中心页骨架（公网授权测试模式）。匿名可打开但只显示提示；数据由 `static/scan_center.js` 调 `/api/scan-center`。**页面上的一切提交都只是转发到 `/api/…`**，闸门全在服务端 |
-| GET | `/login` | 无 | 登录页；已登录时重定向到 `/` |
-| POST | `/login` | 无 | 提交 `token` 表单字段；成功 302 → `/`，失败重渲染并提示 |
+| GET | `/` | 无 | **302 → `/scan-center`**（`app.py:141-153 index()`）。原首页 `web/templates/index.html` 已随测试阶段改造退役（模板文件已删除），这里只做一次跳转，不再渲染任何骨架、也不再下发任何数据 |
+| POST | `/` | — | **路由层 405 `method_not_allowed`** —— 该路径只注册了 `GET`，**没有处理器**。▶ 历史记录（已过期）：这里曾有 `action=scan`（创建 mock 任务）与 `action=chat`（进 Agent）两个动作，且「两者未登录都 401」；首页退役时两个动作与承载它们的页面**一并删除**，不是「改成需要登录」而是「这条路根本不通」。留 `GET` 一条跳转、不留幽灵路由，是刻意的（`tests/integration/test_m2_page_scan.py::test_retired_page_actions_are_405_and_create_no_job`、`test_root_path_only_redirects` 锁定） |
+| GET | `/assets` | 无 | 资产页骨架。匿名可打开但只显示提示，**不下发 Scope 名称**；数据由 `static/assets.js` 调 `/api/assets`。**筛选与 Diff 下拉均已不含授权范围**（`#filter-scope` / `#diff-scope` 已删除），Diff 两个下拉项 label 是「网址 工具 · 状态 · 时间」（`static/assets.js:321 jobOptionLabel`） |
+| GET | `/scan-center` | 无 | 扫描中心页骨架（测试阶段**唯一**主页面，三步：确认目标 → 选择工具 → 创建任务）。匿名可打开但只显示提示；数据由 `static/scan_center.js` 调 `/api/scan-center`。**页面上的一切提交都只是转发到 `/api/…`**，闸门全在服务端 |
+| GET | `/login` | 无 | 登录页；已登录时重定向到 `/scan-center` |
+| POST | `/login` | 无 | 提交 `token` 表单字段；成功 302 → `/scan-center`，失败重渲染并提示 |
 | GET | `/static/<path:filename>` | 无 | `web/static/` 下的 `app.css` / `app.js` / `assets.js` / `scan_center.js` |
 
 ---
@@ -160,7 +160,7 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 
 | 方法 | 路径 | 认证 | 请求 | 成功响应 | 主要错误 |
 |---|---|---|---|---|---|
-| GET | `/api/tools` | 匿名 | — | `{"tools":[{"name","tool_name","category","description","tool_group","tool_group_label","risk_level","risk_label","internet_allowed","default_enabled","reason","database"}],"groups":[...]}` | — |
+| GET | `/api/tools` | 匿名 | — | `{"tools":[{"name","tool_name","category","description","tool_group","tool_group_label","risk_level","risk_label","selectable","internet_allowed","default_enabled","reason","database"}],"groups":[...]}`（`internet_allowed` 是 **deprecated 兼容键**，值恒等于 `selectable`） | — |
 | GET | `/api/databases` | 匿名 | — | `{"databases":[{"tool_name","table","result_column","category"}]}` —— **不含任何计数** | — |
 
 > `/api/databases` 的 `category` 是 **`storage.TOOL_DATABASES` 里的「观测类别」**
@@ -174,16 +174,24 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > **Tool Registry（下一阶段规划方案 §9）**：工具能力元数据的**唯一来源**是
 > `core/tool_registry.py`；`/api/tools` 与 `/api/scan-center` 是它的**两个读出点**。
 > `description` / `tool_group` / `tool_group_label` / `risk_*` /
-> `internet_allowed` / `default_enabled` / `reason` 全部来自
-> `core/tool_registry.py:ToolPolicy.to_dict()`，与 `/api/scan-center` 的
+> `selectable`（+ deprecated `internet_allowed`） / `default_enabled` / `reason` 全部来自
+> `core/tool_registry.py:ToolPolicy.to_dict()`（`:192-208`），与 `/api/scan-center` 的
 > `tools[]` 是**同一次调用的结果**（`test_tools_api_and_scan_center_agree_on_registry_fields`
 > 逐字段比对）。
+>
+> ★ **工具闸门的口径已经改名**（测试阶段改造）：原来的 `internet_allowed`
+> （「允许不允许打公网」）改成 `selectable`（「**是否已注册且已接入 runner**」）。
+> `ToolPolicy.selectable` 为 `False` 只有一种情况：**登记在案但尚未接入**（如 `nuclei`）。
+> `internet_allowed` 仍然输出，但它是 **Deprecated 兼容键，值恒等于 `selectable`**
+> （`core/tool_registry.py:182-190` 的 deprecated property、`:200` 的 to_dict 输出）——
+> 旧前端读它不会坏，但**不要再据它写「公网白名单」判断**。
 >
 > **两个读出点不等价，不要互换**：方案第 9 节写的是「前端动态读取 `GET /api/tools`」，
 > 实现走的是 `/api/scan-center`。原因是两者覆盖范围不同：
 > `/api/tools` **匿名可读**，只给「工具清单 + 分组 + 数据库表信息」，
-> 不含 `restricted_tools` / `projects` / `strategies` / `paces` / `limits`；
-> `/api/scan-center` **需登录**，除工具清单外还带四步流程所需的全部元数据，
+> 不含 `restricted_tools` / `strategies` / `paces` / `limits` /
+> `selectable_tools`（`projects` 已随授权项目业务取消而移除）；
+> `/api/scan-center` **需登录**，除工具清单外还带三步流程所需的全部元数据，
 > 并把未接入的 `nuclei` 放进 `restricted_tools` 单独说明。
 > 让前端改读 `/api/tools` 会同时丢掉受限工具说明与整个流程的元数据。
 >
@@ -412,33 +420,63 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 公网授权测试模式的入口。设计要点：**项目是授权证据的组织单位，不是权限开关** ——
 关联项目**不会**放宽任何限制，能不能真实扫描仍由 Scope 的 `active_scan` 与环境开关决定。
 
+> ▶ **测试阶段改造后，项目业务已从任务创建链上摘除**（本节下表逐行更新）：
+> `POST /api/public-jobs` **不再读 `project_id`**，响应里的 `project_id` /
+> `project_name` / `authorized_public` 恒为 `None`。`/api/projects*` 这 4 条
+> **接口本身仍在**（历史数据与旧客户端仍可用），但页面不再有「授权项目与范围」这一栏，
+> 创建任务也不再需要它。上面那条「项目不是权限开关」的判断因此**只剩前半句仍然生效**：
+> 现在连「组织单位」这个角色也不再被任务创建读取。
+
 | 方法 | 路径 | 请求 | 成功响应 | 主要错误 |
 |---|---|---|---|---|
 | POST | `/api/projects` | JSON `{name, authorization_note, owner?, scope_ids?}` | **201** `{"ok":true,"project":{...}}` | 400 `name`/`authorization_note` 缺失或过短；400 `scope_ids` 里有不存在的 Scope |
 | GET | `/api/projects` | — | `{"ok":true,"projects":[{...,"scope_ids","scope_count"}]}` | — |
 | GET | `/api/projects/<project_id>` | — | `{"ok":true,"project":{...}}` | 404 `not_found` |
 | POST | `/api/projects/<project_id>/scopes` | JSON `{scope_id}` | **201** `{"ok":true,"project":{...}}`（幂等） | 400 缺 `scope_id` 或 Scope 不存在；404 项目不存在 |
-| POST | `/api/public-jobs/check` | JSON `{targets, project_id?}` | **200** `{"ok":true,"checks":[{raw,normalized,kind,valid,error_message,matches,eligible_scope_ids,candidates,real_scan_enabled,resolved_check_deferred,ready,blocker}],"summary":{"total","ready","blocked"},"suggested_mode","project_id"}` | 400 缺 `targets` / 请求体不是 JSON 对象 |
-| POST | `/api/public-jobs` | JSON `{project_id, scope_id, targets?, upload_id?, strategy?, tools?, pace?, mode?, operator?, authorization_confirmed?, rate_limit?, timeout_seconds?, idempotency_key?}` | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id","project_name","scope_id","total_steps","pace","pace_label","operator","authorization_confirmed","limits","authorized_public":true,"reused"}` | 400 未关联 Scope / 工具被禁 / 未登记工具 / 模板与工具不符 / 目标数超限 / `pace` 非法 / `operator` 非法 / `rate_limit` / `timeout_seconds` 越界 / **`tools` 与别名 `tool` 同时给出且 `tools` 为空**；403 越界或真实扫描开关未开；404 项目不存在 |
-| GET | `/api/scan-center` | — | `{"ok":true,"projects","strategies","paces","tools","tool_groups","restricted_tools","limits","internet_allowed_tools"}` | 401 |
+| POST | `/api/public-jobs/check` | JSON `{targets, scope_id?}`（`target` 为别名；`scope_id` 是 Deprecated 兼容字段，不参与判定） | **200** `{"ok":true,"checks":[{raw,normalized,kind,valid,verdict,message,excluded}],"summary":{"total","valid","invalid","excluded","ready"},"suggested_mode","scope_id":null,"project_id":null}` | 400 缺 `targets` / 请求体不是 JSON 对象 |
+| POST | `/api/public-jobs` | JSON `{targets?, upload_id?, strategy?, tools?, pace?, mode?, operator?, rate_limit?, timeout_seconds?, idempotency_key?}`（`project_id` / `authorization_confirmed` 是 Deprecated 兼容字段，**不参与任何判定**；`scope_id` 仍被 `core.policy.require_scope` 读到） | **202** `{"ok":true,"job_id","status":"queued","mode","strategy","project_id":null,"project_name":null,"scope_id","total_steps","pace","pace_label","operator","authorization_confirmed","limits","authorized_public":null,"deprecated_fields":["project_id","project_name","authorized_public"],"reused"}` | 400 未给 `scope_id` 且未开 `GEF_OPEN_SCAN_MODE` / 模板与工具不符 / 未接入工具（`unavailable_tools`）/ 未登记工具（`unknown_tools`）/ 目标数超限 / `pace` 非法 / `operator` 非法 / `rate_limit` / `timeout_seconds` 越界 / **`tools` 与别名 `tool` 同时给出且 `tools` 为空**；403 环境开关未开或目标越界 / 命中排除列表（开放模式下的开放范围永远不会越界，因此这一条实际只在显式 `scope_id` 时触发） |
+| GET | `/api/scan-center` | — | `{"ok":true,"strategies","paces","tools","tool_groups","restricted_tools","limits","selectable_tools","internet_allowed_tools"}`（后一个是 **deprecated 兼容键**，值同 `selectable_tools`；**`projects` 已移除**） | 401 |
 
 `strategy` 合法值 = `core/tool_registry.py:STRATEGIES`：`asset_discovery`（默认，= `subfinder` + `httpx`）、
 `web_fingerprint`（= `httpx`，`nuclei` 只作「受限未开放」展示）、`custom`（**必须**显式给 `tools`）。
 
-**`POST /api/public-jobs/check` 是只读试算**（规划方案第 6 节「自动判断」的服务端半边）：
+**`POST /api/public-jobs/check` 是只读目标预检**（`api/public_scan.py:124-207`）：
 
 * **不创建任务、不写库、不发网络请求、不写审计** —— 它是查询，有用例断言连调后
-  任务数 / 审计事件数一字不变；
-* `eligible_scope_ids` 是**唯一**的放行结论，只含 `verdict == allowed` 的范围。
-  `matches` 还会带上「命中排除列表」的范围（`verdict = "excluded"`）—— 那是**诊断信息**，
-  用户需要知道「是你自己的排除列表挡住了」，但它**不构成授权**，所以**不进** `eligible_scope_ids`；
-* 前端的「自动匹配授权资产」（`scan_center.js:applyMatchedScope`）**直接吃这个字段**，
-  绝不自己比对 `allowed_domains` / `active_scan`。多个目标命中不同资产时它会**保持
-  用户当前选择并如实说明**，不替他猜一个；
-* `blocker` 五档：`no_scope`（一个范围都没建）/ `not_authorized`（没覆盖）/
-  `scope_inactive`（覆盖但没开真实扫描）/ `env_disabled`（环境开关没开）/
-  `invalid_target`（格式非法）；空串表示可以扫。`resolved_check_deferred` 恒为 `true`：
-  执行期还会做一次真实 DNS 解析校验，本接口**如实声明**它没做。
+  任务数 / 审计事件数一字不变。**仍需管理员身份**（`require_admin()`）；
+* 它现在只回答**两个问题**：**目标格式是否合法**（域名 / IP / CIDR / URL）
+  与**是否命中排除列表**。`checks[]` 的键集合**恰好**是
+  `{raw, normalized, kind, valid, verdict, message, excluded}`：
+  `verdict` 只有 `allowed` / `excluded` / `invalid` 三种，`message` 是面向使用者的
+  一句话说明（格式非法时是异常原文，命中排除列表时明确写「不会被执行」）；
+* `summary` 是 `{total, valid, invalid, excluded, ready}`（不再有 `blocked`）。
+  ★ **`ready` 的含义不再是「有没有授权」**，而是「**格式合法且未命中排除列表**」
+  = 可以提交。它**不构成任何授权**，只是「这份目标列表填得没错」；
+* `suggested_mode` 由 `ready == total` 决定（`api/public_scan.py:202`）：全绿给
+  `real`，否则给 `mock`。它只是**建议**，创建任务时仍由 `mode` 字段决定；
+* **不再返回** `eligible_scope_ids` / `blocker` / `matches` / `candidates` /
+  `resolved_check_deferred` / `real_scan_enabled` 这些授权结论
+  （`api/public_scan.py:163-164`）。`scope_id` 与 `project_id` 作为
+  Deprecated 兼容键保留，**恒为 `null`**；
+* 请求体里 `scope_id` 仍是**可选**的 Deprecated 字段，只被用来取**排除列表**
+  （`_exclusion_scope()`，`:210-224`）：显式给了就用那个范围的，查不到则退回开放范围
+  （空排除列表）—— 预检**不该**因为一个过期的 `scope_id` 整体失败。请求体里的
+  `project_id` 已不被读取。
+
+> ▶ **原「自动匹配授权资产」流水线已删除，且不得复活**：旧版本文档把
+> `eligible_scope_ids` 写成「唯一的放行结论」，并说明前端
+> `scan_center.js:applyMatchedScope` **直接吃这个字段**来自动选中授权范围。
+> 测试阶段改造取消了「必须先有授权范围」这项业务要求，因此：
+>
+> * 该字段本身**不再存在**（返回它会诱使前端以为还有一道闸门）；
+> * `applyMatchedScope()` / `scopeSelect` / `projectSelect` / `renderConsentSummary()`
+>   已从前端**整体删除**，提交体**不再发送** `scope_id` / `project_id`；
+> * 守卫用例：`test_check_endpoint_has_no_scope_matching_contract`、
+>   `test_scan_center_js_has_no_scope_auto_matching`、
+>   `test_scan_center_js_never_sends_a_scope_or_project`、
+>   `test_check_endpoint_verdict_is_independent_of_any_scope_or_project`
+>   （均在本仓测试里，前者锁服务端契约，后三条锁前端）。
+>   谁把这条流水线加回来，CI 会红 —— 这是刻意的。
 
 **Scan Profile = 工具组合 + 节奏**（`core/pace.py`）。`pace` 合法值恰好两个：
 
@@ -455,7 +493,7 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > 与 `paces[]` 一起下发，前端不写死任何文案。
 >
 > **节奏不是安全闸门**：它不参与、也不放松 Scope / `active_scan` / `GEF_ALLOW_REAL_SCAN` /
-> 公网白名单中的任何一条。它只回答「这一步等多长、用多低的并发」。
+> `GEF_OPEN_SCAN_MODE` / 工具是否已接入中的任何一条。它只回答「这一步等多长、用多低的并发」。
 >
 > **`pace` 不落成 `jobs` 表的新列**（那属于数据库结构改动，DECISIONS §1 E 限纯增量）。
 > 它写进 `job.created` 事件的 `detail` 与审计 detail，执行期由
@@ -490,12 +528,15 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > | `timeout_seconds` | 全部 | **17 / 17** —— 唯一读取点是 `modules/base.py:425 _timeout_seconds()`，所有 runner 都从它取超时 |
 > | `rate_limit` | `modules/subfinder.py:64`、`modules/httpx.py:212` | **2 / 17** —— 只有这两个 runner 的 `build_command()` 会追加 `-rl` |
 >
-> 关键在于：**公网白名单恰好就是这两个**（`{httpx, subfinder}`），所以公网授权测试
-> 这条链上 `rate_limit` 是 **2/2 全覆盖**的。但白名单**之外**的 15 个 runner 拿到
-> `rate_limit` 后是**静默 no-op**：`apply_to_runner` 会如实把值写进 `Runner.config`
+> 关键在于：**旧口径的「公网白名单」恰好就是这两个**（`{httpx, subfinder}`），
+> 所以当时这条链上 `rate_limit` 是 **2/2 全覆盖**的。▶ **该口径已被取代**：白名单语义取消后
+> `rate_limit` 的覆盖面**没有变**（仍是 2/17），只是理由换了 —— 不是「白名单外进不来」，
+> 而是 `LIGHT_TOOL_BUDGET` 只对这两个轻量工具定义了预算。白名单**之外**的 15 个 runner 拿到
+> `rate_limit` 后依旧是**静默 no-op**：`apply_to_runner` 会如实把值写进 `Runner.config`
 > 并返回 `True`，`build_command()` 里却没有任何对应参数 —— 从调用方看不出它没生效。
-> 老入口 `POST /api/jobs` 的 real 模式**可以**走到这些工具（见上一条 ⚠️），
-> 因此「给 nmap 设了 `rate_limit=5`」这件事目前只改了库里的记录，没有改命令。
+> 现在这些工具**已经可以被勾选**（`selectable=True`），老入口 `POST /api/jobs` 的 real 模式
+> 早就**可以**走到它们，扫描中心同样可以，因此「给 nmap 设了 `rate_limit=5`」这件事目前
+> 只改了库里的记录，没有改命令。
 > 本轮**未改**这个覆盖面（给 15 个 runner 各加一个限速参数是独立工作，且部分工具
 > 根本没有对应开关）；如实记在这里，避免把「记录了」读成「限速了」。
 > 详见 `docs/CODEBASE_MAP.md` §9.30.5。
@@ -507,19 +548,31 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > 有一条反向守卫测试锁着「`jobs` 表里不得出现这六个列名」。
 >
 > **`authorization_note` 是项目授权说明的**快照**：项目说明事后被改，历史任务的授权依据
-> 仍是创建当时那一份原文（`job.authorization.note`）。
+> 仍是创建当时那一份原文（`job.authorization.note`）。▶ **测试阶段改造后这条链已断**：
+> `POST /api/public-jobs` 不再传 `authorization_note`（`create_open_public_job` 的
+> `project_id` 参数 docstring 写明「既不校验也不落库，审计里的 `project_id` 因此不再出现」），
+> 新任务的 `job.authorization.note` 恒为空。**历史任务上那份快照仍然读得到**
+> （`authorization_of_job` 读的是事件 detail，旧数据没被改写），所以这段判断描述的是
+> **回看旧任务**时的行为，不再是新任务的写入行为。
 >
 > **老入口 `POST /api/jobs` 也接受 `operator` / `rate_limit` / `timeout_seconds`**，
 > 口径完全相同；它的响应形状**未变**（不出现 `project_id` 等公网专属字段）。
 >
-> ⚠️ **老入口不做公网白名单判定**（实测，2026-10-03）：`assert_tools_internet_allowed()`
+> ~~⚠️ **老入口不做公网白名单判定**（实测，2026-10-03）：`assert_tools_internet_allowed()`
 > 在本仓**只有一个生产调用点** —— `core/application.py:573`（公网编排
 > `create_authorized_public_job`）。因此 `POST /api/jobs` 用 `tools=["nmap"]` +
 > `mode="real"`（环境开关开 + `active_scan=True`）会返回 **202 并落库**，
 > 而同样参数打 `POST /api/public-jobs` 是 **400 + `blocked_tools`**。
 > 这是**当前的有意现状**（老入口定位为内网联调入口，白名单只在公网入口生效），
 > 不是漏洞修复遗漏；要不要一并收口属产品口径问题，已登记在
-> `docs/DECISIONS.md` §3.11.5 第 1 条等你拍板。
+> `docs/DECISIONS.md` §3.11.5 第 1 条等你拍板。~~
+> ▶ **已收口**（测试阶段改造）：`assert_tools_selectable()` 现在**所有入口共用**——
+> 调用点在 `core/application.py:565`（`create_open_public_job`，即公网编排，
+> `create_authorized_public_job` 已是它的 deprecated 别名），接口层不再有第二个判定点。
+> 上一条 ⚠️ 里「老入口能过、公网入口被拒」的差异**已不存在**：两条入口对
+> `nmap` 的结论现在一致（都放行，因为它已注册且已接入）。
+> 真正仍被拒绝的只有 `nuclei`（`KNOWN_UNAVAILABLE_TOOLS`）与未登记的工具名。
+> 与之配套的那个产品口径问题（DECISIONS §3.11.5 第 1 条）由此关闭。
 >
 > **执行期会再复检一次**（`jobs/executor.py`）：每个 real 步骤在调用 Runner **之前**，
 > 除 Scope 成员资格外还会重读 `GEF_ALLOW_REAL_SCAN` 与 `Scope.active_scan`。
@@ -528,16 +581,64 @@ Job 步骤、`RunnerResult` 与导出数据的字段里，**不改 HTTP 状态�
 > `docs/CODEBASE_MAP.md` §9.29）。也就是说：任务排队期间开关被关掉或范围被收紧，
 > 那些步骤不会真的发出去。
 
-> **公网白名单恰好是 `{httpx, subfinder}`**（方案第 8 节），是代码常量而非运行期配置。
+> ~~**公网白名单恰好是 `{httpx, subfinder}`**（方案第 8 节），是代码常量而非运行期配置。
 > 核心不变量是「**没登记 = 禁止公网**」：`assert_tools_internet_allowed()` 对未登记工具
 > **直接拒绝**而不是默认放行。被禁工具的报错体里带 `blocked_tools`（含 `reason` 与
-> `risk_level`）与 `internet_allowed_tools`，调用方能直接看出该换成什么。
+> `risk_level`）与 `internet_allowed_tools`，调用方能直接看出该换成什么。~~
+>
+> ▶ **该段已被测试阶段改造取代**（2026-10 实测）：工具闸门现在是
+> 「**已注册且已接入 runner**」= `selectable`，判定函数
+> `core/tool_registry.py:476 assert_tools_selectable()`。**17 个已注册 runner 全部
+> `selectable=True`**，代码里**不再有「公网白名单」这个常量** ——
+> `{httpx, subfinder}` 只剩一个身份：`default_enabled`（自定义策略里的默认勾选），
+> 值未变，仍只有 `subfinder` / `httpx` 为 `True`。使用者自己勾，页面不代劳。
+>
+> **仍然不可选的只有未接入的工具**：`nuclei` 住在
+> `core/tool_registry.py:380 KNOWN_UNAVAILABLE_TOOLS` 里，`selectable=False`，
+> 界面据此显示「未接入 · <reason>」并**置灰**（`GET /api/scan-center` 的
+> `restricted_tools`）。在提交里**显式指名 `nuclei` → 400，且在创建任务之前被拒**
+> （工具闸门排在 `create_scan_job` 之前，不会留下半成品任务）。
+>
+> ★ **判定顺序不能反**（真 bug，已修）：必须**先查 `TOOL_POLICIES`、查不到再查
+> `KNOWN_UNAVAILABLE_TOOLS`**（`core/tool_registry.py:499-518`）。反过来的话
+> `nuclei` 会被误报成「以下工具未登记，禁止使用: nuclei」—— 与界面显示的
+> 「未接入」**自相矛盾**，而这是两种完全不同的结论（「这工具不存在」vs
+> 「它存在但本阶段没接上」）。回归用例：
+> `tests/unit/test_tool_registry.py:358 test_nuclei_is_rejected_as_unwired_not_as_unregistered`。
+>
+> 报错体 `details` 的键（`core/tool_registry.py:529-543`）：
+>
+> | 键 | 含义 | 备注 |
+> |---|---|---|
+> | `unknown_tools` | 未登记的工具名 | 优先于下一行报出 |
+> | `unavailable_tools` | 已登记但未接入（含 `tool_name` / `risk_level` / `reason`） | |
+> | `blocked_tools` | 同 `unavailable_tools` | **Deprecated 兼容键** |
+> | `selectable_tools` | 当前可选清单，调用方据此知道该换成什么 | |
+> | `internet_allowed_tools` | 同 `selectable_tools` | **Deprecated 兼容键** |
+>
+> ★ **不变量（最重要的一条）**：「这个名字**没有元数据**」**绝不等于**「不受限」——
+> 只认注册表，查不到就**拒绝**。`get_tool_policy()` 返回 `None` 的语义是「未知工具」，
+> 调用方必须按**不允许**处理（`core/tool_registry.py:393-399`）。
+>
+> `assert_tools_internet_allowed()` / `internet_allowed_tools()` 现在是
+> **deprecated 薄别名**（`:555-570`，前者内部直接调 `assert_tools_selectable`）。
+> 新代码一律用 `assert_tools_selectable()` / `selectable_tools()`；
+> 旧名字保留只为不让尚未升级的调用方 `ImportError`。
+>
+> **低频预算的口径也随之改写**：`core/pace.py:73 LIGHT_TOOL_BUDGET` 仍只覆盖
+> `subfinder` / `httpx`，但理由**不再是「白名单外进不来」**，而是
+> 「**不假装知道 nmap 打别人的站该多快**」—— 高风险工具现在**可以被勾选**，
+> 它们的节奏由使用者自己与工具默认值决定。并且它**只是提示不是闸门**：
+> 不给预算不等于禁止执行，只等于不代你降速。
 >
 > **`mode` 默认是 `real` 且不会静默降级**：环境开关没开时返回 403，而不是退回 mock 给一份假数据。
 > 「以为打了真实目标、其实拿到编的数据」比直接报错危险得多。演练请显式传 `mode=mock`。
+> 同理，**缺少 `scope_id` 且没开 `GEF_OPEN_SCAN_MODE` 时是 400 并点名这个环境变量**，
+> 也**不允许静默 fallback 到 mock**。
 >
 > 本接口**不创建 Scope** —— 那仍然只有 `POST /api/scopes` 一处。视图层不做任何闸门判断，
-> 全部转交 `core/application.py:create_authorized_public_job`（该函数再转交 `create_scan_job`），
+> 全部转交 `core/application.py:create_open_public_job`（该函数再转交 `create_scan_job`；
+> `create_authorized_public_job` 已是它的 deprecated 别名，同一个函数对象），
 > 有源码守卫测试锁住「禁止 Web → Runner」与「不得另写第二条 Policy 判定」。
 
 ---

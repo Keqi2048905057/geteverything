@@ -10,12 +10,14 @@
 
 ## 当前阶段
 
-**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · 下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅ · **下一阶段规划方案：Phase 1 前端体验重构 ✅（`548d196`）/ Phase 2 Tool Registry ✅（`ce0ef22`）/ Phase 3 公网授权测试完善 ✅（`8e94662`）/ 第 6 节目标自动匹配授权资产 ✅（`9224bc3`）/ 第 13 节后端安全边界缺口回填 ✅（本轮补测）/ 第二轮只读审计四处守卫收口 ✅（`890e600`）/ **规划方案 §1～§18 逐节对照审计 ✅ + 第 6 节 BUG 索引表 29 条行号全量刷新 ✅（本轮，纯文档 + 两处 docstring）** · M5 剩余项 + P0-6 阶段二待开工**
+**Phase M4 已完成 · P0 产品化加固已完成 · P1（M5 首批：资产/观测/Diff）已完成 · M7 mypy 已清零 · M5 字典可移植性已完成 · P0-7（幂等键 + 退避）已完成 · §16 Windows CI 已落地 · M7 SQLite 并发测试已完成 · M7 本地全链路 E2E 已完成 · §19 Observability 基础版已完成 · §14 文档三件套已完成 · Diff 属性别名缺陷已修 · P0-6 阶段一（Application Service 入口收拢）已完成 · M6 环境自检脚本已完成 · M7 测试报告已完成 · 测试运行期目录隔离已修 · P0-6 阶段二影响说明已出（等拍板）· 公网授权测试模式体验版已完成 · 下一阶段体验优化：Phase 1 UI 清理 ✅ / Phase 2 公网授权测试入口 ✅ / Phase 3 Scan Profile（工具组合 + 节奏）✅ / Phase 4 结果体验（从 Job 导向结果）✅ · **下一阶段规划方案：Phase 1 前端体验重构 ✅（`548d196`）/ Phase 2 Tool Registry ✅（`ce0ef22`）/ Phase 3 公网授权测试完善 ✅（`8e94662`）/ 第 6 节目标自动匹配授权资产 ✅（`9224bc3`）/ 第 13 节后端安全边界缺口回填 ✅（本轮补测）/ 第二轮只读审计四处守卫收口 ✅（`890e600`）/ **规划方案 §1～§18 逐节对照审计 ✅ + 第 6 节 BUG 索引表 29 条行号全量刷新 ✅（本轮，纯文档 + 两处 docstring）** · **外部数据源安全验证受阻已修 ✅（`source_blocked` + 退出码 0 的假成功，见 `docs/CODEBASE_MAP.md` §9.39）** · M5 剩余项 + P0-6 阶段二待开工**
 
 - 仓库：`Keqi2048905057/geteverything`（私有），分支 `main`
 - 本地副本：`E:\Programmingtools\geteverything`，代码在子目录 `get_everything_framework/`
-- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → 下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（`59047ee` / `5960bc0`）→ Phase 4 结果体验 ✅（`f88dd57` / `547d827`）→ 下一阶段规划方案 Phase 1 前端体验重构 ✅（`548d196`）→ Phase 2 Tool Registry ✅（`ce0ef22`）→ Phase 3 公网授权测试完善 ✅（`8e94662`）→ 第 6 节目标自动匹配授权资产 ✅（`9224bc3`）→ 第 13 节后端安全边界缺口回填 ✅（本轮补测，实现零改动）** → P0-6 阶段二 + M5 剩余 ⬜**
-- 更新日期：2026-10-03（下一阶段规划方案 Phase 1～3 + 第 6 节自动匹配 + 第 13 节安全边界缺口回填；上一批 23 个提交已推送并复核；M7 测试报告 / M6 环境自检按 2026-10-01～02 记）
+- 进度：M0 ✅ → M1 ✅ → M2 ✅ → M3 ✅ → M4 ✅ → P0 ✅ → **P1/M5 首批 ✅（含 §10 Diff 前端 + 可点详情 + §12 迁移脚本）→ M7 mypy ✅（34 → 0）→ M5 字典可移植 ✅ → P0-7 幂等键/退避 ✅ + §16 Windows CI ✅ → M7 SQLite 并发测试 ✅ → M7 本地 fixture 全链路 E2E ✅ → §19 Observability 基础版 ✅ → §14 文档三件套 ✅ → 修 Diff 属性别名缺陷 ✅ → P0-6 阶段一 ✅ → push 前安全审计 + 推送 ✅ → M6 环境自检 ✅ → M7 测试报告 ✅（`docs/TEST_REPORT.md`）→ 测试运行期目录隔离修复 ✅ → P0-6 阶段二影响说明 ✅（`docs/AGENT_ASYNC_IMPACT.md`，**等用户拍板后开工**）→ 公网授权测试模式体验版 ✅ → 下一阶段体验优化 Phase 1 UI 清理 ✅（`e94b180`）→ Phase 2 公网授权测试入口 ✅（`510fa41`）→ Phase 3 Scan Profile ✅（`59047ee` / `5960bc0`）→ Phase 4 结果体验 ✅（`f88dd57` / `547d827`）→ 下一阶段规划方案 Phase 1 前端体验重构 ✅（`548d196`）→ Phase 2 Tool Registry ✅（`ce0ef22`）→ Phase 3 公网授权测试完善 ✅（`8e94662`）→ 第 6 节目标自动匹配授权资产 ✅（`9224bc3`）→ 第 13 节后端安全边界缺口回填 ✅（本轮补测，实现零改动）** → 测试阶段改造 ✅（开放扫描模式 + 三步扫描中心 + 工具闸门 `internet_allowed`→`selectable` + 旧首页退役）→ P0-6 阶段二 + M5 剩余 ⬜**
+- 更新日期：2026-10-11（**外部数据源安全验证受阻**：新增 `ErrorCode.SOURCE_BLOCKED` +
+  `modules/enscan.py` 三条路径按内容判定 + 剥 ANSI 转义 + 任务级聚合不再与步骤行自相矛盾；
+  上一批为 2026-10-11 的「结果链根因修复」）
 
 ---
 
@@ -700,20 +702,222 @@
 
 ## 最近一次验证
 
-> **本轮（§18）与上一轮（§17）是两类不同的轮次**：§17 是**审计发现的缺陷**，本轮是
-> **用户答复之后的落地** —— 没有修任何新缺陷，补的是「已认可的修法凭什么算成立」的判据。
-> §17 的验证块原样保留在下方「上一轮」里，便于回溯。
+> **本轮是「外部数据源安全验证受阻」修复**：修的是**真缺陷**（数据源要求人工验证时，
+> 框架把「查询未完成」显示成「成功 / 0 条」，或只报「执行超过 120 秒」），不是口径变更。
+> 字段与结论见 `docs/CODEBASE_MAP.md` §9.39 与 §7.1 第 10 条、第 6 节症状索引第 40 条。
+> 上一轮「结果链根因修复」的验证块原样保留在下方。
 
 ```text
-验证时间：2026-10-04（用户答复后收口：novalidate 四条验收 + 5 个 session 键按登录态过滤）
+验证时间：2026-10-11（外部数据源安全验证受阻：source_blocked + 退出码 0 的假成功）
 工作目录：E:\Programmingtools\geteverything\get_everything_framework
 
 ruff:   All checks passed!
-pytest: 1340 collected / 1338 passed / 2 skipped / 0 failures / 0 errors（169.68s）
-mypy:   Success: no issues found in 72 source files        ← 未新增源文件
-git diff --check: 退出码 0
-路由计数：48 规则 / 50 绑定 / 42 个 /api/*（未新增、未删除路由）
-本轮用例数 +10（1330 → 1340 collected；1328 → 1338 passed）：
+pytest: 1386 collected / 1384 passed / 2 skipped / 0 failures / 0 errors
+mypy:   Success: no issues found in 72 source files
+node:   node --check web/static/app.js 通过
+本轮用例数净 +32（1354 → 1386 collected；1352 → 1384 passed）：
+        · 新增 14 条 tests/unit/test_enscan_source_blocked.py（Runner 层六种情形）：
+          正常有结果 / 正常零结果 / AQC 验证 / 非零退出码 / 超时与网络错误 /
+          不重试且不假装成功。stderr 取自真实运行的原始 artifact，逐字保留 ANSI 转义。
+        · 新增 13 条 tests/unit/test_enscan_blocked_end_to_end.py：
+          **真 ENScanRunner + 真 execute_job**，覆盖落库字段 / artifact 证据 /
+          覆盖缺口 / 复刻真实超时场景，另加聚合层 6 例（含两条超时对照）。
+        · 新增 5 条 tests/unit/test_enscan_blocked_api.py：
+          走 GET /api/jobs/<id> 真实接口，确认页面拿到的数据，含任务级与步骤行一致性。
+        ★ 反向验证：把 modules/enscan.py 临时还原到 HEAD 后，新用例 7 条失败，
+          失败信息就是 assert 'no_results' == 'source_blocked' ——
+          证明用例真能抓到这个 bug，不是「怎么改都过」。
+  ★ skipped 仍为 2 —— 与 passed 一起看才说明「用例真跑了」，不是被跳过、别处多了一条
+本轮源码改动（跨 modules/ jobs/ core/ 与前端；agent/ 一行未改）：
+        core/errors.py        新增 ErrorCode.SOURCE_BLOCKED = "source_blocked"（同时进 ALL）；
+                              语义是「外部数据源受阻、本次查询未完成」，
+                              与 no_results / rate_limited / network_error / config_error 逐一区分
+        modules/enscan.py     新增 _SECURITY_VERIFICATION_MARKER / _AQC_BLOCKED_MESSAGE /
+                              _SOURCE_BLOCKED_MESSAGE / _AQC_MARKERS /
+                              _security_verification_notice()；
+                              run_scan() 三条路径都按**内容**判定（TimeoutExpired /
+                              returncode != 0 / returncode == 0），
+                              且退出码 0 的那条在**任何「成功」记录之前**先判掉
+        core/runner_result.py _redact() 第一步剥 ANSI 转义（新增 _ANSI_ESCAPE_RE）；
+                              只剥转义、不动正文，且先剥再脱敏
+        jobs/executor.py      aggregate_status() 新增可选 step_error_codes；
+                              **受阻判定排在 all(STEP_TIMEOUT) 分支之前**（真实那次就是超时收场）；
+                              新增 _job_error_message()（「被阻断」与「因验证而超时」两句话）；
+                              _execute_job() 一次 list_steps 读出后拆成两个下标对齐的列表
+        web/static/app.js     ERROR_CODE_LABELS 补 source_blocked 中文标签
+        findings.py           一行未改 —— 步骤状态复用 failed/timeout，
+                              已自动落进 STEP_FAILURE_STATUSES，incomplete_coverage 自动生效
+★ 未对任何真实公网目标重跑扫描工具（用户明令禁止）：
+  定位阶段全部只读（既有 job_steps 记录 + results/artifacts 里的原始 stderr 产物）；
+  验证阶段全部走本地 fixture 垫片与临时目录。
+★ 未做：不自动破解或绕过验证码；不规避爱企查的反自动化限制；不换代理或伪造身份躲避验证；
+  不收集/打印/提交用户 Cookie（由使用者经既有设置页 POST /api/settings/enscan 自行配置）；
+  不把受阻的查询显示成「成功」或伪造结果。
+```
+
+**本轮修复前后对照（复刻真实场景：「被 120 秒掐掉 + 真实 stderr」）**：
+
+```text
+修复前（真实库里 job_steps 的实际值）
+  步骤状态  : timeout
+  步骤错误码: timeout
+  步骤说明  : 执行超过 120 秒，已强制终止          ← 原因被误报成「工具太慢」
+
+修复后
+  步骤状态  : timeout                              ← 仍如实报超时（进程确实被我们掐掉）
+  步骤错误码: source_blocked                       ← 但原因点名受阻
+  步骤说明  : 爱企查（AQC）要求安全验证，本次查询未完成：请先在浏览器完成验证，
+              或在设置页配置有效的 AQC Cookie 后重试（进程在 120 秒后被强制终止）
+  任务状态  : timeout | 错误码: source_blocked
+  任务说明  : 所有步骤均因外部数据源的安全验证而超时，本次查询未完成
+```
+
+**两个最隐蔽的点**：
+
+1. **退出码 0 也可能是假成功**。ENScan 在 AQC 被拦时可能一边打印验证提示、一边以 0 退出；
+   原先这条会落到 `_record_execution`（`status` 默认 `success`），被 `RunnerResult.ok([])`
+   翻成 `no_results`，页面上显示「执行成功但零结果（不是失败）」，与「目标真的没有资产」
+   **逐字段完全相同**。判定必须按**内容**、不能按退出码。
+2. **受阻判定必须排在超时分支之前**。任务级 `aggregate_status()` 里 `all(STEP_TIMEOUT)`
+   会先 `return`；写在它之后，则「全超时 + 全受阻」永远走不到受阻判定 ——
+   而**真实那次运行恰恰是超时收场的**（`duration_ms=120234`、`exit_code=None`）。
+
+**框架侧不存在自动重试**（已逐处核对）：`_execute_job` 对 `pending_steps` 只走一遍 `for` 循环；
+worker 只领取 `queued` 任务、从不自动 requeue；`retry_job` 在生产代码里只有
+`POST /api/jobs/<id>/retry` 一个**手工**调用点。stderr 里那 12 次 `10秒后重试`
+是 **ENScan 自己内部的循环**，被框架的 120 秒超时切断。
+
+---
+
+## 上一轮验证（结果链根因修复，保留供回溯）
+
+```text
+验证时间：2026-10-11（结果链修复：同任务上下游候选注入 + no_input/skipped + stderr_preview）
+工作目录：E:\Programmingtools\geteverything\get_everything_framework
+
+ruff:   All checks passed!
+pytest: 1354 collected / 1352 passed / 2 skipped / 0 failures / 0 errors（143.00s）
+mypy:   Success: no issues found in 72 source files
+本轮用例数净 +14（1340 → 1354 collected；1337 → 1352 passed）：
+        · 新增 12 条 tests/unit/test_result_pipeline_diagnosis.py：
+          用临时目录里的 .cmd 垫片把「外部工具」换成确定性脚本，
+          走**真实的** runner 与 _execute / _execute_stdout / run()，
+          逐工具钉住「正常输出 → 非零结果」，并覆盖空输出 / 进程失败 /
+          工具未装 / 无上游目标四类状态。
+          ★ 修复前是 8 通过 / 4 失败 —— 通过的那 8 条恰好证明框架的
+            stdout 捕获与解析链是完好的（含 assetfinder/waybackurls 这类纯 stdout 工具），
+            失败的 4 条正是两个真缺陷。
+        · 新增 3 条 tests/unit/test_jobs_executor.py：
+          下游拿到上游候选 / 上游为空则下游 skipped+no_input / 孤立 httpx 步骤保持老路径
+        · 改写 2 条 tests/unit/test_runners_m4.py：
+          原用例断言的正是缺陷本身（assert result.status == "success"），
+          改为 test_httpx_without_candidates_reports_no_input 与
+          test_httpx_run_wraps_missing_candidates_as_skipped
+  ★ skipped 仍为 2 —— 与 passed 一起看才说明「用例真跑了」，不是被跳过、别处多了一条
+本轮源码改动（跨 modules/ jobs/ core/ 与前端；agent/ 一行未改）：
+        modules/base.py       新增 upstream_candidates / set_upstream_candidates() /
+                              has_upstream_candidates()（显式注入点，不改任何工具参数语义）
+        modules/httpx.py      _load_candidates() 优先用注入值；
+                              「没有候选」改为 ErrorCode.NO_INPUT + STATUS_SKIPPED
+        modules/dnsx.py       _load_candidates() 优先用注入值（否则退化为只查根域名）
+        jobs/executor.py      新增 _upstream_candidates_for()：执行每步前从**本任务自己的**
+                              assets/observations 取 subdomain 资产注入下游；
+                              新增 _upstream_steps_by_step() 判断「有没有上游步骤」
+        core/errors.py        新增 ErrorCode.NO_INPUT = "no_input"
+        core/runner_result.py 新增 STATUS_SKIPPED；to_step_outcome() 映射 skipped；
+                              is_failure 对 skipped/no_input 返回 False
+        core/db.py            job_steps 新增 stderr_preview 列（只 ADD COLUMN，既有行为 NULL）
+        core/jobs.py          finish_step() 写入 stderr_preview；_step_to_dict() 出参
+        web/static/app.js     补 no_input 中文标签；错误码列加 title；渲染 stderr_preview
+★ 未对任何真实公网目标重跑扫描工具（用户明令禁止）：
+  定位阶段全部只读（既有库记录 / results/ 里 0 字节的输出文件 / subfinder -ls 源清单 /
+  对**公共 API** 的可达性实测）；验证阶段全部走本地 .cmd 垫片与临时目录。
+★ 未做：不给 subfinder/assetfinder 配数据源 API Key（部署配置，不是代码缺陷）；
+  不把 no_results 一律改成成功、不伪造结果、不只改前端结果数或文案。
+```
+
+**本轮结论（六类归因）**：
+
+| 工具 | 归因 | 判定 |
+|---|---|---|
+| `subfinder` | 数据源/环境不可用 | **已确认**：零 API Key，10 个免费源 9 个不可用（crtsh 502、waybackarchive 不可达…） |
+| `waybackurls` | 数据源/环境不可用 | **已确认**：唯一数据源 web.archive.org 完全不可达（对应 28.8s + 0 结果） |
+| `assetfinder` | 数据源/环境不可用 | **部分确认**：公开源含 crtsh(502)/threatcrowd(已停)；未逐源复现 |
+| `dnsx` | 上游候选退化 + 环境 | **未确认**：旧库无记录 → 退化为只解析根域名；根域名是否有 A 记录在不触碰目标的前提下无法区分 |
+| `httpx` | 上游无目标、下游根本没跑 | **已确认**（真缺陷，见 §9.38.2） |
+
+> **不是「目标没有子域名」**：2026-10-02/10-04 两次跑出 **62 条**真实子域名的 subfinder，
+> 命令行与本次**逐字节相同**，且那 62 条结果至今留在 `results/artifacts/`。
+
+---
+
+## 上一轮验证（测试阶段改造，保留供回溯）
+
+> **该轮是「测试阶段改造」**：口径变更（取消授权业务要求、工具全开放、旧首页退役），
+> 不是修缺陷。§18 与 §17 的验证块原样保留在下方，便于回溯。
+
+```text
+验证时间：2026-10（测试阶段改造：开放扫描模式 + 三步扫描中心 + 工具开放 + 首页退役 + 资产/Diff 简化）
+工作目录：E:\Programmingtools\geteverything\get_everything_framework
+
+ruff:   All checks passed!
+pytest: 1339 collected / 1337 passed / 2 skipped / 0 failures / 0 errors（180.53s）
+mypy:   Success: no issues found in 72 source files
+本轮用例数净 -1（1340 → 1339 collected；1338 → 1337 passed）：
+        · 删 2 条：test_public_scan_mode.py 里钉「任务快照项目授权备注」与
+          「任务挂项目」的用例（这两件事本轮被取消），合并为 1 条反向守卫
+          test_public_job_does_not_snapshot_any_project_authorization_note
+        · 改 2 条：check 契约用例从断言 resolved_check_deferred 改成钉死 checks 项的
+          **键集合**（更强：加字段、改字段名都会被抓到）
+        · 删 3 条 + 增 3 条：原「目标自动匹配授权资产」三条（eligible_scope_ids 契约 /
+          前端 applyMatchedScope / 自动匹配驱动建任务）整体换成三条反向守卫
+          （预检不得有匹配契约 / JS 不得有自动匹配流水线 / JS 不得发送 scope_id 与 project_id）
+        · 改名 2 条：test_internet_whitelist_is_exactly_httpx_and_subfinder →
+          test_selectable_tools_covers_every_registered_runner；
+          test_high_risk_and_active_tools_are_blocked →
+          test_high_risk_tools_are_now_selectable_but_not_default_enabled
+  ★ skipped 仍为 2 —— 与 passed 一起看才说明「用例真跑了」，不是被跳过、别处多了一条
+本轮源码改动（跨 api/ core/ app.py 与前端；表结构、认证机制、agent/ 一行未改）：
+        core/safety.py        新增 OPEN_SCAN_ENV / open_scan_enabled()（**源码默认 false**）
+                              mode_report() 加 open_scan_enabled / open_scan_env
+        core/scope.py         Scope.allow_all + OPEN_SCOPE_ID/OPEN_SCOPE_NAME + open_scope()
+        core/policy.py        require_scope() 的开放分支；未开开关且缺 scope_id 时 400 并点名环境变量
+        core/tool_registry.py internet_allowed → selectable（旧名降级为 property 别名）；
+                              17 个已注册 runner 全部 selectable=True；nuclei 仍不可选；
+                              selectable_tools() / assert_tools_selectable() + 两个 deprecated 别名
+        core/application.py   create_open_public_job() 只做「策略解析 → 工具已接入 → 节奏 → create_scan_job」
+                              project_id/authorization_note 不再参与；to_dict() 显式标注 deprecated_fields
+        api/public_scan.py    POST /api/public-jobs/check 改成**只读目标预检**；GET /api/scan-center 去掉 projects
+        app.py                index.html 删除；GET / 只有 redirect；POST / 变 405；删掉 7 个页面层函数
+        web/                  扫描中心四步 → 三步；任务面板折叠；资产/Diff 去掉范围筛选
+        scripts/check_env.py  新增「开放扫描模式」检查项（开启时 warn）
+        scripts/verify_public_scan.py  整体重写成新链路（仍只打保留域、不碰真实公网）
+        tests/conftest.py     **新增钉死 GEF_OPEN_SCAN_MODE=false**
+反证（守卫不是在「已经对的代码」上顺手写的）：
+        · conftest 不钉 GEF_OPEN_SCAN_MODE 时（本机 .env 里它是 true，会被 load_dotenv 读进来），
+          test_policy.py::test_validate_job_targets_requires_scope_id 直接红：
+          「DID NOT RAISE <class 'core.errors.BadRequestError'>」—— 整整一层
+          「无授权范围即拒绝」的契约在测试里静默消失。实测 77 failed，钉住后回到 0 failed
+        · assert_tools_selectable 不先查 KNOWN_UNAVAILABLE_TOOLS 时，nuclei 被误报成
+          「以下工具未登记，禁止使用: nuclei」—— 与界面显示的「未接入」自相矛盾（已修）
+        · 实测口径（本机 .env 双开关皆为 true，不联网）：
+          GET /health                     → modes.open_scan_enabled=true
+          不挂 scope 建任务（mock）        → 202，scope_id == "open"
+          GET /api/scopes                 → 「open」**不在**清单里（开放范围从不落库）
+          显式 scope + evil.test          → 403 scope_violation（白名单照旧生效）
+          custom + nuclei                 → 400，unavailable_tools == [nuclei]
+          custom + nmap                   → 202（工具已开放）
+本地非公网工具验证（只跑 --version / health，**未对任何真实公网目标发起扫描**）：
+        17/17 工具在 PATH 上可用；registry 的 17 个 runner == TOOL_POLICIES 的 17 个键 ==
+        tools_health() 的 17 个键；selectable_tools() == 全部 17 个；KNOWN_UNAVAILABLE_TOOLS == {nuclei}
+未动：agent/（一行未改，P0-6 阶段二仍未开工）、数据库结构与数据、认证机制本身、
+        `results/scan_results.db`（只读）、api/projects.py 与 api/scopes.py 的后端实现
+文档校正（本轮批准的 8 份，逐一点名）：PROJECT_STATE.md（本节）、CHANGELOG.md、
+        SECURITY.md、docs/CODEBASE_MAP.md、docs/DECISIONS.md、docs/API.md、
+        docs/AGENT_ASYNC_IMPACT.md、get_everything_framework/README.md（README 在框架子目录）
+        —— **docs/ARCHITECTURE.md 与 docs/TEST_REPORT.md 不在本轮清单内**
+
+上一轮（§18，用户答复后收口）的验证快照，原样保留：
         tests/integration/test_scope_form_acceptance.py   **新文件 9 条**
         · test_legitimate_scope_submits_and_attaches_to_project          （③ 两步调用链）
         · test_direct_api_bypass_is_still_rejected_by_the_server ×4      （④ 四组输入）
@@ -833,7 +1037,7 @@ git diff --check: 退出码 0
         · 新增 docs/DECISIONS.md §3.17（缺陷五、缺陷六、四条残余项复核、新增守卫、待拍板）
 ```
 
-**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → 页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323` → 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327` → 第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发 `1330` → **用户答复后收口：`novalidate` 四条验收 + 5 个 session 键按登录态过滤 `1340`**
+**基线演进**：M1 `70` → M2 `142` → M3 `236` → M4 `405` → P0 加固 `538` → P1 `701` → M7 `707` → M5 字典可移植 `715` → P0-7 幂等/退避 `739` → M7 SQLite 并发 `752` → M7 本地全链路 E2E `759` → P1 §19 Observability `828` → §14 文档同步 + 导出格式 400 收口 `838` → Diff 属性别名修复 `847` → P0-6 阶段一（Application Service 入口收拢）`874` → M6 环境自检 `900` → M7 测试报告 + 测试运行期目录隔离修复 `901` → 公网授权测试模式体验版 `1004` → 下一阶段体验优化 Phase 1 UI 清理 `1009` → Phase 2 公网授权测试入口 `1036` → Phase 3 Scan Profile `1091` → Phase 4 结果体验 `1149` → 下一阶段规划方案 Phase 1 前端体验重构 `1159` → Phase 2 Tool Registry `1189` → Phase 3 公网授权测试完善 `1290` → 第 6 节目标自动匹配授权资产 `1293` → 第 13 节后端安全边界缺口回填 `1296` → 执行期双开关复检 + Phase 1 四处审计缺口收口 `1307` → 第二轮只读审计：四处守卫/口径缺口收口 `1315` → 页面级认证缺口收口（匿名 chat + 匿名首页资产泄漏）`1323` → 第二轮「匿名可达面」审计：匿名首页汇总泄漏 + 导出结果行重复 `1327` → 第三轮只读审计收口：第一个授权范围建不出来 + 匿名扫描中心骨架全量下发 `1330` → 用户答复后收口：`novalidate` 四条验收 + 5 个 session 键按登录态过滤 `1340` → 测试阶段改造：开放扫描模式 + 扫描中心三步 + 工具闸门改名 + 旧首页退役 `1339` → 结果链根因修复：同任务上下游候选注入 + `no_input`/`skipped` + `stderr_preview` `1354` → **外部数据源安全验证受阻：`source_blocked` + 退出码 0 的假成功（`1386`）**
 
 > 本轮 +8（`test_tool_parameters.py` 17 → 21、`test_public_scan_mode.py` 122 → 125、
 > `test_assets_api.py` 29 → 30），另有 **2 条既有用例被加强**（函数数不变、断言变严）：

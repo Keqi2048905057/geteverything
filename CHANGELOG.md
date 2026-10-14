@@ -981,6 +981,13 @@ Agent、`pyproject.toml`。**未引入**任何新依赖、React、Redis。
   ③ `TargetCheck.eligible` 单独建模 —— 命中排除列表的范围不算「可执行」。
 - 前端 `GET /scan-center` 改成四步：输入目标 → 确认授权范围 → 选择工具 → 执行模式与提交。
 
+> ▶ **`core/authorization.py` 已不在生产路径上**（测试阶段改造，2026-10-10）：
+> 模块 docstring 已写明这一点，**现在没有任何生产代码 import 它**。文件保留、**不删**，
+> 只为两件事：① 复用 `Scope.match_target` 做批量试算；② 让
+> `tests/unit/test_authorization.py` 继续守「**试算结论与真实提交同源**」这条不变量。
+> **不要再把它接回创建任务那条链** —— 创建任务的授权判定只有一处：
+> `core.policy.require_scope`。
+
 #### Phase 3 — Scan Profile = 工具组合 + 节奏（本轮）
 
 方案第 5 节说「不要固定扫描流程」，并要求引入 **Scan Profile**。本阶段的判断是：
@@ -1981,11 +1988,338 @@ session 观测  +  server-side session  +  export quota  +  Agent 重构
 > 剔掉后 cookie 从 **5464 B → 698 B**。**5464 B 从第 1 轮起就同时超过** werkzeug 的
 > 4093 B 与浏览器的 4096 B —— 是稳定复现，不是偶发。
 
+### 测试阶段改造：开放扫描模式 + 扫描中心三步 + 工具闸门改名（2026-10-10）
+
+> **这是一次口径变更，不是加功能**：本节把「必须先有一个授权范围挂在某个项目下」
+> 这项**业务要求**改成**可显式豁免**（新增第 2 道闸 `GEF_OPEN_SCAN_MODE`），
+> 同时把工具闸门的名字从它**没说准**的「能不能上公网」改成它**真正在说**的
+> 「能不能被勾选」（`internet_allowed` → `selectable`）。
+> 一句话：**「不要求授权」不等于「不做任何安全检查」** —— 显式 scope 时的白名单与
+> 排除列表（排除优先，对所有 Scope 生效）、目标格式校验、SSRF / 内网地址拒绝
+> （`core.policy.validate_resolved_address`）、并发与超时上限、审计，**一条都没取消**。
+> 详见 `PROJECT_STATE.md`、`SECURITY.md`、`docs/DECISIONS.md`、`docs/API.md`、
+> `docs/CODEBASE_MAP.md`、`docs/AGENT_ASYNC_IMPACT.md`。
+
+**一、双开关语义分离（本节最重要的口径，两者不可互相替代）**
+
+```text
+GEF_ALLOW_REAL_SCAN   第 1 道闸：这个进程允不允许真的执行外部工具
+GEF_OPEN_SCAN_MODE    第 2 道闸：豁不豁免「必须挂在授权 Scope 上」这项业务要求
+```
+
+- 新增 `GEF_OPEN_SCAN_MODE`，**源码默认 `false`**，且与第 1 道闸一样是**失败关闭**：
+  `core/safety.py:open_scan_enabled()` 只认显式真值（`1/true/yes/on/y`），
+  空串、假值、任何拼错的值一律按**关闭**处理；
+- **只开第 2 道、不开第 1 道 → `real` 任务照样 403**（`GEF_ALLOW_REAL_SCAN` 仍是执行前提）；
+- **只开第 1 道、不开第 2 道 → 仍然必须有授权范围**，缺 `scope_id` 直接 400（见下）；
+- 本机 `.env` 里**两个都是 `true`** —— 这是**主动开启**，
+  **不代表公开仓库下载后默认进入开放公网扫描模式**。
+
+**二、`core/`（本轮改动的重心）**
+
+- `core/safety.py`：新增 `OPEN_SCAN_ENV = "GEF_OPEN_SCAN_MODE"` 与 `open_scan_enabled()`；
+  `mode_report()` 增加 `open_scan_enabled` / `open_scan_env` 两个字段。
+- `core/scope.py`：新增 `Scope.allow_all` 字段，以及 `OPEN_SCOPE_ID = "open"` /
+  `OPEN_SCOPE_NAME = "未限定（开放模式）"` / `open_scope()`。★ `open_scope()` 是**只做内部
+  兼容的构造层**：在内存里给出一个全放行的范围，**从不落库、不下发前端、不进任何授权 UI**
+  —— 页面上那套「项目 / 授权范围」下拉本轮已整段删除，它没有、也不应该有界面入口。
+- `core/policy.py`：`require_scope()` 增加开放模式分支。**未开开关且缺 `scope_id` 时是 400**，
+  文案**点名环境变量**（`details={"field":"scope_id","env":"GEF_OPEN_SCAN_MODE"}`，提示
+  `GEF_OPEN_SCAN_MODE=true`），**不静默降级成 mock**；只有**显式** `scope_id="open"`
+  **且**开关开启才返回开放范围（执行期复检走的也是这一条）；**其它显式 scope 不存在时
+  始终 403** —— **开放模式也不放过**。
+- `core/tool_registry.py`：字段 `internet_allowed` → `selectable`，旧名降级为
+  **deprecated property 别名**，`to_dict()` 两个键同时输出、值相同；**17 个已注册 runner
+  全部 `selectable=True`**；`default_enabled` **不变**（只有 `subfinder` / `httpx` 为 `True`）；
+  `nuclei` 仍 `selectable=False`；新增 `selectable_tools()` / `assert_tools_selectable()`，
+  旧名 `internet_allowed_tools()` / `assert_tools_internet_allowed()` 保留为 deprecated 薄别名。
+  ★ **顺带修一个真 bug**：判定必须**先查 `KNOWN_UNAVAILABLE_TOOLS`、再下「未登记」结论** ——
+  反过来的话 `nuclei`（它住在 `KNOWN_UNAVAILABLE_TOOLS` 里）会被误报成
+  「以下工具未登记，禁止使用: nuclei」，与界面显示的「未接入」**自相矛盾**。
+  由此得到本轮最重要的不变量：**「这个名字没有元数据」绝不等于「不受限」** ——
+  只认注册表，查不到就拒绝。
+- `core/application.py`：`create_open_public_job()` 收敛为**唯一入口**，只多做两件事
+  （策略模板解析 → 工具是否已接入），然后**原样**调 `create_scan_job()`；
+  `project_id` / `authorization_note` **不再参与业务逻辑**；`to_dict()` 显式标注
+  `deprecated_fields`。
+- `core/authorization.py`：模块 docstring 加上「**已不在生产路径上**」说明（**文件保留、
+  不删**）—— 现在没有任何生产代码 import 它；创建任务的授权判定只有
+  `core.policy.require_scope` 一处（详见本节上方 Phase 2 段落的追加标注）。
+- `core/pace.py`：`LIGHT_TOOL_BUDGET` 仍只覆盖 `subfinder` / `httpx`，但**理由变了**：
+  不是「白名单外进不来」（白名单已变成提示），而是「**不假装知道 nmap 打别人的站该多快**」。
+  它**只是提示、不是闸门**，低频档仍由 `jobs.executor` 注入。
+
+**三、API 契约变动**
+
+- `POST /api/public-jobs/check`（`api/public_scan.py`）重写成**只读目标预检**：
+  `checks[]` 的键集**恰好**是 `{raw, normalized, kind, valid, verdict, message, excluded}`，
+  `summary` 为 `{total, valid, invalid, excluded, ready}` —— `ready` 的含义**不再是
+  「有没有授权」**，而是「格式合法且未命中排除列表」= 可以提交；**不再返回**
+  `eligible_scope_ids` / `blocker` / `matches` 这些授权结论（`scope_id` / `project_id`
+  恒为 `null`，属 deprecated 兼容键）。不创建任务、不写库、不发网络请求、不写审计，
+  仍需管理员身份。
+- `GET /api/scan-center`：**去掉 `projects`**（授权项目业务取消，页面不再有这一栏），
+  **新增 `selectable_tools`**（deprecated 兼容键 `internet_allowed_tools` 仍在，值相同）。
+- `api/tools.py`：`_registry_fields` 兜底加 `selectable`（+ deprecated `internet_allowed`），
+  未接入工具同样给 `selectable: false`。
+
+**四、`app.py` 与 `web/`：旧首页退役 + 扫描中心三步**
+
+- `app.py`：**删除 `index.html` 渲染**。`GET /` 只有 **302 → `/scan-center`**；
+  `POST /` 变成 **405 Method Not Allowed** —— 既不是 200（未知动作再也回不出「未知操作」
+  页面），也不是 401（不再有幽灵页面接口），**不留幽灵路由**。同时删掉 7 个页面层函数
+  （`build_page_context()` / `_to_ui_history()` / `normalize_domain` / `_SCAN_ACTIONS` /
+  `_require_admin_for_page()` / `_scope_targets()` / `_load_scope_options()`）与 3 个 import
+  （`from storage import ScanResultStore`、`from flask import session`、
+  `from agent import handle_agent_message`）。路由绑定数因此从 **50 → 49**
+  （规则仍 48、`/api/*` 仍 42；`/` 从 `GET/POST` 两个绑定降为 1 个）。
+- `web/templates/index.html` **已删除**；`scan_center.html` **四步 → 三步**
+  （步骤 1 确认目标 / 步骤 2 选择工具 / 步骤 3 创建任务），任务面板改 `<details>` 可折叠；
+  `login.html` 链接改「← 进入扫描中心」；`assets.html` 去掉范围筛选与 Diff 范围选择。
+- `web/static/scan_center.js`：只发 `targets` / `strategy` / `pace`（+ 可选
+  `tools` / `operator` / `rate_limit` / `timeout_seconds` / `mode`），**删掉整条自动匹配
+  授权资产流水线**（`applyMatchedScope()` / `eligible_scope_ids` / `renderConsentSummary()`
+  等，**不得复活**），**不再发** `scope_id` / `project_id`；`currentTargets()` /
+  `checkIsFresh()` / `invalidateCheckResult()` 三条前端守卫保留。
+- `web/static/assets.js`：去掉 `scope_id`（含详情面板「所属范围」一行）；
+  Diff 两个下拉项改渲染**「网址 工具」**（形如 `example.com subfinder · …`）。
+
+**五、脚本、测试与文档**
+
+- `scripts/check_env.py`：新增「**开放扫描模式**」检查项 —— 开启时是 **warn** 级
+  （「不要求授权范围，任意目标都可直接提交任务 / 仅在本机测试、已获授权的环境开启」），
+  关闭时 ok；自检脚本仍**只读**（不建库、不执行任何扫描）。
+- `scripts/verify_public_scan.py`：整体重写成新链路（不再有「建项目 → 建 Scope → 关联」
+  那三段），仍**只打 RFC 6761 保留域**（`www.example.test` / `a.example.test` / `evil.test`），
+  **不碰真实公网**。
+- `tests/conftest.py`：**钉死**（不是 `setdefault`）`GEF_OPEN_SCAN_MODE=false`。原因值得记下来：
+  `config.load_dotenv()` 会把本机 `.env`（那里 `GEF_OPEN_SCAN_MODE=true`）读进测试进程，
+  一旦漏进来，`test_validate_job_targets_requires_scope_id` 这类「没有 `scope_id` 必须 400」
+  的守卫会**集体静默失效**（实测 `DID NOT RAISE`，全量 77 failed）。
+- 9 个测试文件按新口径改写 / 新增 / 删除守卫；基线
+  **1340 collected / 1338 passed → 1339 collected / 1337 passed**（净 **-1**）：
+  删掉 2 条钉「任务快照项目授权备注」与「任务挂项目」的用例，合并为 1 条反向守卫
+  `test_public_job_does_not_snapshot_any_project_authorization_note`。
+  ★ `skipped` **仍是 2**，**收集数与通过数必须一起看**。
+- **文档**：本轮同步 **8 份** —— `PROJECT_STATE.md`、`CHANGELOG.md`、`SECURITY.md`、
+  `docs/CODEBASE_MAP.md`、`docs/DECISIONS.md`、`docs/API.md`、`docs/AGENT_ASYNC_IMPACT.md`、
+  `get_everything_framework/README.md`。**只有这 8 份**，其余文档本轮未动。
+
+**未动**：`agent/` 一行未改；表结构与数据、认证机制本身、`results/scan_results.db`（只读）、
+`api/projects.py` 与 `api/scopes.py` 的后端实现。
+**未对任何真实外部目标发起扫描** —— 本轮验机都打 `127.0.0.1` 与 RFC 6761 保留域 `example.test`。
+
+**验证**：`1339 collected / 1337 passed / 2 skipped`；`ruff` 全过；
+`mypy` 72 文件 0 error。（本节下方的 `### 测试与验收基线` 一节里记的 `1338 passed`
+是**上一轮收口时**的数字，**本轮以本节为准**。）
+
+### 修复 — 结果链：同任务上下游候选注入 + `no_input` / `skipped` + `stderr_preview`（2026-10-11）
+
+**症状（用户报告）**：扫描中心能跑任务了，但多个工具都显示「成功」、结果数全是 0、
+错误码全是 `no_results`。涉及 `assetfinder` / `dnsx` / `subfinder` / `httpx` / `waybackurls`，
+目标 `peizheng.edu.cn`。
+
+**先查证、后修复；未对任何真实公网目标重跑扫描。** 结论来自 `results/local.db` 的既有记录、
+`results/` 里的结果文件、`subfinder -ls` 的源清单，以及对**公共 API** 的可达性实测。
+
+**决定性证据 —— 不是「目标没有子域名」**：
+
+| 时间 | subfinder 命令行 | found_count |
+|---|---|---|
+| 2026-10-02 | `-d peizheng.edu.cn -t 5 … -timeout 10 -silent` | **62** |
+| 2026-10-04 | 同上（逐字节相同） | **62** |
+| 2026-10-11 | 同上（逐字节相同） | **0** |
+
+且 `modules/`、`config.py`、`jobs/`、`storage.py` 在上一轮改造中**一行未改**
+（`git status --porcelain` 对这些路径为空）。真实原因是**环境侧数据源大面积不可用**：
+`subfinder` 的 `provider-config.yaml` **所有源都是空 `[]`**（零 API Key），只能用免费源，
+而 10 个免费源里 **9 个不可用**（`crtsh` 502、`waybackarchive` 不可达、`rapiddns`/`anubis`/
+`commoncrawl`/`hudsonrock` TLS 失败、`threatcrowd`/`digitorus` DNS 解析失败、`sitedossier` 404）；
+`waybackurls` 唯一的数据源 web.archive.org **完全不可达**（对应它 28.8 秒 + 0 结果）。
+
+**框架的捕获链是清白的**：`assetfinder` / `waybackurls` 是 stdout 型工具，
+`_execute_stdout` 会把捕获到的 stdout 写进结果文件；文件 **0 字节**说明捕获到的 stdout
+确实是空的，不是「只读文件、丢了 stdout」。新增的本地 fixture 用例逐条证明了这一点。
+
+**但确实有两个真缺陷（已修）**：
+
+- **同任务内的上下游依赖是断的**。`dnsx` / `httpx` / `alterx` / `shuffledns` 的
+  `_load_candidates()` 读的是旧同步链的 `ScanResultStore`（`results/scan_results.db`），
+  而异步任务链**从不写那个库**（`storage.save_results` 在生产代码里已无调用方，只剩测试）。
+  铁证：10-04 的任务里 subfinder `found_count=62`，**同一个任务**中的 httpx 依然报
+  「没有可供 httpx 探测的目标」、`duration_ms=0`、`command_preview=null`。
+- **「没执行」被显示成「成功」**。`modules/httpx.py` 用
+  `RunnerInputError(NO_RESULTS, …, status="success")` 表达「没有候选目标」，
+  页面上就成了「成功 / 0 / `no_results` / 0ms / 命令 —」，与「真的跑了一遍、确实没有存活站点」
+  完全无法区分。
+
+**修复（最小范围）**：
+
+- `modules/base.py`：新增 `upstream_candidates` / `set_upstream_candidates()` /
+  `has_upstream_candidates()` —— 一个**显式注入点**，不改任何工具的参数语义；
+- `jobs/executor.py`：新增 `_upstream_candidates_for()`，执行每个步骤前从**本任务自己的**
+  `assets`/`observations` 取 subdomain 资产注入下游；新增 `_upstream_steps_by_step()`
+  判断「这一步在任务里有没有上游步骤」—— **有上游但上游零结果 → 注入 `[]`、下游如实报
+  `no_input`（绝不回落去翻旧库）**；任务里只有这一步（单工具直跑）→ 不注入，走老路径；
+- `core/errors.py`：新增 `ErrorCode.NO_INPUT = "no_input"`；
+- `core/runner_result.py`：新增 `STATUS_SKIPPED`，`to_step_outcome()` 映射成 `skipped`；
+  `is_failure` 对 `skipped`/`no_input` 返回 `False`（它不是工具失败，不该把任务聚合判成 `failed`）；
+- `core/db.py` / `core/jobs.py`：`job_steps` 新增 `stderr_preview` 列（**只 ADD COLUMN**，
+  既有行为 `NULL`），写入并出参；
+- `web/static/app.js`：补 `no_input` 中文标签、错误码列加 `title` 提示、渲染 `stderr_preview`。
+
+**新增/改写测试**：
+
+- `tests/unit/test_result_pipeline_diagnosis.py`（**新增 12 例**）：用临时目录里的 `.cmd` 垫片
+  把「外部工具」换成确定性脚本，走**真实的** runner 与 `_execute` / `_execute_stdout` / `run()`，
+  逐工具钉住「正常输出 → 非零结果」，并覆盖空输出 / 进程失败 / 工具未装 / 无上游目标四类状态。
+  **修复前 8 通过 / 4 失败，修复后 12 通过**；
+- `tests/unit/test_jobs_executor.py`（**新增 3 例**）：下游拿到上游候选 / 上游为空则下游
+  `skipped` + `no_input` / 孤立 httpx 步骤保持老路径；
+- `tests/unit/test_runners_m4.py`（**改写 2 例**）：原用例断言的正是缺陷本身
+  （`assert result.status == "success"`）。
+
+**本地整链复现（不碰外网）**：用假 subfinder + 假 httpx 走 `execute_job` ——
+修复前 httpx `found=0` / `succeeded` / `no_results` / `0ms` / `cmd=null`；
+修复后 httpx 拿到 `-l <临时输入文件>`（内容正是 subfinder 同任务扫出的两条子域名），
+跑出 2 条结果。
+
+**验证**：`1352 passed / 2 skipped`（基线 1338 / 2，收集数 1354）；`ruff` 全过；
+`mypy` 72 文件 0 error。
+
+**未做（明确边界）**：不给 `subfinder`/`assetfinder` 配数据源 API Key（那是部署配置，不是代码缺陷）；
+不把 `no_results` 一律改成成功、不伪造结果、不只改前端结果数或文案；不对任何真实公网目标重跑扫描工具；
+`alterx` / `shuffledns` 虽已接入同一条注入路径，但**尚未补**逐工具回归用例（已知覆盖缺口）。
+
+### 修复 — 外部数据源安全验证受阻：`source_blocked` + 退出码 0 的假成功（2026-10-11）
+
+**症状（用户报告）**：`enscan` 的输出里出现
+
+```text
+[ERR] 【AQC】需要安全验证，请打开浏览器进行验证后操作，
+10秒后重试！ https://aiqicha.baidu.com/
+```
+
+**先查证、后修复；未对任何真实公网目标发起扫描。** 结论全部来自 `results/local.db` 的既有
+`job_steps` 记录与 `results/artifacts/` 里的原始 stderr 产物。**本轮要解决的不是「怎么绕过验证」，
+而是「框架能否正确识别并呈现外部数据源受阻」** —— 正常浏览器验证与受支持的会话配置由使用者自行完成。
+
+**五个事实（全部实测，不是按错误文本假定）**：
+
+| 问题 | 实测结论 |
+|---|---|
+| 这条 `[ERR]` 来自 stdout 还是 stderr？ | **stderr**。artifact `art_d01bf98894b84c1681a79e55d4f4aa24`（`kind=stderr`、2779 字节、`truncated=0`）里就是它 |
+| 它长什么样？ | `'[\x1b[31mERR\x1b[0m] 【AQC】需要安全验证…'` —— `ERR` 被 **ANSI SGR** 包着（全文 26 个转义），`安全验证`×12、`AQC`×12、`10秒后重试`×12 |
+| 进程最后的退出码？ | 那次真实运行**没有正常退出**：被框架的 120 秒 `process_timeout` 掐掉，`exit_code=None`、`duration_ms=120234` |
+| Runner 是否把它当成了普通结果 / `no_results`？ | **会**。`returncode == 0` 分支直接 `_record_execution(...)`（`status` 默认 `success`）→ `RunnerResult.ok([])` → `no_results` |
+| 页面是否把受阻的任务显示成「成功」？ | **会**。`succeeded` + `no_results` + `found_count=0` + `error_message="工具执行成功但未发现任何结果"`，与「目标真的没有资产」**逐字段相同** |
+
+**决定性证据 —— 阻断与「真零结果」修复前无法区分**（固定 `_run_subprocess` 垫片，不联网）：
+
+| 情形 | `status` | `error_code` | 步骤状态 | 说明 |
+|---|---|---|---|---|
+| A `exit=0` + 验证 stderr + 无新 JSON（**真实运行的形状**） | `success` | `no_results` | `succeeded` | **假成功** |
+| B `exit=0` + 验证 stderr + 有 JSON | `success` | `no_results` | `succeeded` | 同上，阻断事实完全不可见 |
+| C `exit=1` + 验证 stderr | `failed` | `unknown_error` | `failed` | 受阻被误标成「未知错误」 |
+| D **对照**：`exit=0` + 正常零结果（只有 INF 行） | `success` | `no_results` | `succeeded` | **与 A 完全相同** |
+
+**A 与 D 逐字段相同，这就是新增错误码的依据。**
+
+**为什么新增 `source_blocked` 而不复用既有码**（`core/errors.py`，同时进 `ErrorCode.ALL`）：
+
+| 既有码 | 为什么对不上 |
+|---|---|
+| `no_results` | 语义是「跑通了、确实没有」。这里查询**根本没做完**，两者混淆正是本 bug |
+| `rate_limited` | 潜台词是「等一会儿重试可能好」。**安全验证再等也不会自己通过**，反而多打一轮请求 |
+| `network_error` | 网络是**通的** —— 服务端明确回了「需要验证」，这是业务响应不是链路故障 |
+| `config_error` | 指本机配置文件缺失。这里可能是风控策略，**压根不是配置问题** |
+
+这是**加法**：既有 10 个工具错误码一个都没改，前端 `web/static/app.js:ERROR_CODE_LABELS`
+同步补 `source_blocked: "外部数据源要求安全验证，本次查询未完成（不是零结果）"`，
+有测试同时钉住常量表与前端标签表避免漂移（同 `config_error` 的体例）。
+
+**修复（最小范围）**：
+
+- `modules/enscan.py`：新增 `_SECURITY_VERIFICATION_MARKER = "安全验证"`、`_AQC_BLOCKED_MESSAGE`、
+  `_SOURCE_BLOCKED_MESSAGE`、`_AQC_MARKERS = ("AQC", "aiqicha")` 与
+  `_security_verification_notice(*streams)`；`run_scan()` 的**三条路径**都按**内容**判定 ——
+  `TimeoutExpired`（状态仍如实报 `timeout`，只是 `error_code` 换成 `source_blocked`）、
+  `returncode != 0`（不再一律报 `unknown_error`）、`returncode == 0`
+  （**在任何「成功」记录之前**先判掉）。**被阻断时不解析、不返回任何域名** ——
+  残留输出不是完整结果，当成「查到的资产」上交等于用残缺数据冒充完整答案；
+  证据照旧留在 `last_execution` 里由 executor 落盘；
+- `core/runner_result.py`：`_redact()` 第一步新增 `_ANSI_ESCAPE_RE.sub("", text)`。
+  前端 `el()` 用 `textContent`（不解析 HTML），不剥的话页面上会显示成 `[[31mERR[0m]` 乱码，
+  而它恰好紧挨着「为什么零结果」这个最关键的判断依据；转义序列还会插进 `Key=Value` 中间
+  把脱敏正则拆散。**只剥转义、不动正文**；
+- `jobs/executor.py`：`aggregate_status()` 新增**可选**参数 `step_error_codes`。
+  判定只有一条：全部失败且全部错误码都是 `source_blocked` —— 满足时返回
+  `(STATUS_TIMEOUT, SOURCE_BLOCKED)` 或 `(STATUS_FAILED, SOURCE_BLOCKED)`。
+  ★ **受阻判定必须排在 `all(STEP_TIMEOUT)` 分支之前**，这是本轮一个真缺口：
+  最初写在超时分支**之后**，而全超时会先 `return`，于是「全超时 + 全受阻」永远走不到 ——
+  **而真实那次运行正是超时收场的**。混着别的失败原因时仍是 `unknown_error`（更准确的概括）；
+  不带该参数时行为与修复前**逐字节一致**。另新增 `_job_error_message(status, error_code)`：
+  受阻时按状态给两句不同说明（「被阻断」vs「因验证而超时」），替代原先误导性的
+  「所有步骤均失败」/「所有步骤均超时」（后者听起来像工具太慢，会把人引向**调大超时**，
+  而被安全验证拖到超时是**再调也不会好**的）。`_execute_job()` 改为**一次** `list_steps`
+  读出后拆成两个下标对齐的列表 —— 分两次读会有中间态，若期间有步骤落库会导致错误码整体错位；
+- `web/static/app.js`：`ERROR_CODE_LABELS` 补 `source_blocked` 中文标签。
+
+**步骤状态复用 `failed` / `timeout`，不新增状态值**：`to_step_outcome()` 的状态映射是个字典，
+未知状态会 `KeyError`；而 `failed`/`timeout` 已在 `core/findings.py:STEP_FAILURE_STATUSES` 里，
+于是覆盖缺口提示 `incomplete_coverage` **自动**把它计入 —— `findings.py` 一行未改。
+
+**关于「反复重试」—— 那 12 次是 ENScan 自己的循环**：框架侧**不存在任何自动重试**，
+已逐处核对：`_execute_job` 对 `pending_steps` 只走一遍 `for` 循环；worker 只领取 `queued` 任务、
+从不自动 requeue；`retry_job` 在生产代码里只有 `POST /api/jobs/<id>/retry` 一个**手工**调用点。
+另注意 ENScan 的 `-type` 默认就是 `aqc`，而 `build_command()` **不发 `-type`**，
+所以爱企查**始终**在查询渠道里。
+
+**新增测试（32 例，全部不联网）**：
+
+- `tests/unit/test_enscan_source_blocked.py`（**14 例**）：Runner 层六种情形 —— 正常有结果 /
+  正常零结果 / AQC 验证 / 非零退出码 / 超时与网络错误 / 不重试且不假装成功；
+- `tests/unit/test_enscan_blocked_end_to_end.py`（**13 例**）：**真 `ENScanRunner` + 真 `execute_job`**，
+  含**复刻真实超时场景**那一例与聚合层 6 例（含两条超时对照）；
+- `tests/unit/test_enscan_blocked_api.py`（**5 例**）：走 `GET /api/jobs/<id>` 真实接口，
+  确认页面拿到的数据、任务级与步骤行一致；
+- 新增 fixture（取自真实运行的原始 stderr，**逐字保留 ANSI 转义**，只把真实域名换成 `example.test`）：
+  `tests/fixtures/enscan_aqc_blocked_stderr.txt`（1689 字节 / 26 转义 / `安全验证`×12）、
+  `tests/fixtures/enscan_no_results_stderr.txt`（93 字节，只有 INF 行、**零** ERR，对照用）。
+
+**反向验证（证明用例真能抓到这个 bug）**：把 `modules/enscan.py` 临时还原到 `HEAD` 后，
+新用例 **7 条失败**，失败信息就是 `assert 'no_results' == 'source_blocked'`。
+
+**复刻真实场景的实测输出**（「被 120 秒掐掉 + 真实 stderr」）：
+
+```text
+修复前（真实库里 job_steps 的实际值）
+  步骤状态  : timeout
+  步骤错误码: timeout
+  步骤说明  : 执行超过 120 秒，已强制终止          ← 原因被误报成「工具太慢」
+
+修复后
+  步骤状态  : timeout                              ← 仍如实报超时（进程确实被我们掐掉）
+  步骤错误码: source_blocked                       ← 但原因点名受阻
+  步骤说明  : 爱企查（AQC）要求安全验证，本次查询未完成：请先在浏览器完成验证，
+              或在设置页配置有效的 AQC Cookie 后重试（进程在 120 秒后被强制终止）
+  任务状态  : timeout | 错误码: source_blocked
+  任务说明  : 所有步骤均因外部数据源的安全验证而超时，本次查询未完成
+```
+
+**验证**：`1384 passed / 2 skipped`（基线 1352 / 2，收集数 1386）；`ruff` 全过；`mypy` 72 文件 0 error。
+
+**未做（明确边界）**：不自动破解或绕过验证码；不尝试规避爱企查的反自动化限制；不通过更换代理
+或伪造身份躲避验证；不擅自收集、打印或提交用户 Cookie（`enscan` 的 Cookie 由使用者经**既有**设置页
+`POST /api/settings/enscan` 自行配置）；不通过真实公网重复查询来测试修复效果；
+不把受阻的查询显示成「成功」或伪造结果；不为其它工具做同类内容判定（同类风险已作为提示写进
+`docs/CODEBASE_MAP.md` §7.1 第 10 条，但尚无实证说它们存在同样的「退出码 0 假成功」，不做无据改动）。
+
 ### 测试与验收基线
 
 ```text
 $ python -m ruff check .     # All checks passed!
-$ python -m pytest           # 1338 passed, 2 skipped, 0 failures（-o addopts=""，收集 1340）
+$ python -m pytest           # 1352 passed, 2 skipped, 0 failures（-o addopts=""，收集 1354）
 $ python -m mypy app.py core api jobs storage.py modules scripts   # Success: no issues found in 72 source files
 $ node --check web/static/{app.js,assets.js,scan_center.js}        # 三个前端脚本语法通过
 $ $env:LOCAL_ADMIN_TOKEN="<取自 .env>"; python scripts/verify_public_scan.py   # 实机验收探针：项目 → Scope → 关联 → 三道拒绝 → mock 任务，全部符合预期

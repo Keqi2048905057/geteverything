@@ -9,6 +9,40 @@
 
 ---
 
+> **▶ 本轮变化（测试阶段改造，2026-10）—— 页面入口消失，Agent 绕过行为一字未改**
+>
+> 测试阶段改造把旧首页连同**页面级 Agent Chat UI** 一起整体退役：
+>
+> - `web/templates/index.html` **已删除**（`git status` 显示 `D`）；
+> - `app.py` 里 `POST /` 已**没有处理器** —— 路由层直接 **405**，`action=chat`
+>   分支随之消失（连「未知操作」页面也回不出来了）；
+> - `handle_agent_message` **不再被 `app.py` import**
+>   （`from agent import handle_agent_message` 已删）；
+> - 于是 I-5 补记实测的「**未登录 HTTP 请求走通 Agent → 真实扫描**」这条路径，
+>   其**页面入口已不存在**：没有 `index()`，没有 `action` 分发，
+>   也没有那个「只有手搓 POST 才能触发的死代码分支」。
+>
+> **但这不等于「Agent 的问题修好了」** —— 两件事必须分开读：
+>
+> - `agent/` 模块**仍在仓库里**，本轮**一行未改**（核对：`git status --porcelain -- agent/`
+>   无输出），其内部绕过行为**原样保留**：`agent/action.py:419` / `:437` 直接调
+>   `run_tools()`；`:498` 直接实例化 `HttpxRunner()`，`:503` / `:507` / `:511` 直接调
+>   `runner.run_scan()` —— **全程不走 Job Service**；`agent/` 包对
+>   `core/policy.py` / `core/scope.py` / `core/safety.py` 依旧**没有任何 import**
+>   （在 `agent/` 下 grep `scope` / `policy` / `safety` 命中的 3 处全是 `dashscope`
+>   的子串，不是真实引用，与原 §0 / I-5 的实测口径一致）；
+> - **其它调用点仍在**：`agent_cli.py`（进程内 REPL）与
+>   `agent/service.py:handle_agent_message()` 依旧直接可达 —— Agent 绕过
+>   `GEF_ALLOW_REAL_SCAN` 与 Scope 的**能力本身没有消失**，少的只是**一个**
+>   （而且本来就是零 UI 入口的）HTTP 触发面；
+> - 按用户口径，**P0-6 阶段二仍未开工，本轮不碰**（「先不开工」）。
+>
+> ★ 所以本文件**其余结论全部继续有效**，本次只追加「载体没了」这一层事实。
+> 措辞请一律读作「**入口消失**」，而不是「**问题修好了**」——
+> `agent/` 自身的收口才是 P0-6 阶段二（见 §6 二-A）的验收内容。
+
+---
+
 ## 0. 结论先行
 
 | 问题 | 结论 |
@@ -129,7 +163,7 @@ job_steps.results_json / artifacts / observations / assets
 
 | 模式 | 现状行为 | 迁移后能否保留 |
 |---|---|---|
-| `existing_subdomains`（严格只用库里的） | 显式传 `candidates=[...]`，库里没有就报错 | ⚠️ **部分保留**：Job 链的 `executor.py:119-120` 只调 `runner.run(target)`，**不传 options**；但 `HttpxRunner._load_candidates()`（`modules/httpx.py:66-77`）自己会去旧库捞候选，所以「基于已有子域名探测」**天然成立**；区别是「库里没有时」由 Runner 报 `no_results` 而不是 Agent 报 `RuntimeError` |
+| `existing_subdomains`（严格只用库里的） | 显式传 `candidates=[...]`，库里没有就报错 | ⚠️ **部分保留**（且原记录有误）：Job 链的 `executor.py` 只调 `runner.run(target)`，**不传 options**。原文写的「`HttpxRunner._load_candidates()` 自己会去旧库捞候选，所以天然成立」**经实测不成立** —— 旧库 `ScanResultStore` 是旧同步链的库，异步任务链从不写它，于是同任务里 subfinder 扫到 62 条、httpx 仍报「没有目标」。现已由执行器显式注入本任务上游观测（`jobs/executor.py:_upstream_candidates_for`）修好；「库里没有时」报的是 `no_input` + `status=skipped`（不是 `no_results`） |
 | `stored_subdomains`（有就用，没有就退回域名本身） | Agent 里判空 | ❌ **做不到**：Job 链里由 Runner 单方面决定，Agent 无法施加「有则用、无则退回域名」的分支 |
 | `direct_domain`（只探域名本身，**刻意不用**已有子域名） | `candidates=[domain]` | ❌ **做不到**：`HttpxRunner` 总是先捞库，除非给它加 option |
 | `tech_detect=True` | 透传 `-tech-detect` | ❌ **传不进去**：`BaseRunner.run(target)` 的 `options` 形参（`modules/base.py:195`）在 `executor.py` 里没有被使用 |
@@ -164,6 +198,8 @@ job_steps.results_json / artifacts / observations / assets
 
 对比主链：`POST /api/jobs` 与首页都要过 `resolve_mode()`（查环境开关）
 + `scope.require_active_scan()`（查 Scope 声明）**双重**门槛。
+（▶ 测试阶段后「首页」这一半载体已删除，但 `POST /api/jobs` 这一半不变，
+本段结论不受影响。）
 
 > 所以 P0-6 阶段二的收益**不只是**「可审计」——它把 Agent 这条**实际存在的越权通道**
 > 收回到与主链同一道门上。对应用户在 `docs/DECISIONS.md` §3.2 里定的验收点：
@@ -212,10 +248,48 @@ docstring 里早就写明的边界** —— 所以它不触碰「不放宽 / 不
 > 资产页 `/assets` 一直是按登录态过滤的（`scopes=_load_scope_options() if is_authenticated else []`），
 > 首页漏了同一个判断。现已统一。
 
+> **▶ 测试阶段补充（2026-10，只追加、不改上文）—— 这两条记录的 HTTP 载体已消失**：
+> I-5 补记里那个「匿名 `action=chat`」的载体是 `app.py:index()`。旧首页退役后
+> `index()` 已**整体删除**（`GET /` 只剩 302 → `/scan-center`），
+> `_require_admin_for_page()` 与 `action` 分支本身也一并从 `app.py` 中删除。
+> 守卫因此**退化为**「**根路径只做 302、`POST /` 路由层 405**」——
+> 不再有「先进守卫、再分动作」这个结构，也就没有了「把守卫提到分支之前」的对象。
+> 相关用例：`tests/integration/test_web_baseline.py:21` `test_root_redirects_to_scan_center`、
+> `tests/integration/test_m2_page_scan.py:59` `test_retired_page_actions_are_405_and_create_no_job`、
+> `tests/integration/test_m2_page_scan.py:100` `test_home_page_template_file_is_gone`、
+> `tests/integration/test_m2_page_scan.py:157` `test_root_path_only_redirects`。
+>
+> ⚠️ **不要读成「这条通道已修好」**：消失的是**HTTP 页面入口**。
+> `agent/action.py:419` / `:437`（`run_tools`）、`:498`（`HttpxRunner()` 实例化）与
+> `:503` / `:507` / `:511`（`runner.run_scan`）**全部还在**，
+> `agent_cli.py` 这个进程内入口也还在，
+> Agent 依旧没有 Scope 概念、依旧不读 `GEF_ALLOW_REAL_SCAN`。
+> 收口属 **P0-6 阶段二**（§6 二-A），本轮未开工。
+
 ### I-6 【新接线】`scope_id` 必须贯穿三层（唯一破坏性接口变更）
 
 `create_scan_job()` 的第一道是 `validate_job_targets(scope_id, targets)`
 → `require_scope()`（`core/policy.py:95-107`），`scope_id` 为空**直接 400**。
+
+> **▶ 测试阶段行号更正（2026-10，实测重读）**：`def require_scope` 现在在
+> **`core/policy.py:104`**（上文 `:95-107` 是写入时的旧值）。开放模式分支见
+> **`core/policy.py:104-138`**：未开开关且缺 `scope_id` 时 **400**，
+> `details={"field":"scope_id","env":"GEF_OPEN_SCAN_MODE"}`，文案直接点名
+> `GEF_OPEN_SCAN_MODE=true`，**不静默降级成 mock**；显式 `scope_id == "open"`
+> 且开关开启时返回 `open_scope()`（`:135`），其它显式 scope 一律
+> `scope_store.require(...)`，不存在**始终 403**（开放模式也不放过）。
+>
+> ⚠️ **这条更正不改变本文件的核心结论**：Agent 仍然**完全没有 Scope 概念**
+> —— `require_scope()` 是 `create_scan_job()` 里的判定，而 Agent 根本**不走**
+> `create_scan_job()`（见 I-5：它直连 `run_tools` / `HttpxRunner`），
+> 所以这个判定对 Agent 一次都不会被触发。
+>
+> 两件事必须分开，**不要误读成「Agent 的问题被开放模式顺带解决了」**：
+> 开放模式（`GEF_OPEN_SCAN_MODE`）让「**免授权**」在 **Web 入口**（`POST /api/public-jobs`）
+> 变成**合法行为** —— 那是**放宽**业务要求；而 Agent 的绕过是**根本不经过**这道判定 ——
+> 那是**旁路**。前者是「门开着让人进」，后者是「墙上有个洞」。两者结果看似都是
+> 「没 Scope 也能扫」，成因与修法完全不同；后者仍要靠 P0-6 阶段二把 Agent 接上
+> `create_scan_job()` 才能收口。
 
 而 Agent 当前**完全没有** Scope 概念。所以需要：
 
@@ -242,6 +316,15 @@ app.py:index() 的 action=chat 分支        ← 从表单/会话取 scope_id
 >
 > ⚠️ **行号会继续漂移**：本节写于 2026-10-04，此后 `app.py` 任何一次增删都会再次移动它。
 > 开工时**按函数名定位**（`index()` 里的 `elif action == "chat":`），不要直接照行号跳。
+
+> **▶ 测试阶段（2026-10）**：以上「前端无入口」的判断**保留原样**（它记录的是当时的实测）。
+> 该页面与 `action=chat` 分支现已**整体删除** —— `web/templates/index.html` 已删、
+> `app.py` 的 `index()` 与 `elif action == "chat":` 已删、`POST /` 现在返回 **405**。
+> 因此本节末尾那句「它该不该连带补一个带 Scope 下拉的聊天框」**先失去载体**：
+> 没有页面可补；若将来要做，是**新建**一个独立 Agent 页面（`app.py` 顶部 docstring
+> 已写明「将来需要独立 Agent 页面时单独设计 `/agent`」），而不是「在首页上补」。
+> 上面 `app.py:294-324` / `:264` / `:211` 这些**当轮行号全部不再适用**，
+> 相关位置**按函数名 / 分支名定位**；分支本身也已不存在。
 
 ### I-7 【双白名单】Agent 自己的域名策略与 Scope 会互相打脸
 
@@ -270,6 +353,12 @@ Agent 现在有第二套白名单（`AGENT_BLOCKED_DOMAINS` / `AGENT_BLOCKED_SUF
 | 首页 `action=chat` | 同上（但**前端无入口**，见 I-6） | 同上，影响面实际为零 |
 | `pending_plan` 二次确认（`_handle_pending_plan`，`agent/action.py:191-260`） | 用户回「确认执行」→ **同步跑完并回报** | 用户回「确认执行」→ **创建任务并回报 `job_id`** |
 
+> **▶ 测试阶段（2026-10）**：上表三行里，第二行「首页 `action=chat`」这个入口
+> **已随旧首页退役而消失**（`web/templates/index.html` 已删、`POST /` 返回 **405**）——
+> 表格保留当时的分类，不作改写。剩下两条入口**都还在**：`agent_cli.py` 与
+> `pending_plan` 二次确认，且它们的同步直连行为**一字未改**。
+> 所以 I-8 描述的「同步 → 异步」改造需求**依然成立**，只是少了一条 HTTP 触发路径。
+
 **明确不做的一件事**：不在请求线程里轮询等 worker 跑完（那等于把异步硬拗回同步：
 占住 Flask 线程、worker 没启动时会挂住、还丢了「可取消」的意义）。
 Agent 的「执行」从此一律是「**提交**」。
@@ -293,6 +382,20 @@ Agent 的「执行」从此一律是「**提交**」。
 | `app.py:294-324` | `action=chat` 分支传 `scope_id`（行号为 2026-10-04 值，**按函数名定位**） | ~5 行 |
 | `agent_cli.py` | 加 `--scope-id`（或环境变量），否则 CLI 无法提交任何任务 | ~10 行 |
 | `tests/unit/test_agent_boundary.py` | 见 §4.2 | ~120 行 |
+
+> **▶ 测试阶段（2026-10）对上面这张清单的影响**：表格**保持原样**，只追加两点：
+>
+> 1. `app.py:294-324` 那一行**已无落点** —— 旧首页退役后 `app.py` 页面层
+>    （`index()` / `_require_admin_for_page()` / `_SCAN_ACTIONS` / `action=chat` 分支）
+>    已整体删除，**没有 `action=chat` 分支可传 `scope_id`**。
+>    将来若做独立 Agent 页面，那是**新增** `GET/POST /agent`，不是改首页；
+>    这一项的 ~5 行估计**转移**到新页面，而不是省掉。
+> 2. 表格里所有 `app.py` 行号**均为 2026-10-04 值，不再适用**，
+>    定位一律**按函数名 / 分支名**（而其中多数函数名现在已不存在）。
+>
+> ⚠️ 这一变化**不缩小二-A 的实质工作量**：`agent/action.py`、`agent/service.py`、
+> `agent_cli.py`、`tests/unit/test_agent_boundary.py` 四项**原样待办**，
+> 也正是「Agent 收口」的真正内容。**页面没了不等于 Agent 收口了。**
 
 ### 4.2 测试必须同轮改（否则会以「patch 打空」的形式静默或直接报错）
 
@@ -365,6 +468,14 @@ Agent 的「执行」从此一律是「**提交**」。
 | **二-A** | I-1 / I-4 / I-5 / I-6 / I-7 / I-8 全部落地：`scope_id` 贯穿、两个 handler 改调 `create_scan_job`、文案与 `job_ids` 改写、测试同轮改（§4.2 全部 6 条新用例） | ⏳ 本次待批 |
 | **二-B** | 只读 handler 改读新库（等价于方案 §11 的一部分） | ❌ 需单独授权（§5 选项 B） |
 | **二-C** | `agent_cli.py` 加 `--scope-id` 与可选的「提交后轮询并打印结果」；首页补带 Scope 下拉的聊天框 | ⏳ 可并入二-A 或单独 |
+
+> **▶ 测试阶段（2026-10）**：本轮（测试阶段改造）**未**触碰 P0-6 阶段二的任何一项
+> —— 二-A / 二-B / 二-C 三行的内容与授权状态**全部不变**（二-A ⏳ 待批）。
+> 本轮改的是**页面层**（旧首页退役），`agent/` 一行未改。
+> 仅一处措辞需要按现状理解：**二-C 里「首页补带 Scope 下拉的聊天框」的载体已不存在**
+> （`web/templates/index.html` 已删、`POST /` 返回 405）；
+> 将来要做的话是**新增**独立 Agent 页面（`app.py` docstring 已记「单独设计 `/agent`」），
+> 这一项的**授权状态与工作量均未因此调整**。
 
 **二-A 的验收（严格对应方案 §6 三条）**：
 

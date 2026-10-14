@@ -1,4 +1,4 @@
-# DECISIONS.md — 夜间无人值守预授权单
+﻿# DECISIONS.md — 夜间无人值守预授权单
 
 > **用途**：无人值守（夜间）执行时，Agent 遇到「按技能第 4 节应停止并标记」的事项，
 > 必须先来本文件查是否已预授权。**已预授权的项按「预填答案」直接执行并记入报告；
@@ -113,6 +113,11 @@
   **(c) 全量补齐 17 个**：对没有原生参数的工具自行加节流（会引入「本项目自己实现的
   请求间隔控制」，属新的执行期逻辑，风险与工作量都最大）。
   *回滚方式*：本轮无需回滚（未改任何一行相关实现）；选 (b)/(c) 才是新工作，要单独一轮。
+  ▶（2026-10 测试阶段改造：本条是当轮实测的**历史留痕**，原文保留。**口径已变更，但数据面没变** ——
+  工具闸门改为 `selectable`（17 个已注册 runner 全部可勾选，`nuclei` 仍不可选），
+  因此「公网白名单恰好就是那两个」这句话不再成立；不过低频档
+  `core/pace.py:73 LIGHT_TOOL_BUDGET` **仍只覆盖 `subfinder` 与 `httpx`**，
+  覆盖面仍是 **2 / 17**，**上面三种选择仍然有效、仍待你拍板**。见 §3.20 第 3 条）
 - `[2026-10-03 · 第二轮只读审计]` **一处已执行、但改变了既有 API 可用行为的收窄，请你复核** ——
   `POST /api/jobs` 与 `POST /api/public-jobs` 此前是
   `tools=payload.get("tools") or payload.get("tool")`，于是请求体
@@ -256,7 +261,7 @@ git grep -n -I "<本轮 Token>" $(git rev-list --all)
 | 不绕过 Scope | ✅ 公网入口仍转交 `core/application.create_scan_job`；`create_authorized_public_job` 内不得出现 `validate_job_targets` / `create_job_with_status` 的守卫未动 |
 | 不删除审计 | ✅ 未删任何事件类型；Phase 3 把 `pace` **新增**进 `job.created` detail 与审计 detail；Phase 4 的新接口**零写路径**（有用例断言连调两次后资产/观测/审计/事件四类行数全部不变） |
 | 不改数据库核心结构 | ✅ **四阶段累计零 DDL**：Phase 3 的 `pace` 走 `job_events.detail_json`（既有列），刻意**不**给 `jobs` 表加 `pace` 列；Phase 4 的四段结果全部由既有 `assets` / `observations` / `job_steps` 行**派生**，未加列、未建表 —— 与第 65 行「`jobs.project_id` 刻意没加」同一口径 |
-| 不放宽第一节公网白名单 | ✅ 白名单仍是 `{httpx, subfinder}`；`nuclei` 仍 `internet_allowed=False`、仍在 `KNOWN_UNAVAILABLE_TOOLS`，只作「受限未开放」展示。方案第 5 节提到 `nuclei`，但**未据此开放它** —— Phase 4 的「风险信息」也因此如实降级为「可观察事实 + 免责说明」，不假装有漏洞扫描 |
+| 不放宽第一节公网白名单 | ✅ 白名单仍是 `{httpx, subfinder}`；`nuclei` 仍 `internet_allowed=False`、仍在 `KNOWN_UNAVAILABLE_TOOLS`，只作「受限未开放」展示。方案第 5 节提到 `nuclei`，但**未据此开放它** —— Phase 4 的「风险信息」也因此如实降级为「可观察事实 + 免责说明」，不假装有漏洞扫描 ▶（2026-10 测试阶段改造：该口径已变更 —— 工具闸门改为 `selectable`，17 个已注册 runner 全部可勾选；`nuclei` 仍不可选。见 §3.20 第 3 条） |
 | 不引入 React / Redis / PostgreSQL | ✅ 前端仍是原生 JS（`node --check` 通过）；未新增任何依赖 |
 | 不删旧 API、不重构 Agent | ✅ 既有 9 条 `/api/jobs*` 接口语义不变；Phase 4 只**新增** 1 条 `GET /api/jobs/<job_id>/results`（路由数 47/49 → **48/50**），未删未改任何既有路由；`POST /api/jobs` 等历史入口缺省仍是 `pace=normal` |
 
@@ -296,6 +301,7 @@ git grep -n -I "<本轮 Token>" $(git rev-list --all)
 **Phase 4 未动**：`jobs` / `assets` / `observations` 表结构（**零 DDL**）、
 既有 9 条 `/api/jobs*` 接口语义、Scope / Policy 判定、认证授权、审计机制、
 公网工具白名单（仍是 `subfinder` + `httpx`）、同步 Runner 链路、Agent、`pyproject.toml`、`.env`。
+▶（2026-10 测试阶段改造：工具闸门改为 `selectable`；本节是当轮的**历史留痕**，原文保留。见 §3.20）
 **未对任何真实外部目标发起扫描** —— 本轮用例全部走 mock，
 或把 `modules.registry.build_runner` 换成假 runner，目标是 RFC 6761 保留域 `example.test`。
 
@@ -498,13 +504,24 @@ fork 删除只消除了「你这个副本」，不等于上游那份也跟着消
 | **Scope 校验**必须 `target ∈ scope` | ✅ 一字未动。Phase 2 只改「工具参数怎么解析」，完全不碰目标判定；`create_scan_job` 里的 `validate_job_targets` 与 `create_authorized_public_job` 里的项目→范围关联检查原样保留 |
 | **Real Mode 控制**必须 `GEF_ALLOW_REAL_SCAN=true` | ✅ 一字未动。三道闸门（环境开关 / `Scope.active_scan` / 目标在白名单内）全部保留；本轮未开任何开关，`.env` 未改 |
 | **Job 审计**记录 `job_id` / `operator` / `target` / `tools` / `time` / `mode` | ⚠️ **`operator` 目前只能记 `local-admin`（本仓库无操作者身份）** —— 已登记为 §3 待确认项，Phase 3 先做零 schema 的那一半 |
-| **工具白名单**禁止任意字符串调用工具 | ✅ **强化了，不是放松**：工具名仍逐一过 `get_supported_runners()`；新增的 `normalize_tool_names()` 只做「拆逗号 / 去空白 / 丢空项 / 去重」，**不增加任何合法工具**。公网白名单仍是 `subfinder` + `httpx` |
+| **工具白名单**禁止任意字符串调用工具 | ✅ **强化了，不是放松**：工具名仍逐一过 `get_supported_runners()`；新增的 `normalize_tool_names()` 只做「拆逗号 / 去空白 / 丢空项 / 去重」，**不增加任何合法工具**。公网白名单仍是 `subfinder` + `httpx` ▶（2026-10 测试阶段改造：该口径已变更 —— 闸门函数现为 `core/tool_registry.py:476 assert_tools_selectable()`，判定「已注册且已接入」，17 个已注册 runner 全部可勾选；`nuclei` 仍不可选。「不增加任何合法工具」这条**不变量不变**，且已强化为「只认注册表，查不到就拒绝」。见 §3.20 第 3 条） |
 | 第 14 节 Phase 1「不修改」列：Policy / Scope 模型 / Job 模型 | ✅ 一字未动（Phase 1 只改展示层与前端渲染） |
 | 第 14 节 Phase 2「不修改」隐含项：`ScanStrategy` / `STRATEGIES` | ✅ 未动 `resolve_strategy_*` 与三个模板；`pace` 合并规则保持「只能收紧」 |
 | 第 12 节 Agent 边界保持 | ✅ **未动 `agent/`**。Agent 仍直接调 `tool_runner.run_tools`（P0-6 阶段二按用户答复「先不开工」），本轮**没有**放宽它的能力（工具名仍受 registry 校验），但也**没有**修好它 —— 见 §3 与 `docs/CODEBASE_MAP.md` §9.25.6 |
 | 不改数据库核心结构 | ✅ **两阶段累计零 DDL**：`core/tool_registry.py` 只是内存中的 dataclass 与常量表；`jobs` / `assets` / `observations` 一字未改 |
 | 不引入 React / 大型前端框架 / Redis / Celery | ✅ 前端仍是原生 JS（`node --check web/static/scan_center.js` 通过）；未新增任何依赖 |
-| 不删旧 API、不重构 Agent | ✅ **未新增、未删除任何路由**（48 规则 / 50 绑定 / 42 个 `/api/*` 不变）；`/api/tools` 与 `/api/scan-center` 只**新增字段**，历史键名（`name` / `category` / `database`）全部保留 |
+| 不删旧 API、不重构 Agent | ✅ **未新增、未删除任何路由**（48 规则 / 50 绑定 / 42 个 `/api/*` 不变）；`/api/tools` 与 `/api/scan-center` 只**新增字段**，历史键名（`name` / `category` / `database`）全部保留 ▶（2026-10 测试阶段改造后实测为 **48 规则 / 49 绑定 / 42 个 `/api/*`**：`/` 从 `GET+POST` 降为 1 个绑定，规则总数与 `/api/*` 个数未变。见 §3.20 第 8 条） |
+
+> ▶（2026-10 测试阶段改造：上表是当轮的**历史留痕**，原文保留。三处口径已被本轮改写 ——
+> ① 第 1 行「`create_authorized_public_job` 里的项目→范围关联检查原样保留」
+> **不再成立**：该函数已改名 `create_open_public_job`（旧名为 deprecated 别名），
+> 项目→范围关联检查与公网白名单校验**一并取消**（见 §3.20 第 4 / 7 条）。
+> ② 第 2 行「三道闸门全部保留」的**数量与内容都变了**：现在是 `GEF_ALLOW_REAL_SCAN`
+> + `GEF_OPEN_SCAN_MODE` 两道**环境**闸门（语义分离），加上 `Scope.active_scan`；
+> 开放模式下「目标在白名单内」这一道退化为「**格式合法 + 未命中排除列表**」，
+> 而 **SSRF / 内网地址拒绝（`core/policy.validate_resolved_address`）仍然保留**。
+> ③ 第 8 行「未动 `agent/`」**在本轮之后仍然成立**：Agent 直调 Runner 的缺口原样保留，
+> P0-6 阶段二依旧「先不开工」（见 §3.20）。
 
 **本轮唯一「行为变化」的取舍（已在 §3 待你复核）**：`POST /api/run` 的
 **空 `tools`（`[]` / `""` / 不给）从「静默用配置默认工具」改为 400**。
@@ -515,6 +532,7 @@ CLI/Agent 一侧（`load_tools(None)`），Web 侧一律传 `[]`。
 **未动**：`scopes` / `jobs` / `assets` / `observations` 表结构与数据、
 Scope / Policy 判定逻辑、认证授权、审计机制、既有 API 语义、同步 Runner 链路、
 Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder` + `httpx`**）。
+▶（2026-10 测试阶段改造：工具闸门改为 `selectable`；本节是当轮的**历史留痕**，原文保留。见 §3.20）
 **未对任何真实外部目标发起扫描** —— 本轮全部用例走 mock 或 `127.0.0.1`，
 目标是 RFC 6761 保留域 `example.test` 与 RFC 5737 保留段。
 
@@ -578,6 +596,9 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
    只在界面上以「本阶段未接入/未开放」的形式如实显示。
    公网白名单**仍是 `subfinder` + `httpx` 两个**。若你要真的接 `nuclei`，
    那是一次独立的、需要你明确授权的工具接入（含风险评审），不在本轮范围。
+   ▶（2026-10 测试阶段改造：该口径已变更 —— 闸门改名 `selectable`，
+   `nuclei` 仍 `selectable=False`（住在 `KNOWN_UNAVAILABLE_TOOLS` 里）且仍**没有**接入；
+   「不接 `nuclei`」这个结论未变。见 §3.20 第 3 条）
 6. **限速 / 超时**：`timeout_seconds` 的绝对上界**每次调用都读**
    `SCAN_LIMITS["process_timeout"]`（本机默认 120），不在 import 期固化 ——
    否则 `GEF_PROCESS_TIMEOUT` 那条运维/测试路径会失效。当前上界因此是
@@ -588,6 +609,10 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 （**零 DDL**）、Scope / Policy 判定逻辑、认证授权、公网工具白名单、Agent、
 `pyproject.toml`、`.env`、既有 API 的响应形状。路由总数**未变**
 （48 规则 / 50 绑定 / 42 个 `/api/*`）—— 本轮只给既有接口**加字段**。
+▶（2026-10 测试阶段改造：本节是当轮的**历史留痕**，原文保留。两条口径已变更 ——
+① 工具闸门改为 `selectable`（17 个已注册 runner 全部可勾选；`nuclei` 仍 `internet_allowed=false`
+兼 `selectable=false`，仍只作受限展示）；② 路由实测为 **48 规则 / 49 绑定 / 42 个 `/api/*`**。
+见 §3.20 第 3 / 8 条）
 **未对任何真实外部目标发起扫描**：全部用例走 mock 或注入假 runner，
 目标是 `example.test` 与 RFC 5737 保留段。
 
@@ -629,6 +654,14 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 且服务端已经判定覆盖该目标的那一个。方案第 6 节「**禁止**为了体验删除 Scope 校验」
 一字未动 —— 真正的判定仍然只在 `core/policy.py:validate_job_targets()` 里做一次。
 
+> ▶（2026-10 测试阶段改造：上面这段是当轮的**历史论证，原文保留** —— 但本节描述的
+> **整套能力已取消**：授权业务取消后不再有「授权资产」可供匹配，
+> `applyMatchedScope()` / `eligible_scope_ids` / `scopeSelect` / `projectSelect` /
+> `renderConsentSummary()` **全部删除且不得复活**，并已换成三条反向守卫
+> （预检不得有匹配契约 / JS 不得有自动匹配流水线 / JS 不得发送 `scope_id` 与 `project_id`）。
+> 本节下文列出的三条用例（`test_check_endpoint_exposes_the_auto_match_contract` 等）
+> 同样**已删除**。见 §3.20 第 6 条）
+
 **顺带收敛掉三处「第二条授权判定」**：`renderCheckResults()`、`renderConsentSummary()`、
 `refreshConsentScopeLine()` 原先各自比较 `item.verdict === "allowed"` 与
 `item.status === "ready"`；现在统一走 `isEligibleMatch()`（读服务端 ID 集合）。
@@ -641,6 +674,10 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 | `test_check_endpoint_exposes_the_auto_match_contract` | `eligible_scope_ids` 只含**真正放行**的范围：命中排除列表的资产仍在 `matches`（诊断价值）但**不在**里面 |
 | `test_scan_center_js_auto_selects_the_scope_from_server_verdict` | 四条口径的源码守卫 + 「先匹配、后渲染摘要」的顺序 |
 | `test_target_to_job_flow_uses_the_auto_matched_scope` | 第 16 节① 整条链路：试算 → 取 `eligible_scope_ids[0]` → 创建 job，断言 `scope_id` / `tools` / 目标数正确 |
+
+> ▶（2026-10 测试阶段改造：上表三条用例**全部已删除**（连同 `renderConsentSummary()` /
+> `refreshConsentScopeLine()` / `isEligibleMatch()` 这些收敛点），取代它们的是三条**反向守卫**。
+> 本表与上面那段「顺带收敛」是当轮的**历史留痕**，原文保留。见 §3.20 第 6 条）
 
 **本轮「本次未授权项」（等你醒来拍板，均不阻塞）**
 
@@ -668,11 +705,20 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
    猜错会得到一个页面上看不出原因的 403。
    *回滚方式*：改 `scan_center.js:commonEligibleScope()` 末尾的
    `common.length === 1` 一个条件 + 一条用例。
+   ▶（2026-10 测试阶段改造：**这条待拍板项已随能力取消而作废**，无需再答复 ——
+   `commonEligibleScope()` 与整条自动匹配流水线都已删除。见 §3.20 第 6 条）
 
 **未动**：`agent/`（见上）、`scopes` / `jobs` / `assets` / `observations` / `projects`
 表结构与数据（**零 DDL**）、Scope / Policy 判定逻辑、认证授权、公网工具白名单
 （**仍是 `subfinder` + `httpx`**）、既有 API 的响应形状与路由总数
 （48 规则 / 50 绑定 / 42 个 `/api/*`，**未新增、未删除**）。
+▶（2026-10 测试阶段改造：本节是当轮的**历史留痕**，原文保留。两条口径已变更 ——
+① 工具闸门改为 `selectable`（17 个已注册 runner 全部可勾选，`nuclei` 仍不可选）；
+② 路由实测为 **48 规则 / 49 绑定 / 42 个 `/api/*`**。
+★ 另需特别注意：本节（§3.9）主角**「目标自动匹配授权资产」整条流水线已取消**，
+`applyMatchedScope()` / `eligible_scope_ids` / `commonEligibleScope()` **均已删除且不得复活**，
+上面第 2 条待拍板项随之作废。见 §3.20 第 3 / 6 / 8 条）
+
 **未对任何真实外部目标发起扫描**：本轮新增用例全部走 mock 或注入假 runner，
 目标是 `example.test` 与 RFC 5737 保留段。
 
@@ -692,6 +738,13 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 | Real Mode 控制 | `core/safety.py` 的 `GEF_ALLOW_REAL_SCAN`，缺省 `real` 不静默降级 | ✅ `test_real_mode_without_env_switch_is_403_and_does_not_fall_back_to_mock` |
 | **Job 审计六项** | `core/application.py:365-389` 的 `detail`（`tools` / `mode` 在其中） | ⚠️ 只有 `operator` / `targets` / `scope_id` / `created_at` 被钉住 |
 | **工具白名单（任意字符串）** | `core/tool_registry.py:assert_tools_internet_allowed()` 的 `unknown` 分支 | ⚠️ 只有**已登记但被禁**的工具（`nmap` 等）有用例 |
+
+> ▶（2026-10 测试阶段改造：本表的函数名与口径已变更 —— 现役函数是
+> `core/tool_registry.py:476 assert_tools_selectable()`；`assert_tools_internet_allowed()`
+> 降级为 deprecated 薄别名（`:564`，内部仍调前者）。判定语义从「是否允许打公网」
+> 改为「**是否已注册且已接入**」，且判定顺序**必须先查 `TOOL_POLICIES` 再查
+> `KNOWN_UNAVAILABLE_TOOLS`**（否则 `nuclei` 会被误报成「未登记」）。
+> 上表是当轮的**历史留痕**，原文保留。见 §3.20 第 3 条）
 
 **新增测试 3 条**（`tests/integration/test_public_scan_mode.py`，均走假 runner，零外部流量）：
 
@@ -731,6 +784,8 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 **未动**：`agent/`、全部数据库表结构与数据（**零 DDL**）、Scope / Policy 判定逻辑、
 认证授权、公网工具白名单（**仍是 `subfinder` + `httpx`**，`nuclei` 仍为 `internet_allowed=false` 且只作受限展示）、
 路由总数（48 规则 / 50 绑定 / 42 个 `/api/*`，**未新增、未删除**；本轮只改一个测试文件）。
+▶（2026-10 测试阶段改造：工具闸门改为 `selectable`（17 个已注册 runner 全部可勾选，`nuclei` 仍不可选），
+路由实测为 **48 规则 / 49 绑定**；本节是当轮的**历史留痕**，原文保留。见 §3.20）
 **未推送**：口径同 §3.9 —— 等你确认后先跑七项推送前安全审计，再显式 `git push origin main`。
 
 ### 3.11 执行期双开关复检 + Phase 1 四处审计缺口收口 + 一处待拍板的口径差（2026-10-03，无人值守）
@@ -842,7 +897,7 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 | 缺口 | 现象 | 收口 |
 |---|---|---|
 | ③ | `assets.js` 的「所属范围」直接写 `asset.scope_id \|\| "（未限定）"` —— 详情面板上出现 `scope_9f3c…`，违反第 4 节原则 2 | 新增 `scopeLabelById()`（`assets.js:72`），读本页已渲染的 `#filter-scope` / `#diff-scope` 选项翻成名称；找不到时给「（该授权资产已不在列表中）」而**不是**把 ID 漏出去 |
-| ⑤ | `web/templates/index.html` 有一段 `{% if scan_report %}` 的「模拟扫描：范围 `{{ scan_report.scope_id }}`」提示块，**永远渲染不出来**（调用点一直传 `scan_report=None`），且是全仓唯一一处把 `scope_id` 写进可见文案的地方 | 删掉模板分支 + 删掉 `app.py:build_page_context` 的 `scan_report` 参数与实参（−3 行） |
+| ⑤ | `web/templates/index.html` 有一段 `{% if scan_report %}` 的「模拟扫描：范围 `{{ scan_report.scope_id }}`」提示块，**永远渲染不出来**（调用点一直传 `scan_report=None`），且是全仓唯一一处把 `scope_id` 写进可见文案的地方 | 删掉模板分支 + 删掉 `app.py:build_page_context` 的 `scan_report` 参数与实参（−3 行）▶（2026-10 测试阶段改造：`web/templates/index.html` **已随旧首页退役一并删除**，`build_page_context()` 也一并消失；本行是当轮的**历史留痕**，原文保留。见 §3.20 第 5 条） |
 | ⑥ | `scan_center.html` 的 `<div id="scope-list"></div>` 没有任何 JS 引用 | 删除 |
 | ⑦ | `app.css` 的 `.sc-scope-title` 规则没有任何元素使用 | 删除 |
 
@@ -866,6 +921,17 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
    原因：`assert_tools_internet_allowed()` 在全仓**只有一个生产调用点** ——
    `core/application.py:573`（公网编排 `create_authorized_public_job`）。
    老入口 `api/jobs.py` 与 legacy `api/scan.py` 只做「工具是否已登记」，不做「是否允许打公网」。
+   ▶（2026-10 测试阶段改造：**这条口径差已经收口，现象不再成立** ——
+   闸门函数改名 `assert_tools_selectable()`，且由**所有入口共用**：
+   唯一生产调用点在 `core/application.py:565` 的 `create_open_public_job`，
+   而 `POST /api/public-jobs` 正是调它；老入口 `POST /api/jobs` 经
+   `core.application.create_scan_job` 走同一套 Policy / Scope 判定。
+   `assert_tools_internet_allowed()` 已降级为 deprecated 薄别名（`:564`）。
+   本节的历史提问与 (a)(b)(c) 三个选项**原样保留**，便于回溯当时的判断。
+   另注：`nmap` 这类工具在新口径下**可以勾选**（`selectable=True`），
+   旧口径里它被拒是因为「不允许打公网」，新口径只拒「未接入」的工具，
+   因此上面的 400 形状在新口径下由 `nuclei` 这类工具复现。见 §3.20 第 3 条）
+
    本 Agent **本轮没有改它**，理由：
    * 这条闸门是**公网授权测试模式**（`/api/public-jobs` + `/api/scan-center`）的边界，
      不是 `jobs` 表或 Policy 层的边界；给老入口加上它会**改变既有 API 的可用行为**
@@ -893,13 +959,30 @@ Agent、`pyproject.toml`、`.env`、公网工具白名单（**仍是 `subfinder`
 | # | 审计意见 | 实测核对结果 | 判定 |
 |---|---|---|---|
 | ④ | 第 5.2 节要求「把两级选择合并」，`#job-project` / `#job-scope` 两个下拉还在 | 两个下拉确实还在，但它们**已经是一级**：`job-scope` 的选项由 `job-project` 联动过滤（`scan_center.js:774`）。方案要消除的是「用户得先理解内部结构」，而页面文案已改成「授权资产 / 授权项目」（不出现 Scope 字样） | 已达成方案意图，不再合并。**但这一行的措辞要更正**：原文写「选中项目之前**选不到**任何范围」——在**空状态**（一个项目都没有）下，两个下拉都只有占位项，这句话读起来像「有得选只是没选」，实际是「没得选」。空状态的真正问题不是选择顺序，而是**新建授权范围的按钮点不动**（见 §3.17.1） |
-| ⑧ | 第 6 节写的 `resolve_scope(target)` 这个**函数不存在** | 全仓唯一同名符号是 `api/scan.py:28 resolve_scoped_targets`（legacy 同步链的**另一个**东西）。第 6 节的意图由 `core/authorization.py:292 check_targets()`（只读试算）+ `scan_center.js:858 applyMatchedScope()`（把结论变成选中项）承接 | 方案写的是**意图**不是函数签名；能力齐备 |
+| ⑧ | 第 6 节写的 `resolve_scope(target)` 这个**函数不存在** | 全仓唯一同名符号是 `api/scan.py:28 resolve_scoped_targets`（legacy 同步链的**另一个**东西）。第 6 节的意图由 `core/authorization.py:292 check_targets()`（只读试算）+ `scan_center.js:858 applyMatchedScope()`（把结论变成选中项）承接 | 方案写的是**意图**不是函数签名；能力齐备 **▶ 测试阶段该能力已取消**（见下表后的注） |
 | ⑨ | 第 5.1 节的四个旧步骤名**从未字面存在过** | `548d196^` 的模板标题实测是「输入目标 / 确认授权范围 / 选择工具 / 执行模式与提交」——第 5.1 节是**用户视角的描述**，不是逐字引用 | 描述性对照，不是缺陷 |
 | ⑩ | 第 8 节「当前最大缺失：用户无法主动选择工具」这一前提**当时已经不成立** | `548d196^` 的 `custom-tools` 确实带着 `hidden`，但 `custom` 模板被点选时会 `custom.hidden = false`（`548d196^ scan_center.js:315`）——**可以**选，只是藏在需要先点「自定义」之后 | 前提略过期，能力当时已存在；本轮起工具清单常显 |
 | ⑪ | `#job-consent` 位于 `#scope-form` 内而不是 `#job-form` 内 | 实测确认（`scan_center.html:112` 开 `scope-form`、`:127` 是 `job-consent`、`:179` 才开 `job-form`）。但 JS 一律按 **id** 读取（`$("job-consent")`），跨表单读取没有副作用；移动它反而会让「授权确认」在视觉上离开它所确认的那份资产 | 位置判断仍然成立（**不移动**），但当时「**无害**」这个结论**是错的** —— 缺陷不在 checkbox，在同一个 form 里的两个 `required` 下拉，见 §3.17.1 |
 
 **共同点**：这五条都是「方案的字面写法」与「实现的具体做法」之间的差，不是行为缺陷。
 把它们逐条写下来，是为了避免下一个人把它们当成待办重新推一遍。
+
+> ▶ **（2026-10 测试阶段改造）第 ⑧ 条的追溯更正 —— 历史判断原文保留，只加注：**
+> 该行引用的**两处承接点在当前源码里都已不是生产路径**：
+>
+> 1. `core/authorization.py` 的模块 docstring `:3-20` 已写明「**本模块已不在任何
+>    生产路径上（测试阶段口径变更）**」「现在没有任何生产代码 import 本模块」；
+>    全仓已无生产代码引用它。`check_targets()` 当前在 **`core/authorization.py:311`**
+>    （原文写的 `:292` 是当轮行号，已漂移）。
+> 2. `scan_center.js:858 applyMatchedScope()` **已从 JS 里整体删除** ——
+>    整条「目标自动匹配授权资产」流水线取消，且**不得复活**（见 §3.20 第 6 条）。
+>
+> **全仓仍然没有 `resolve_scope(target)` 这个函数**；唯一同名符号依旧是
+> `api/scan.py:28 resolve_scoped_targets`（legacy 同步链，与第 6 节的意图**无关**）。
+>
+> 结论：`resolve_scope(target)` 所描述的能力（「系统后台自动判断目标属于哪个授权范围」）
+> 在测试阶段**已随授权业务一并取消**，不再有等价承接点。原文说「能力齐备」**只对当轮成立**，
+> 现在应读作「该能力已取消」。创建任务的授权判定如今只有一处：`core.policy.require_scope`。
 
 #### 3.11.7 本轮未动 / 未推送
 
@@ -908,6 +991,14 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
 不改匹配语义）、认证授权、审计字段集合、公网工具白名单
 （**仍是 `subfinder` + `httpx`**，`nuclei` 仍为 `internet_allowed=false` 且只作受限展示）、
 路由总数（**48 规则 / 50 绑定 / 42 个 `/api/*`，未新增未删除**）。
+▶（2026-10 测试阶段改造：工具闸门改为 `selectable`，路由实测为 **48 规则 / 49 绑定**；
+本节是当轮的**历史留痕**，原文保留。见 §3.20）
+
+> ▶（2026-10 测试阶段改造：本节是当轮的**历史留痕**，原文保留。该口径已变更 ——
+> 工具闸门改为 `selectable`，17 个已注册 runner 全部可勾选；`nuclei` 仍不可选
+> （`selectable=False`，仍在 `KNOWN_UNAVAILABLE_TOOLS` 里）；路由实测为
+> **48 规则 / 49 绑定 / 42 个 `/api/*`**（`/` 从 `GET+POST` 降为 1 个绑定）。
+> 见 §3.20）
 
 **未对任何真实外部目标发起扫描**：本轮所有用例走 mock / 注入假 runner，
 目标是 `example.test` 与 RFC 5737 保留段；`www.peizheng.edu.cn` 只在文档里作例子出现。
@@ -1005,6 +1096,11 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
    （给 15 个 runner 各加限速参数是独立工作，部分工具根本没有对应开关），
    只在 `docs/API.md` §6.3 与 `docs/CODEBASE_MAP.md` §9.30.5 如实写明，
    避免把「记录了限速」读成「限速了」。
+   ▶（2026-10 测试阶段改造：**数据面没变但解释变了** —— 低频档
+   `core/pace.py:73 LIGHT_TOOL_BUDGET` 仍只覆盖 `subfinder` 与 `httpx`，
+   但理由不再是「白名单外进不来」，而是「不假装知道 `nmap` 打别人的站该多快」；
+   工具闸门改为 `selectable` 后 17 个 runner 都可勾选，覆盖面仍是 2/17。
+   上面这段是当轮的**历史留痕**，原文保留。见 §3.20）
 
 #### 3.12.6 本轮未动 / 未推送
 
@@ -1012,6 +1108,8 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
 全部数据库表结构与数据（**零 DDL**）、`core/policy.py`、`core/scope.py`（本轮未改它）、
 认证授权、审计字段集合、公网工具白名单（**仍是 `subfinder` + `httpx`**，
 `nuclei` 仍为 `internet_allowed=false`）、路由总数（**48 规则 / 50 绑定 / 42 个 `/api/*`**）。
+▶（2026-10 测试阶段改造：工具闸门改为 `selectable`，路由实测为 **48 规则 / 49 绑定**；
+本节是当轮的**历史留痕**，原文保留。见 §3.20）
 
 **未对任何真实外部目标发起扫描**：全部用例走 mock / 注入假 runner，
 目标是 `example.test` 与 RFC 5737 保留段。你给的「**不能对它进行大量的扫描**」
@@ -1045,6 +1143,11 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
 
 > 这次把 `GEF_ALLOW_REAL_SCAN` 置为 `true` 只为让 `/health` 如实报告开关状态，
 > 不是放宽任何闸门：`Scope.active_scan` 与白名单口径一个字都没改。
+>
+> ▶（2026-10 测试阶段改造：本表与上面这条说明是当轮的**历史留痕**，原文保留。
+> 唯一确定受影响的是「白名单口径」：工具闸门已更名为 `selectable`
+> （判定「已注册且已接入」），旧的「公网白名单 = `{httpx, subfinder}`」不再成立。
+> 表中其余各行的**现状未经本轮复测**，不要当作当前实测值引用。见 §3.20 第 3 条）
 
 ### 3.13 规划方案 §1～§18 的逐节对照审计 + BUG 索引表 29 条行号全量刷新（2026-10-03，无人值守）
 
@@ -1115,9 +1218,9 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
    第 21 条的 `record_count`），并在表头加了一段「行号批量刷新」的说明与**行号口径**
    （LF；`Get-Content` 不带 `-Encoding UTF8` 会给出**偏小的假行号**，
    实测 `api/scan.py` 默认编码 267 行 vs `-Encoding UTF8` 320 行，偏差 **16.6%**）。
-2. **顺带校正同一份文档里的两处同类漂移**：§7.2 第 8/10 条、§7.3 第 13～17 条、
+2. **顺带校正同一份文档里的两处同类漂移**：§7.2 第 11/13 条、§7.3 第 16～20 条、
    §8「最小调试入口速查」四行（其中「只有 2 个测试文件」已过期 —— 现在是 40 个
-   `test_*.py`；「19 张表」实测为 **20** 张）、§8 末尾第 2 条与 §7.7 第 31 条
+   `test_*.py`；「19 张表」实测为 **20** 张）、§8 末尾第 2 条与 §7.7 第 34 条
    （`git ls-files` 实测：本仓库 `results/`/`uploads/`/`SecLists/` 都是 **0 个跟踪文件**，
    该条只对上游旧 clone 成立 —— **保留但加▶注明**，因为「不许 `git add -A`」的纪律仍适用）。
 3. **把两条「只能靠索引表推断」的结论写进代码**（本轮仅有的两处源码改动，都是 docstring）：
@@ -1143,7 +1246,7 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
 | `ruff check .` | All checks passed（exit 0） |
 | `mypy app.py core api jobs storage.py modules scripts` | Success: no issues found in **72** source files |
 | `python scripts/check_env.py` | ok 16 / warn 2 / fail 0（两条 warn 是既有的「`GEF_ALLOW_REAL_SCAN=true` 提醒」与「worker 心跳 stale」——后端 worker 本就没起） |
-| 路由口径 | 仍是 **48 规则 / 50 绑定 / 42 个 `/api/*`**（与 §3.12.6 一致，本轮未新增路由） |
+| 路由口径 | 仍是 **48 规则 / 50 绑定 / 42 个 `/api/*`**（与 §3.12.6 一致，本轮未新增路由）▶（2026-10 测试阶段改造后实测为 **48 规则 / 49 绑定**；本行是当轮的**历史留痕**，原文保留。见 §3.20 第 8 条） |
 | 行号核对 | 用 `open(..., newline="")` 与正则定位**双向交叉验证**（先按符号找行号、再按行号读回内容），核对的 90+ 个引用逐一比对 |
 
 #### 3.13.4 给后来者的两条操作纪律（本轮踩到才写下来）
@@ -1165,6 +1268,9 @@ Scope / Policy 判定逻辑（`core/policy.py` 一行未改；`core/scope.py` �
 `nuclei` 仍为 `internet_allowed=false`）。**未对任何真实外部目标发起扫描**：
 本轮只跑了本地测试与只读核对，连临时实例都没起（上一轮的「真起实例」结论见 §3.12.7，
 本条不重复）。
+
+▶（2026-10 测试阶段改造：工具闸门改为 `selectable`，17 个已注册 runner 全部可勾选；
+`nuclei` 仍不可选。本节是当轮的**历史留痕**，原文保留。见 §3.20）
 
 **仍未推送**：口径同 §3.9～§3.12 —— 等你确认后先跑七项推送前安全审计，
 再显式 `git push origin main`（**不加 `--tags` / `--follow-tags`**）。
@@ -1193,7 +1299,7 @@ grep 只命中本文件自己的两处引用。也就是说**此前每一轮的�
 | 其余 3 份方案 + `.archify/` + `.dsh/skills/geteverythingskill/` | ❌ 否（`??`） | **纪律**：从来不在忽略规则里 |
 
 ★ **这条要专门记下来，因为它改变了「有多危险」的判断**：`AGENTS.md` 与
-`CODEBASE_MAP.md` §7.7 第 31 条那条「不许 `git add -A`」**比想象中更重要** ——
+`CODEBASE_MAP.md` §7.7 第 34 条那条「不许 `git add -A`」**比想象中更重要** ——
 一旦有人图省事 `git add -A`，被带上去的会是 2.05 MB 的 `.archify/` 与本机工作单，
 而**不会**被 `.gitignore` 拦住。
 
@@ -1240,6 +1346,9 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 若你想彻底了断：`git tag -d backup-before-secret-purge`（删除后等 `git gc` 回收），
 并顺手轮换 `.env` 里的 `LOCAL_ADMIN_TOKEN`。**两者都仍等你点头，本 Agent 未做。**
 
+> ▶（2026-10 测试阶段改造：**上述两条仍然全部未做**，本节口径原样有效；
+> 本轮**没有**执行 `git tag -d`，也没有轮换 `LOCAL_ADMIN_TOKEN`。见 §3.20）
+
 > **本轮只跑到「审计通过」为止，没有推送。** 推送属需确认项 ——
 > 你原话是「有需要我确认的等我起床找你的时候再让我确认」。
 
@@ -1255,6 +1364,10 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 
 `app.py:index()` 原本只在 `if action in _SCAN_ACTIONS:`（`_SCAN_ACTIONS = {"scan"}`）
 **内部**才调 `_require_admin_for_page()`；`elif action == "chat":` **没有任何认证调用**。
+▶（2026-10 测试阶段改造：这一整条路径**已随旧首页退役消失** —— `index()` 现在只做
+`GET /` → 302 跳转，`POST /` 在路由层 **405**，`_SCAN_ACTIONS` 与
+`_require_admin_for_page()` 两个符号**都已从 `app.py` 删除**。本段是当轮的
+**历史留痕**，原文保留；**缺口本身已经堵死**。见 §3.20 第 5 条）
 而 chat 进 Agent 后，`_tool_subdomain` / `_tool_httpx` 直接调 `tool_runner.run_tools()`
 与 `HttpxRunner().run_scan()` —— **两者都不查 `GEF_ALLOW_REAL_SCAN`、也不查 Scope**
 （`docs/AGENT_ASYNC_IMPACT.md` I-5）。两者叠加 = **匿名可达真实扫描**。
@@ -1281,6 +1394,9 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 `allowed_domains` / `allowed_cidrs` 渲染进首页资产卡片 → 匿名访客能看到
 **范围名称 + 覆盖目标 + 是否开启真实扫描**。资产页（当轮 `app.py:382`，当前 `:428`）一直带
 `if is_authenticated else []`，**首页漏了同一个判断**，属不一致。已统一。
+▶（2026-10 测试阶段改造：**首页与其渲染逻辑已整体退役** —— `web/templates/index.html`
+已删除，`app.py:173-196 assets_page()` **不再下发 `scopes`**（原先的
+`if is_authenticated else []` 随之取消）。本段是当轮的**历史留痕**，原文保留。见 §3.20 第 5 条）
 
 #### 3.14.3 改了什么（三处，均不新增/删除路由）
 
@@ -1288,17 +1404,25 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 |---|---|
 | `app.py:243`（当轮；当前 `:264`） | `_require_admin_for_page()` 从 `if action in _SCAN_ACTIONS:` **内部**提到 `action` 分支**之前** —— 原写法是「按动作名白名单护」，漏一个动作就漏一个洞；改后新增动作**默认安全** |
 | `app.py:304`（当轮；当前 `:350`） | `context["scopes"] = _load_scope_options() if is_authenticated else []`，并把 `local_auth.is_authenticated()` 提为局部变量避免重复比较 Token |
-| `web/templates/index.html:94-110` | 未登录时不再说「还没有任何授权范围」（那是另一回事），改说「登录后可见」 |
+| `web/templates/index.html:94-110` | 未登录时不再说「还没有任何授权范围」（那是另一回事），改说「登录后可见」 ▶（2026-10 测试阶段改造：该模板**已随旧首页退役一并删除**；本行是当轮的**历史留痕**，原文保留。见 §3.20 第 5 条） |
 
 > **本节行号是「当轮」值，已整体漂移。** 之后两轮又改过 `app.py`（第二轮
 > `build_page_context()` 加形参 +16 行，第三/四轮再加 docstring 与 `if/else` +21 行）。
 > 正文按原样保留作为当轮证据；要按**当前**代码定位，用
 > `docs/CODEBASE_MAP.md` §9.36.6 的漂移对照表，或按函数名找。
+>
+> ▶（2026-10 测试阶段改造：**这份漂移对照表本身也过期了** —— `app.py` 现共 **302 行**，
+> 上面两处行号（`:350` 与 `:428`）与 `build_page_context()` **都已不存在**（函数已删）。
+> 定位请改用函数名或 `docs/CODEBASE_MAP.md` 的最新版。见 §3.20 第 5 条）
 
 **未做（有意）**：不改 `GET /` 的匿名可读性（那是有意保持的只读契约）；
 不动 7 个已定的匿名只读 API（属 D 项）；不启动 P0-6 阶段二（你已说「**先不开工**」）——
 **Agent 内部仍然绕过 `GEF_ALLOW_REAL_SCAN` 与 Scope，这条缺口原样保留**，
 本轮只是**堵住匿名入口**。
+▶（2026-10 测试阶段改造：本段是当轮的**历史留痕**，原文保留。第 1 条已不再适用 ——
+`GET /` 现为 **302 → `/scan-center`**，不再渲染页面，「匿名可读的首页」这个契约随之消失
+（`POST /` 在路由层 **405**）。后两条**仍然成立**：7 个匿名只读 API 一个字未动，
+P0-6 阶段二仍然**未开工**，Agent 绕过缺口原样保留。见 §3.20 第 5 条）
 
 #### 3.14.4 验证
 
@@ -1320,6 +1444,7 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 - `pytest -o addopts="" -q` → **1321 passed / 2 skipped**（`--collect-only` **1323**）；
   `ruff` 全过；`mypy` **72 文件 0 error**；三个 JS `node --check` 通过。
 - **路由未变**：48 规则 / 50 绑定 / 42 个 `/api/*`（实测）。
+  ▶（2026-10 测试阶段改造后实测为 **48 规则 / 49 绑定**；本节是当轮的**历史留痕**，原文保留。见 §3.20 第 8 条）
 - **五次独立于测试的复核**：`test_client` 桩 + **真起 waitress** 桩 + **登录态正路探针**
   + 匿名路由全扫 + 匿名首页内容比对，每次都**先断言前提**（桩已装载 /
   `get_admin_token()` 等于探针 Token 且 `is_ephemeral_token()` 为 False）再采信数字。
@@ -1407,6 +1532,10 @@ git push origin main          # 刻意不带 --tags / --follow-tags
   `<section class="panel">` 整块裸渲染）**也没有** `is_authenticated` 守卫，
   直接把 `summary.total_runs` / `total_domains` / `total_subdomains` 渲染出来。
 
+> ▶（2026-10 测试阶段改造：上面两条的**载体都已消失** —— `build_page_context()` 与
+> `web/templates/index.html` 一并删除，`GET /` 现为 **302 → `/scan-center`**。
+> 本段是当轮的**历史留痕**，原文保留。见 §3.20 第 5 条）
+
 **实测（`%TEMP%\gef_summary_verify.py`，临时库）**：写入 7 条子域名（目标 `leaktarget.test`）后，
 管理员首页汇总 `{'扫描运行次数':'7','已有目标数':'1','结果总数':'7'}`，
 **匿名首页汇总完全相同**；且匿名 `GET /?domain=leaktarget.test` 会渲染出目标名与
@@ -1424,7 +1553,7 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 |---|---|
 | `app.py:build_page_context()` | 新增 `is_authenticated=False` 形参（**默认 False 是刻意的失败关闭**）；三个取数点改为按该标志短路 |
 | `app.py:index()` | 把 `is_authenticated = local_auth.is_authenticated()` **提到取数之前**并传入；原先它排在 `build_page_context()` 之后，导致「取数」这一步根本不知道访客是否登录 |
-| `web/templates/index.html:168-196` | 汇总面板整块包进 `{% if is_authenticated %}`（原先面板体是 `:167-190`，裸渲染）；未登录时改说「登录后可查看扫描汇总」 |
+| `web/templates/index.html:168-196` | 汇总面板整块包进 `{% if is_authenticated %}`（原先面板体是 `:167-190`，裸渲染）；未登录时改说「登录后可查看扫描汇总」 ▶（2026-10 测试阶段改造：该模板**已随旧首页退役一并删除**；本行是当轮的**历史留痕**，原文保留。见 §3.20 第 5 条） |
 
 #### 3.16.2 缺陷四：导出的结果行**重复计数**（**已修**，BUG 索引表第 9 条的另一半）
 
@@ -1514,6 +1643,7 @@ limit= 5 → {'subdomain': 3,'web':1}  {'subdomain': 3,'web':1}
 - `pytest -o addopts="" -q` → **1325 passed / 2 skipped**（`--collect-only` **1327**）；
   `ruff` 全过；`mypy` **72 文件 0 error**；`git diff --check` 0。
 - **路由未变**：48 规则 / 50 绑定 / 42 个 `/api/*`。
+  ▶（2026-10 测试阶段改造后实测为 **48 规则 / 49 绑定**；本节是当轮的**历史留痕**，原文保留。见 §3.20 第 8 条）
 - **导出目录未被污染**：所有探针都把 `storage.SQLITE_CONFIG["path"]`、
   `config.LOCAL_DB_CONFIG["path"]`、`exporter.EXPORT_DIR` 重定向到 `%TEMP%`；
   仓库 `exports/` 90 个文件、`results/` 未变。
@@ -1744,6 +1874,8 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 当前唯一出路是手写 `POST /api/scopes`，或者先在别处建好范围再刷新页面（那时进状态 3，按钮才活）。
 这同时解释了 §3.16.7 里 `index.html` 那段 curl 为什么存在：它是在给这个死锁打补丁。
 但补丁指错了方向 —— 应该修按钮，不是教用户用 curl。
+▶（2026-10 测试阶段改造：`index.html` 已整体删除，这个死锁的**载体**不复存在；
+本段是当轮的**历史留痕**，原文保留。见 §3.20 第 5 条）
 
 **修法**（最小、且不碰服务端任何一行）：给 `#scope-form` 加 `novalidate`。
 
@@ -1772,6 +1904,8 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 
 **症状**：未登录直接访问 `/scan-center`，页面**返回 200 且渲染完整的四步表单** ——
 能看见步骤 1~4 的标题、项目/任务/详情三个面板、以及它们自带的后台术语。
+▶（2026-10 测试阶段改造：扫描中心现为**三步**（确认目标 → 选择工具 → 创建任务），
+「四步」是当轮行文的**历史留痕**；本条收紧本身**仍然有效**。见 §3.20 第 9 条）
 
 **实测**（`%TEMP%\gef_tighten_verify.py`，`app.py` 的 `test_client()`，匿名 vs 管理员同一时刻对照）：
 
@@ -1815,10 +1949,31 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 
 | 残余项 | 我的实测结论 |
 |---|---|
-| A：`CODEBASE_MAP.md:3346` §9「读的是 `/api/scan-center`」判「部分实现」措辞过弱 | **成立**。`web/` 下 `/api/tools` **零命中**，是**有意换端点**而非没做完，已改判为「刻意改读 `/api/scan-center`」 |
-| B：`:3347` §9 字段判定不清 | **成立且补上了实测键集**。`/api/scan-center` 的 `tools[]` 键 = `default_enabled`/`description`/`internet_allowed`/`reason`/`risk_label`/`risk_level`/`tool_group`/`tool_group_label`/`tool_name`（**无** `name`/`category`/`risk`）；`/api/tools` = 上述 + `category`/`database`/`name`（**仍无** `risk`）。即 `category`→`tool_group`、`risk`→`risk_level`/`risk_label`，`scan_center.js` 用 `tool_name` 不用 `name` |
+| A：`CODEBASE_MAP.md:3346` §9「读的是 `/api/scan-center`」判「部分实现」措辞过弱 | **成立**。`web/` 下 `/api/tools` **零命中**，是**有意换端点**而非没做完，已改判为「刻意改读 `/api/scan-center`」。▶（2026-10 测试阶段改造：**该行号已失效**，`CODEBASE_MAP.md` 本轮整体重排；结论本身（有意换端点）仍成立。另 `/api/tools` 现已无任何前端调用点。见 §3.20 第 3 条） |
+| B：`:3347` §9 字段判定不清 | **成立且补上了实测键集**。`/api/scan-center` 的 `tools[]` 键 = `default_enabled`/`description`/`internet_allowed`/`reason`/`risk_label`/`risk_level`/`tool_group`/`tool_group_label`/`tool_name`（**无** `name`/`category`/`risk`）；`/api/tools` = 上述 + `category`/`database`/`name`（**仍无** `risk`）。即 `category`→`tool_group`、`risk`→`risk_level`/`risk_label`，`scan_center.js` 用 `tool_name` 不用 `name` **▶（2026-10 测试阶段改造：键集已变，见下注）** |
 | C：`DECISIONS.md:899` 第 ⑪ 条「无害」判定 | **原判定错**，但**缺陷不在 checkbox 上** —— 在同一个 form 里的两个 `required` 下拉（§3.17.1）。checkbox 的位置判断（不移动）仍成立，已就地更正「无害」二字 |
 | D：`548d196` 触及 **9** 个文件 | **不成立**。`git show --numstat --format="" 548d196` 实测 **8** 个文件，`+538/−59` 与 `DECISIONS.md:598`、`PROJECT_STATE.md` 一致 —— **写「9」的是 `CODEBASE_MAP.md:3359` 这一处**，已改回 8 并注明出处 |
+
+> ▶ **（2026-10 测试阶段改造）第 B 条的实测键集更正 —— 历史记录原文保留，只加注：**
+> 键集**新增 `selectable`**，`internet_allowed` **仍在但标注 deprecated 兼容键、值相同**：
+>
+> ```text
+> /api/scan-center 的 tools[] 键 = default_enabled / description / internet_allowed(deprecated)
+>                                 / reason / risk_label / risk_level / selectable
+>                                 / tool_group / tool_group_label / tool_name
+> /api/tools 的 tools[] 键      = 上述 + category / database / name（仍无 risk）
+> ```
+>
+> - 来源：`core/tool_registry.py:192 to_dict()` 同时输出 `selectable` 与 deprecated `internet_allowed`；
+>   两接口共用它，因此不会漂移（`api/public_scan.py:306` 与 `api/tools.py:111`）。
+> - **`restricted_tools` 的条目同样带 `selectable: false` + deprecated `internet_allowed: false`**
+>   （`nuclei` 是当前唯一一条，住在 `KNOWN_UNAVAILABLE_TOOLS`；`api/public_scan.py:308`）。
+> - **`/api/scan-center` 顶层的 `projects` 已移除**（授权项目业务取消，页面不再有这一栏）；
+>   顶层新增 `selectable_tools` + deprecated `internet_allowed_tools`（同值）。
+> - 未接入工具的兜底键集见 `api/tools.py:60 _registry_fields()`：
+>   同样给 `selectable: false` + deprecated `internet_allowed: false`。
+>
+> 另：`/api/tools` 的条目键集也已按同一口径更新（见 §3.20 第 3 条）。
 
 另有两处**刻意不动**：`:3330` 第 ② 条的「合并为一步」（同一步骤内的字段级联动，
 判断站得住）；`DECISIONS.md:598` 的 `8 文件 +538/−59`（本来就对）。
@@ -1836,6 +1991,8 @@ git push origin main          # 刻意不带 --tags / --follow-tags
    它原本把 `allowed_domains` / `allowed_cidrs` / `active_scan` 三个**数据库列名**印在可见
    `code-block` 里，又让用户去手写 API 请求 —— 而扫描中心步骤 2 本来就有这两个表单。
    修掉 §3.17.1 之后这段补丁完全没必要了。
+   ▶（2026-10 测试阶段改造：`index.html` **已随旧首页整体退役一并删除**，
+   这段 curl 示例随之消失；本段是当轮的**历史留痕**，原文保留。见 §3.20 第 5 条）
 
 #### 3.17.5 本轮新增的回归守卫
 
@@ -1844,7 +2001,7 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 | `test_scan_center_scope_form_opts_out_of_native_validation` | `#scope-form` 标签上必须有 `novalidate`。**写成正则匹配标签本身**，不是 `'novalidate' in source` —— 注释里就写着这个词，纯字面命中会让「删掉属性、留下注释」也算通过 |
 | `test_anonymous_scan_center_does_not_leak_backend_jargon` | 匿名响应不得出现 12 个后台术语（`mock`/`queued`/`worker`/`python -m`/`GEF_ALLOW_REAL_SCAN`/`scope_violation`/`allowed_domains`/`allowed_cidrs`/`active_scan`/`policy`/`scope`/`scope_id`）与 12 个骨架元素 id；**反向**断言管理员照常拿到骨架与术语 |
 | `test_no_real_registrable_placeholder_domain_in_frontend` | 前端 `*.html`/`*.js`/`*.css` 里所有 `example.<tld>` 必须落在保留集 `{com,net,org,test,invalid,localhost,example}` 内。**白名单判法**：`*.example.com` 放行，下一个 `example.cn` 立刻被抓住 |
-| `test_page_without_scope_shows_creation_hint`（改） | 零授权资产时首页要有指向 `/scan-center` 的可点链接，且 `allowed_domains`/`allowed_cidrs`/`active_scan`/`X-Local-Token` 一个都不许出现（原断言只钉了 `/api/scopes` 这个词） |
+| `test_page_without_scope_shows_creation_hint`（改） | 零授权资产时首页要有指向 `/scan-center` 的可点链接，且 `allowed_domains`/`allowed_cidrs`/`active_scan`/`X-Local-Token` 一个都不许出现（原断言只钉了 `/api/scopes` 这个词） ▶（2026-10 测试阶段改造：首页 `index.html` **已删除**，本守卫随载体消失；表内前三条守卫**仍然有效**。见 §3.20 第 5 条） |
 
 #### 3.17.6 需要你拍板的（本轮新增，**不阻塞**）
 
@@ -1853,9 +2010,20 @@ git push origin main          # 刻意不带 --tags / --follow-tags
    ▶ **用户答复：认（选 1），但要补一个四步验收** —— ① 空表单点击 → JS 给出明确错误；
    ② 非法目标 → JS / 服务端拒绝；③ 合法目标 → 正常提交；④ 绕过 JS 直接调 API → 服务端仍拒绝。
    判据是「这样 `novalidate` 只是 UX 修复，不会成为安全漏洞」。**已落地，见 §3.18.1。**
+   ▶（2026-10 测试阶段改造：`#scope-form` 与「添加授权范围」入口**已整体删除**，
+   因此 ① 的被测对象消失、② 的 JS 那一半消失；**③ 与 ④ 原封不动保留**
+   （`/api/scopes`、`/api/projects` 一条接口都没删），并且 ④ 现在是这组接口
+   **唯一**的直接验收人。原文件 `tests/integration/test_scope_form_acceptance.py`
+   被整份搬到新口径：那条依赖真实 headless Chrome 的用例**改写成不依赖 Chrome 的
+   源码级三步守卫**（`test_scan_center_js_wires_the_three_steps`），
+   并新增反向守卫 `test_scope_form_does_not_exist_anymore`（断言元素与绑定不许复活）。
+   见 §3.20 第 4 / 6 条）
 2. **匿名 `/scan-center` 收紧成「只剩一句需先登录」—— 认不认？** 若你希望匿名也能**预览**
    四步流程长什么样（当作产品介绍），说一声即可改成「骨架可见、术语与数据不可见」的中间态。
    ▶ **用户答复：收得对，与首页同口径。** 保持现状。
+   ▶（2026-10 测试阶段改造：上面提到的「四步」现已是**三步**（确认目标 → 选择工具 → 创建任务），
+   该收紧**保持有效**；「与首页同口径」这句话里的「首页」**已不存在**（`GET /` 现为 302 跳转）。
+   见 §3.20 第 5 / 9 条）
 3. **§3.16.8 那四条（匿名汇总 / 5 个 session 键 / `created_at` 去重口径 / 三条要不要各开一轮）
    仍全部未答**，继续挂着。
    ▶ **已全部答复，见 §3.16.8 的答复行与 §3.18。**
@@ -1888,6 +2056,12 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 
 **①的实测结果**（本机 Chrome，harness 内联**从磁盘读出的** `scan_center.js` 原文，
 `#scope-form` 从真实渲染结果里正则原样截取）：
+
+> ▶（2026-10 测试阶段改造：本段与下表是当轮的**历史留痕**，原文保留 ——
+> 它们记录的是**修复前 / 修复后**的对照证据，价值在于证明那一次修法有效，
+> 与本轮改造无关。**载体提示**：`#scope-form` 与 `#job-project` 已随授权业务取消而删除，
+> 因此这张表**无法在新界面上复现**；承载它的文件已整份改用新口径，
+> 那条真实浏览器用例被改写成源码级三步守卫。见 §3.20 第 4 条）
 
 | 状态 | `submit` 触发 | `#scope-feedback` 文案 | 发出的请求 |
 |---|---|---|---|
@@ -1980,6 +2154,9 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 | 把 5 个 session 键从 session 里**删掉** | 只是不下发给匿名模板 —— 会话本身仍由管理员侧使用；删键会改变 Agent 行为，超出「按登录态过滤」的授权范围 |
 | 真实外部扫描 | 全程 mock / 本机 fixture；§3.18.1 的浏览器验收用**受控 `fetch` 桩**，不发任何网络请求 |
 
+> ▶（2026-10 测试阶段改造：本表四条**在本轮之后仍然成立** —— 上表四项本轮**一项都没有动**。
+> 新增一条同规格的：`agent/` 模块**一行未改**，Agent 直调 Runner 的缺口原样保留。见 §3.20）
+
 #### 3.18.5 已授权但**本轮未开工**的一轮：Cookie 4 KB 闸门
 
 用户答复：**「建议开，但单独一轮」**，硬要求是**用一个常量表达**
@@ -2001,6 +2178,12 @@ git push origin main          # 刻意不带 --tags / --follow-tags
 ▶ **2026-10-04 用户补了完整答复**：这一轮仍然**排在下一轮做**（本轮先推送、然后停），
 但「超限时怎么表现」已经定死 —— 见 §3.19。三条里的前两条（常量来源 / 超限表现）已有结论，
 第三条（与 `app.py:264` 守卫的同批顺序）**保持上文的硬前提不变**。
+
+▶（2026-10 测试阶段改造：本轮**没有开工**这一轮，Cookie 4 KB 闸门仍原样挂着；
+但上面引用的 `app.py:264` 这个**行号已经失效** —— 旧首页退役后 `app.py` 大幅减行
+（现共 302 行），`_require_admin_for_page()` 这一整个页面层函数**已被删除**，
+`POST /` 也不再有任何处理器（路由层 **405**）。因此「与登录守卫同批上线」这条硬前提
+**必须重新定位**到新的守卫点上，不能照抄 `:264`。见 §3.20 第 5 条）
 
 ---
 
@@ -2128,6 +2311,69 @@ Agent history / context
 
 只做一件事：**把已完成的工作推送出去，然后停下**。下一轮的第一件事按 §3.19.1 的顺序
 从「session payload 观测」开始。
+
+---
+
+### 3.20 测试阶段改造：开放扫描模式 + 三步扫描中心 + 工具闸门改名 + 旧首页退役（2026-10，用户直接指派 · 无人值守）
+
+> 依据：用户直接指派的「测试阶段改造」工作单。**代码已全部落盘并通过验证**
+> （`pytest` **1339 collected / 1337 passed / 2 skipped**、`ruff` 全过、
+> `mypy` **72 文件 0 error**），本节只做**文档同步**，不改任何 `.py` / `.js` / `.html` / `.css`。
+> 沿用 §3.7 起的无人值守口径：需要拍板的写在这里，工作继续。
+
+**一句话**：开放扫描模式（源码默认关闭）+ 扫描中心四步 → **三步** + 工具闸门
+`internet_allowed` → `selectable` + 旧首页整体退役 + 资产 / Diff 简化。
+本节同时**追溯更正**前面几节里已被本轮推翻的**当前有效口径**（历史判断原文一律保留、只追加 `▶` 标注）。
+
+| # | 决定 | 依据 / 理由 | 代价 / 边界 |
+|---|---|---|---|
+| 1 | **`GEF_OPEN_SCAN_MODE` 源码默认 `false`，且失败关闭** —— 空串、假值、任何拼错的值一律按**关闭**处理（只有显式真值 `1/true/yes/on/y` 才开；`core/safety.py:56` / `:74 open_scan_enabled()`）。它与 `GEF_ALLOW_REAL_SCAN`（`core/safety.py:51`）是**双开关语义分离、互不替代**：只开第 2 道不开第 1 道 → `real` 任务照样 **403**；只开第 1 道不开第 2 道 → 仍然**必须**有授权范围 | 「失败关闭」是安全默认值：配置写错时应当退回「要求授权」这一更严的一侧，而不是悄悄进入开放模式。两道闸管的是**两件事**，不是同一件事的两种说法 —— `GEF_ALLOW_REAL_SCAN` = 这个进程允不允许真的执行外部工具；`GEF_OPEN_SCAN_MODE` = 豁不豁免「必须挂在授权 Scope 上」这项**业务要求**（`core/safety.py:32-40` 的 docstring 已写清「口径（不要改回去）」与「这条开关**只**回答『要不要必须有 Scope』」） | 未开第 2 道且未给 `scope_id` → **400**（**不是**静默降级成 mock），文案点名 `GEF_OPEN_SCAN_MODE=true`，`details={"field":"scope_id","env":"GEF_OPEN_SCAN_MODE"}`（`core/policy.py:104-128`）。★ **本机测试环境 `.env` 里两个都是 `true`，这是「主动开启」，不代表公开仓库下载后默认进入开放公网扫描模式** —— 别人 clone 下去默认仍是关闭的。`scripts/check_env.py:343-358` 已加「开放扫描模式」检查项（开启 warn / 关闭 ok），自检脚本仍然**只读** |
+| 2 | **`open_scope()` 只是内部兼容层**（Open Test Execution Context）：`scope_id="open"`、`allow_all=True`（`core/scope.py:369`；`OPEN_SCOPE_ID` 在 `:363`、`OPEN_SCOPE_NAME = "未限定（开放模式）"` 在 `:366`）。它存在的**唯一理由**是满足 `jobs.scope_id NOT NULL` 与 Executor 的复检调用链 | 让链路上「读回 Scope 再校验」的每一步（`validate_job_targets` / `validate_step_target` / `require_active_scan`）都有一条**真实代码路径**可走，而不是在各处加 `if scope_id is None: 跳过` —— 给一个「什么都放行」的真实对象，比到处短路更不容易漏判；将来新增一处 Scope 校验时它自动对开放模式也生效（`core/scope.py:379-383`） | **从不落库、不下发前端、不出现在任何授权 UI 里**（`core/scope.py:360-362`）。推论 ①：`GET /api/scopes` **永远查不到它**（没有任何 Scope 记录会被创建）。推论 ②：开关关掉后，历史 open 任务的执行期复检会落到 `scope_store.require("open")` → 查不到 → **403**，这是「配置变更后不继续放行」的**预期行为，不是缺陷**，关掉开关的人预期如此（`core/policy.py:131-137`）。另：`scope_id` **显式给出但不存在**时始终 403，开放模式也不放过 |
+| 3 | **工具可勾选口径改成「已注册且已接入」**：`ToolPolicy.internet_allowed` → **`selectable`**（`core/tool_registry.py:174`）；旧名降级为 deprecated property 别名（`:183`）+ 两个 deprecated 函数别名（`internet_allowed_tools()` `:555` / `assert_tools_internet_allowed()` `:564`，后者内部仍调前者）。**17 个已注册 runner 全部 `selectable=True`**；`default_enabled` **不变**（仍只有 `subfinder` / `httpx` 为 `True`）；`nuclei` 仍 `selectable=False`（住在 `KNOWN_UNAVAILABLE_TOOLS` `:380`） | 「是否允许打公网」这个语义已经取消：工具可选只取决于「**是否已接入**」。旧名会让读者以为还有什么公网白名单在起作用，因此**改名而不是改语义**；直接删旧名会让尚未升级的调用方 `ImportError`，故只留薄别名 | ★ **判定顺序不能反（真 bug，已修）**：`assert_tools_selectable()`（`:476`）**必须先查 `TOOL_POLICIES` 再查 `KNOWN_UNAVAILABLE_TOOLS`** —— 反过来 `nuclei` 会被误报成「以下工具未登记，禁止使用」，与界面显示的「未接入」自相矛盾；未登记优先报错，否则报未接入。★ **最重要的不变量**：「这个名字没有元数据」**绝不等于**「不受限」——只认注册表，查不到就拒绝（由 `:508-510` 的注释钉住）。高风险工具（`naabu` / `nmap` / `dirsearch` / `feroxbuster` / `shuffledns`）的 `reason` 仍非空，但那是**提示，不是闸门**。错误 `details` 同时给 `selectable_tools` + deprecated `internet_allowed_tools`（值相同） |
+| 4 | **授权业务取消，但执行层全部保留**。取消的是「必须先有一个授权范围挂在某个项目下」这项**业务要求**，以及项目校验 / 项目→Scope 关联校验 / 公网白名单校验 | 测试阶段的目的是「输入目标就能跑」，不是「把安全检查全拆掉」—— 这两件事必须分开写，否则后来者会把下一条也一起删掉 | **没有取消**：显式 scope 时的**白名单**与**排除列表**（**排除优先**，对所有 Scope 生效）、目标**格式**校验、**SSRF / 内网地址拒绝**（`core/policy.py:190 validate_resolved_address`）、**并发与超时上限**（只能收紧，越界 400）、**审计**。一句话：**「不要求授权」不等于「不做任何安全检查」** |
+| 5 | **旧首页整体退役**：`web/templates/index.html` **删除**；`GET /` 只有 `redirect(url_for("scan_center"))`（**302**，`app.py:141-153`）；**`POST /` 在路由层 405**；登录成功跳 `/scan-center`（`app.py:233-249`，实测 `:249`） | 「**不留幽灵路由**」：删了模板却留着 `POST /` 只会变成 `TemplateNotFound`，而旧首页的 `action=scan` / `action=chat` 本就是**一个隐藏的页面接口**（§3.14.1 的缺陷正出在它上面）。点击进入的人应当直接落在登录后的扫描中心 | `POST /` 既**不是 200**（未知动作再也回不出「未知操作」页面）、也**不是 401**（不再有幽灵页面接口），而是 **405 Method Not Allowed** —— 刻意不为了「友好」而保留一个能回话的处理器。`agent/` 模块本身**仍在仓库里**，本轮**不**重构 Agent 架构。`app.py` 里 7 个页面层函数（`build_page_context()` / `_to_ui_history()` / `normalize_domain` / `_SCAN_ACTIONS` / `_require_admin_for_page()` / `_scope_targets()` / `_load_scope_options()`）与 3 个 import 一并删除 |
+| 6 | **「目标自动匹配授权资产」整条流水线取消**：前端 `applyMatchedScope()`、服务端契约 `eligible_scope_ids`、`scopeSelect` / `projectSelect`、`renderConsentSummary()` **全部删除，且不得复活** | 授权业务取消后，「先试算出目标属于哪个范围、再替用户选中」这件事**没有对象了** —— `POST /api/public-jobs/check` 已重写成**只读目标预检**，`ready` 的含义从「有没有授权」变成「格式合法且未命中排除列表」= 可以提交（`api/public_scan.py:124-207`） | 面板已换成**三条反向守卫**（`tests/integration/test_public_scan_mode.py:2574` / `:2596` / `:2624`）：① 预检响应**不得有**匹配契约；② JS **不得有**自动匹配流水线；③ JS **不得发送** `scope_id` 与 `project_id`。删除是**有测试钉死**的，不是「暂时拿掉」。另：预检**不再返回** `blocker` / `matches` / `candidates` / `resolved_check_deferred` / `real_scan_enabled`，`scope_id` 与 `project_id` 恒为 `null`（Deprecated 兼容键） |
+| 7 | **执行链收敛**：`create_scan_job()`（`core/application.py:215`）是**唯一**的 Policy / Scope / 落库入口；`create_open_public_job()`（`:495`）只多做两件事（策略模板解析 → 工具是否已接入）然后**原样调用**它；`create_authorized_public_job = create_open_public_job` 降级为 deprecated 别名（`:606-609`，同一个函数对象） | 「第二条实现」是授权判定最容易被绕开的地方 —— 收敛成一个入口后，改一处即全生效，也不存在「两条入口判定不一致」的可能 | `project_id` / `authorization_confirmed` **不再参与任何业务逻辑**（旧客户端仍可传；`to_dict()` 显式输出 `deprecated_fields: ["project_id","project_name","authorized_public"]`，见 `core/application.py:485`）。工具闸门 `assert_tools_selectable()` 的**唯一生产调用点在 `core/application.py:565`**，因此**所有入口共用**它（这正是 §3.11.5 那条口径差的收口） |
+| 8 | **路由与页面绑定实测：48 规则 / 49 绑定 / 42 个 `/api/*`** | `/` 从 `GET+POST` **两个绑定降为 1 个**（`POST /` 不再有处理器），因此总绑定 **50 → 49**；规则总数（48）与 `/api/*` 个数（42）**未变** | 旧文档里凡把「**50 绑定**」当**现状**的都要改；属**历史轮次**的记录**加注即可**。本轮已在第 3 节内**逐处追加 `▶` 标注**（覆盖 §3.5 / §3.7 / §3.8 / §3.9 / §3.10 / §3.11.4～§3.11.7 / §3.12.5 / §3.12.6 / §3.13.5 / §3.13.7 / §3.14.1～§3.14.4 / §3.16.1 / §3.16.4 / §3.17.1～§3.17.6 / §3.18.4 / §3.18.5，以及第 3 节开头「本次未授权项」区），**历史原文一律保留** |
+| 9 | **扫描中心四步 → 三步 + 资产 / Diff 简化**：`scan_center.html` **只剩 3 个 `.sc-step`**（`步骤 1 · 确认目标` `:70` / `步骤 2 · 选择工具` `:91` / `步骤 3 · 创建任务` `:108`，注释在 `:68` / `:89` / `:106`）；`assets.html` 删除 `#filter-scope`（「全部授权资产」筛选）与 `#diff-scope`，保留 `#diff-before` / `#diff-after`（`:106` / `:111`）与 `#diff-include-unchanged`（`:116`）；Diff 两个下拉项 label 改为「**网址 工具 · 状态 · 时间**」（`web/static/assets.js:321 jobOptionLabel()`） | 授权范围不再是资产的筛选维度；Diff 的选项应当说清「这是哪次任务」，而不是依赖一个已被取消的归属。步骤 1 从「检查授权」改成「确认目标」后，它只做格式预检，**不判断授权**（`scan_center.html:68` 的注释即此意） | `buildQuery()` 不再拼 `scope_id`；`scopeLabelById()` 与详情面板「所属范围」一行已删；`.sc-scope-targets` **改名**为 `.sc-target-meta`；任务面板改为 `<details class="sc-jobs">` 可折叠。前端三条**保留的**守卫是 `currentTargets()`（`scan_center.js:138`，唯一事实来源）、`checkIsFresh()`（`:150`）、`invalidateCheckResult()`（`:156`），兜底在 `:702`：目标改动后未重新「确认目标」→ **拒绝提交**。`assets.html` 的两处删除有反向守卫钉着（`tests/integration/test_assets_api.py:276` / `:380`） |
+
+**一处值得单独记的纪律**：`tests/conftest.py:56-58` 把 `GEF_ALLOW_REAL_SCAN` / `GEF_OPEN_SCAN_MODE` /
+`GEF_LOG_FORMAT` **钉死**（**不是** `setdefault`）—— 因为 `config.load_dotenv()` 会把本机 `.env`
+（那里 `GEF_OPEN_SCAN_MODE=true`）读进测试进程，一旦漏进来，
+`test_policy.py::test_validate_job_targets_requires_scope_id` 这类「没有 `scope_id` 必须 400」
+的守卫会**集体静默失效**（实测 `DID NOT RAISE`，全量 **77 failed**）。
+**双开关的默认值必须由测试显式钉住，不能依赖运行环境的 `.env`。**
+
+**本轮验证结果（命令与真实输出）**
+
+| 项 | 结果 |
+|---|---|
+| `python -m pytest -o addopts="" -q` | **1339 collected / 1337 passed / 2 skipped / 0 failed / 0 error**（180.53 s） |
+| 基线变化 | 1340 collected / 1338 passed → **1339 / 1337**（净 **−1**）：删掉 2 条钉「任务快照项目授权备注」与「任务挂项目」的用例，合并为 1 条反向守卫 `test_public_job_does_not_snapshot_any_project_authorization_note` |
+| `ruff check .` | All checks passed（exit 0） |
+| `mypy app.py core api jobs storage.py modules scripts` | Success: no issues found in **72** source files |
+| 路由口径 | **48 规则 / 49 绑定 / 42 个 `/api/*`**（实测 `app.url_map`） |
+| 前端语法 | `web/static/` 下 3 个 JS（`app.js` / `assets.js` / `scan_center.js`）`node --check` 全部通过（exit 0） |
+
+**本轮没有新增「本次未授权项」**：本轮无待拍板项 —— 开放扫描模式与三步扫描中心都是
+用户直接指派的口径，工具闸门改名属「语义更正 + deprecated 别名保留」，
+不新增权限、不删旧 API，因此全部落在第 2 节白名单内。§3.9 第 2 条
+（自动匹配「唯一才选」）已随能力取消而作废，不再是待办。
+
+**未动**：`agent/`（**一行未改**，Agent 直调 Runner 的缺口仍在，§3.9 的「先不开工」未变）、
+**表结构与数据**（`scopes` / `jobs` / `assets` / `observations` / `projects`，**零 DDL**）、
+**认证机制本身**（仍是单管理员 Token + `session[SESSION_KEY] = True` 裸布尔；
+§3.16.6 的多操作者身份与 §3.18.5 的 Cookie 4 KB 闸门**均未开工**）、
+`results/scan_results.db`（**只读**）、`api/projects.py` 与 `api/scopes.py` 的后端实现、
+审计机制、既有 API 语义、同步 Runner 链路、`pyproject.toml`。
+
+**未对任何真实外部目标发起扫描**：本轮全部用例走 mock 或注入假 runner，
+目标是 RFC 6761 保留域（`www.example.test` / `a.example.test` / `evil.test`）与 RFC 5737 保留段；
+`scripts/verify_public_scan.py` 整体重写成新链路后**仍只打保留域**。
+`tests/integration/test_web_baseline.py:21`、`test_m2_page_scan.py:59` / `:100` / `:157`、
+`test_public_scan_mode.py:703` / `:1308` / `:2624`、
+`tests/unit/test_tool_registry.py:228`（`test_selectable_tools_covers_every_registered_runner`）
+/ `:358`（`test_nuclei_is_rejected_as_unwired_not_as_unregistered`）等是本轮的代表性守卫。
 
 ---
 

@@ -44,7 +44,7 @@
 | 🤖 **LLM Agent** | 自然语言描述扫描任务由**正则 + 模板**规划（`agent/intent.py` / `agent/planner.py`）；`agent/providers/*` 已实现但**当前无调用方**，运行时不发大模型请求 |
 | 📤 **多格式导出** | 支持按域名 / 工具 / 分类导出 CSV / JSON |
 | 🎯 **目标管理** | 支持手动输入 + 批量导入 + 配置文件管理 |
-| 🔌 **配置面板** | Web 端可改 LLM API Key / FOFA / Hunter / Quake / Shodan / ENScan Cookie |
+| 🔌 **配置接口** | 经 `GET` / `POST /api/settings`（+ `/api/settings/enscan`）改 LLM API Key / FOFA / Hunter / Quake / Shodan / ENScan Cookie；▶ 测试阶段旧首页退役后**不再有页面设置入口**，目前只走 API（需登录） |
 
 ---
 
@@ -118,13 +118,18 @@ pip install -r requirement.txt
 ```bash
 python app.py
 # 默认监听 http://127.0.0.1:5000
+# 入口页 http://127.0.0.1:5000/scan-center
 ```
 
-启动后访问 `http://127.0.0.1:5000/` 即可使用前端页面（`web/templates/` 下的模板与
-`web/static/` 下的静态资源都已随仓库提供）。
+启动后直接访问 **`http://127.0.0.1:5000/scan-center`**（扫描中心）。
+根路径 `/` 只剩一次跳转：**`GET /` → 302 → `/scan-center`**，不再渲染首页。
+前端资源都随仓库提供：`web/templates/` 下的 `login.html` / `assets.html` /
+`scan_center.html`，以及 `web/static/` 下的 `app.css` / `app.js` / `assets.js` /
+`scan_center.js`。
 
 > 未配置 `.env` 的 `LOCAL_ADMIN_TOKEN` 时，启动横幅会打印本次进程的**临时** Token，
-> 重启即失效。想固定下来就把它写进 `.env`。
+> 重启即失效。想固定下来就把它写进 `.env`。该横幅打印的访问地址就是
+> `http://{host}:{port}/scan-center`，并注明「根路径 / 会 302 到这里；旧首页已退役」。
 
 ### 启动 Worker（**不启动则任务永远停在 `queued`**）
 
@@ -171,7 +176,9 @@ python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
 
 它检查解释器与依赖版本、四个运行期目录权限、`.env` 与安全开关
 （弱 `SECRET_KEY` / 空 `LOCAL_ADMIN_TOKEN` / `WEB_DEBUG=true` / 非回环 `WEB_HOST` /
-`GEF_ALLOW_REAL_SCAN`）、17 个外部工具、两个 SQLite 库、worker 心跳与队列。
+`GEF_ALLOW_REAL_SCAN` / `GEF_OPEN_SCAN_MODE`）、17 个外部工具、两个 SQLite 库、
+worker 心跳与队列。其中「开放扫描模式」开启时给的是 **warn 级提示**（该模式不要求
+授权范围，仅应在本机测试、已获授权的环境开启），关闭时按 ok 处理。
 
 **它是只读的**：不写文件、不建库、不发网络请求、不执行任何扫描工具，也不会输出任何密钥值。
 本机没配 `.env` 时典型结果是 `warn 4 / fail 0`、退出码 1（四条警告依次是
@@ -187,7 +194,7 @@ python scripts/check_env.py --json     # 一行 JSON，便于脚本消费
 ### 测试与验收
 
 ```bash
-python -m pytest                                          # 1291 passed, 2 skipped
+python -m pytest                                          # 1337 passed, 2 skipped（收集 1339）
 python -m ruff check .                                    # All checks passed!
 python -m mypy app.py core api jobs storage.py modules scripts  # Success: no issues found in 72 source files
 python scripts/check_env.py                               # 环境自检（只读）
@@ -196,6 +203,9 @@ python scripts/check_env.py                               # 环境自检（只�
 > 这三个数字以仓库根的 [`PROJECT_STATE.md`](../PROJECT_STATE.md)「最近一次验证」为准
 > （本节是规划方案第 6 节「目标自动匹配授权资产」时的快照 —— **它是快照，会过期**，
 > 每次前移后都需要人来更新）。
+> ▶ 测试阶段现状：那条「授权项目与范围」面板与「自动匹配授权资产」流水线已整体删除，
+> 扫描中心从四步收缩为**三步**（确认目标 → 选择工具 → 创建任务）；
+> 规划方案原文仍留在 `docs/` 里，只作历史脉络，不代表当前界面。
 
 测试**从不**触碰仓库的 `results/`：`tests/conftest.py` 会把两个数据库、上传目录、
 产物目录、导出目录全部指向临时目录。
@@ -221,11 +231,14 @@ python scripts/check_env.py                               # 环境自检（只�
 
 **鉴权现状（重要）**：除 `/health` 外，**修改/执行类**接口都要求本地管理员
 身份（请求头 `X-Local-Token: <Token>`，或先 `POST /api/auth/login` 建立会话）。
-**页面路由同样分两层**：`GET /` 与 `GET /login` 匿名可开（但未登录时**不下发**
-授权资产与任务列表）；**`POST /` 的两个表单动作（`action=scan` 与 `action=chat`）
-都必须登录**——`action=chat` 会进 Agent，而 Agent 当前能绕过
-`GEF_ALLOW_REAL_SCAN` 与 Scope 直接执行（见 `docs/AGENT_ASYNC_IMPACT.md` I-5），
-故它不是只读动作。详见 [`docs/API.md`](../docs/API.md) §4。
+**页面路由同样分两层**：`GET /`（302 到 `/scan-center`）、`GET /scan-center` 与
+`GET /login` 匿名可开（但未登录时**不下发**授权资产与任务列表）；
+**`POST /` 现在没有处理器 —— 请求在路由层就是 `405 Method Not Allowed`**。
+旧首页退役后，它此前承载的两个表单动作（`action=scan` 与 `action=chat`）随之消失
+（这两个动作此前**都需要登录**；其中 `action=chat` 会进 Agent，而 Agent 当前能绕过
+`GEF_ALLOW_REAL_SCAN` 与 Scope 直接执行，见 `docs/AGENT_ASYNC_IMPACT.md` I-5，
+所以它从来不是只读动作）。`agent/` 模块本身**仍保留在仓库里**，只是不再有页面入口，
+命令行入口仍是 `python agent_cli.py`。详见 [`docs/API.md`](../docs/API.md) §4。
 以下 **7 个只读**接口目前仍然**匿名可读**，这是有意保持的现状，属已知项：
 `GET /api/tools`、`GET /api/databases`、`GET /api/results`、`GET /api/tool/<n>/results`、
 `GET /api/export`、`GET /api/export/<id>/download`、`GET /api/exports`。
@@ -237,8 +250,28 @@ python scripts/check_env.py                               # 环境自检（只�
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
-| GET | `/api/tools` | 匿名可读（已知项） | **Tool Registry 读出点**：工具名、用途说明、能力分组（`tool_group`）、风险等级、是否允许公网，外加按能力分组好的 `groups`；也列出各工具的数据库信息 |
+| GET | `/api/tools` | 匿名可读（已知项） | **Tool Registry 读出点**：工具名、用途说明、能力分组（`tool_group`）、风险等级、**是否可选（`selectable` = 已注册且已接入 runner）**，外加按能力分组好的 `groups`；也列出各工具的数据库信息。`internet_allowed` 仍在响应里，但只是 **deprecated 兼容键**（值同 `selectable`） |
 | GET | `/api/databases` | 匿名可读（已知项） | 列出所有工具数据库表的元信息 |
+
+> **工具闸门从「公网白名单」改成「已注册且已接入」**（测试阶段口径）：
+> `selectable=True` 表示该工具**已注册且已接入 runner**，界面可勾选、可进任务，
+> 判定入口是 `core/tool_registry.py:476` 的 `assert_tools_selectable()`；
+> **17 个已注册 runner 现在全部 `selectable=True`**（历史口径是「公网白名单恰好
+> `{httpx, subfinder}`」，那个语义已经取消）。两种情况要分清：
+>
+> * `default_enabled` **没有变**：仍然只有 `subfinder` / `httpx` 为 `true` ——
+>   「可选」不等于「默认勾上」；
+> * `nuclei` **仍不可选**：它在 `core/tool_registry.py:380` 的
+>   `KNOWN_UNAVAILABLE_TOOLS` 里（`selectable=False`），界面显示「未接入」并置灰，
+>   显式指名它会被 **400** 拒绝，且报的是「未接入」而不是「未登记」；
+>   `naabu` / `nmap` / `dirsearch` / `feroxbuster` / `shuffledns` 的 `RISK_HIGH`
+>   与 `reason` 仍在，但那只是**提示**，不是闸门。
+>
+> ★ 不变量：**「这个名字没有元数据」绝不等于「不受限」** —— 只认注册表，
+> 查不到就拒绝；未登记的名字与被登记但未接入的名字必须能分开报错。
+> `assert_tools_internet_allowed()` 与 `internet_allowed_tools()`
+> （`core/tool_registry.py:555` / `:564`）现在是 **deprecated 薄别名**，
+> 新代码一律用 `selectable` 系列。
 
 ### 扫描执行
 
@@ -254,7 +287,7 @@ python scripts/check_env.py                               # 环境自检（只�
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
-| POST | `/api/jobs` | 需登录 | 创建任务（必填 `scope_id`，目标须在 Scope 内；可选 `idempotency_key` / `pace`） |
+| POST | `/api/jobs` | 需登录 | 创建任务（默认必填 `scope_id` 且目标须在 Scope 内；开启 `GEF_OPEN_SCAN_MODE` 后免授权范围，但目标格式校验与排除列表仍在；可选 `idempotency_key` / `pace`） |
 | GET | `/api/jobs` | 需登录 | 任务列表 |
 | GET | `/api/jobs/<job_id>` | 需登录 | 任务详情（含进度、节奏与错误码） |
 | GET | `/api/jobs/<job_id>/results` | 需登录 | **结果体验（Phase 4）**：一次给出「发现资产 / 服务 / 技术栈 / 风险提示」四段 + `counts` + `notes`（**不是漏洞扫描结论**，见下） |
@@ -328,6 +361,28 @@ python scripts/check_env.py                               # 环境自检（只�
 > 只开一个会返回 **403 `scope_violation`**，并在 `details.env` 里告诉你是哪个开关没开。
 > 此外目标必须落在已创建的 Scope 内 —— **没有 Scope 就拒绝扫描**，不存在隐式全放行。
 > 未经授权的外部目标一律不要尝试。
+
+> **开放扫描模式（`GEF_OPEN_SCAN_MODE`）是另一道独立的开关，与上面两条互不替代**：
+
+| 环境变量 | 作用 | 源码默认 |
+|---|---|---|
+| `GEF_ALLOW_REAL_SCAN` | 第 1 道闸：这个进程允不允许真的执行外部工具 | `false`（失败关闭） |
+| `GEF_OPEN_SCAN_MODE` | 第 2 道闸：豁不豁免「任务必须挂在授权 Scope 上」这项**业务要求** | `false`（失败关闭） |
+
+> 两者都是**失败关闭**：未设置、空串、假值、以及任何拼错的值（例如 `ture`）
+> 一律按**关闭**处理，不会因为写错一个开关就静默进入开放公网扫描模式。
+>
+> * 只开第 2 道、不开第 1 道 → `real` 任务**照样 403**；
+> * 只开第 1 道、不开第 2 道 → **仍然必须有授权范围**（缺 `scope_id` 直接 **400**，
+>   错误文案点名 `GEF_OPEN_SCAN_MODE=true`，**不会**静默降级成 `mock`）；
+> * 两道都开 → 可以提交不带 `scope_id` 的任务，执行期复检走开放执行上下文
+>   （`core/scope.py:369` 的 `open_scope()`，`id="open"`）。该上下文**从不落库、
+>   不下发前端、不进任何授权 UI**。
+>
+> ⚠️ **不要求授权 ≠ 不做任何安全检查**。开放模式不放松目标格式校验、排除列表
+> （排除优先，对所有 Scope 生效）、SSRF / 内网地址拒绝、并发与超时上限、审计。
+> 本机测试环境可以在 `.env` 里把两个都设成 `true` —— 那是**主动开启**，
+> **不代表公开仓库下载后默认进入开放公网扫描模式**。
 
 ### 调用示例
 
@@ -474,7 +529,9 @@ curl -OJ "http://127.0.0.1:5000/api/export/exp_<...>/download"
 
 #### 漏洞扫描
 
-- **nuclei** — 模板化自动化漏洞扫描（可通过 LLM Agent 调用）
+- **nuclei** — 模板化自动化漏洞扫描（历史文案为「可通过 LLM Agent 调用」；
+  当前 **未接入**：不在 `RUNNER_REGISTRY` 里，`selectable=False`，
+  扫描中心的工具列表显示「未接入」并置灰，显式指名会返回 **400**）
 
 ---
 
@@ -523,9 +580,13 @@ framework-main/
 │
 ├── agent/                    # LLM Agent 模块
 │
-├── web/                      # 前端模板（由开发者自行填充）
-│   └── templates/
-│       └── index.html        # 占位文件，需部署 dashboard
+├── web/                      # 前端模板与静态资源（都已随仓库提供）
+│   ├── templates/            # login.html / assets.html / scan_center.html
+│   │                         # （旧首页 index.html 已在测试阶段退役并删除）
+│   │   ├── login.html        # 登录页
+│   │   ├── assets.html       # 资产列表 / 两次任务对比
+│   │   └── scan_center.html  # 扫描中心（三步：确认目标 → 选择工具 → 创建任务）
+│   └── static/               # app.css / app.js / assets.js / scan_center.js
 │
 ├── static/                   # Flask 静态资源（CSS/JS）
 │
@@ -558,7 +619,7 @@ framework-main/
 
 | 文件 | 说明 |
 |------|------|
-| `app.py` | Flask 应用入口，注册 Blueprint，启动 Web 服务；`/` 路由渲染前端模板 |
+| `app.py` | Flask 应用入口，注册 Blueprint，启动 Web 服务；`/` 路由只做 **302 → `/scan-center`**（不再渲染首页） |
 | `config.py` | 全局配置：`Config` 类（LLM / Flask / API Key）+ 工具配置工厂 + 路径常量 |
 | `tool_runner.py` | 工具调度核心：加载目标、加载工具、运行、保存结果 |
 | `storage.py` | SQLite 数据访问层（`ScanResultStore`），含 23+ 个查询方法 |
@@ -628,7 +689,7 @@ framework-main/
 | **爬虫** | gospider, katana |
 | **目录扫描** | dirsearch, feroxbuster |
 | **历史 URL** | waybackurls |
-| **漏洞扫描** | nuclei（通过 LLM Agent） |
+| **漏洞扫描** | nuclei（**未接入**：不在 `RUNNER_REGISTRY`，界面上置灰不可选） |
 
 ---
 
@@ -660,6 +721,10 @@ SHODAN_API_KEY=xxx
 # 结构化日志（方案第 19 节）
 GEF_LOG_LEVEL=INFO      # CRITICAL / ERROR / WARNING / INFO / DEBUG
 GEF_LOG_FORMAT=json     # json（一行一个事件）或 text（key=value）
+
+# 两道安全开关（源码默认都为 false，且失败关闭）
+GEF_ALLOW_REAL_SCAN=false   # 第 1 道闸：是否允许真的执行外部工具
+GEF_OPEN_SCAN_MODE=false    # 第 2 道闸：是否豁免「必须挂授权范围」这项业务要求
 ```
 
 ENScan 的数据源 Cookie 通过 Web 面板的"设置"页写入，存到 `~/.config/enscan/config.yaml`。
@@ -721,8 +786,9 @@ grep '"request_id":"req_xxx"' server.log
 4. 在 `config.py` 添加对应的 `*_CONFIG` 配置块
 
 **Q5: LLM Agent 怎么用？**
-- Web 模式：通过前端"对话"标签页使用
 - CLI 模式：`python agent_cli.py`，自然语言描述任务即可
+- 页面入口：**测试阶段起没有了** —— 首页退役时一并带走了它承载的 `action=chat`
+  表单动作（`agent/` 模块本身仍在仓库里，只是不再有页面入口）
 
 > ⚠️ 当前 Agent 规划走的是**正则 + 模板**（`agent/intent.py:analyze_intent` →
 > `agent/planner.py:build_plan`），**不会**在运行时请求任何大模型。
@@ -730,9 +796,14 @@ grep '"request_id":"req_xxx"' server.log
 > `agent/client.py` 与 `agent/providers/*` 已实现但**没有调用方**。
 
 **Q6: 启动后访问 `/` 报 TemplateNotFound？**
-该问题 M1 已修复：`web/templates/{index.html,login.html,assets.html}` 与
-`web/static/{app.css,app.js,assets.js}` 都已随仓库提供，`GET /` 正常返回 200。
-若你仍在旧 clone 上看到这个报错，那是历史提交 `5853752` 删掉 `web/templates/` 的残留状态。
+该问题 **M1 曾修复**：`web/templates/{index.html,login.html,assets.html}` 与
+`web/static/{app.css,app.js,assets.js}` 已随仓库提供，当时 `GET /` 正常返回 200。
+**测试阶段起口径又变了**：旧首页（`index.html`）连同它的模板一并**退役删除**，
+`GET /` 现在是 **302 → `/scan-center`**（只跳转、不渲染首页），所以这个报错在当前
+代码上不会再出现；由仓库提供的前端资源是 `login.html` / `assets.html` /
+`scan_center.html` 与 `web/static/{app.css,app.js,assets.js,scan_center.js}`。
+若你仍在旧 clone 上看到 TemplateNotFound，那是历史提交 `5853752` 删掉
+`web/templates/` 的残留状态（与首页退役是两回事）。
 
 **Q6b: 建了任务但一直停在 `queued`？**
 Worker 没启动。Web 与 worker 是**两个独立进程**，需要另开一个终端跑

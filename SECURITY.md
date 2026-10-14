@@ -87,3 +87,56 @@
 这两点由 `tests/unit/test_check_env.py` 用哨兵串与目录快照锁定。
 
 > 注意它**不是**鉴权层的一部分，也不改变任何既有安全行为 —— 只是把「配置错了」提前暴露出来。
+
+## 测试阶段改造：两道闸门与开放扫描模式（2026-10）
+
+### 两道闸门，互不替代
+
+```text
+GEF_ALLOW_REAL_SCAN   第 1 道闸：这个进程允不允许真的执行外部工具
+GEF_OPEN_SCAN_MODE    第 2 道闸：豁不豁免「必须挂在授权 Scope 上」这项业务要求
+```
+
+- 源码里**两个都默认 `false`**，且都是**失败关闭**：只有显式写成真值（`1`/`true`/`yes`/`on`/`y`）才开启；
+  未设置、空串、假值、**任何拼错的值**（例如 `ture`）一律按**关闭**处理。
+- 只开第 2 道、不开第 1 道 → `real` 任务**照样 403**；只开第 1 道、不开第 2 道 → 仍然**必须**有授权范围（缺 `scope_id` → 400）。
+- **公开仓库下载后默认不进入开放公网扫描模式**；本机测试环境 `.env` 里两个都是 `true`，那是**主动开启**。
+- Open Mode 关闭且未给 `scope_id`：**400**，错误信息**点名** `GEF_OPEN_SCAN_MODE=true`
+  （`details = {"field": "scope_id", "env": "GEF_OPEN_SCAN_MODE"}`），**不允许静默 fallback 到 mock**，
+  **前端也不重新恢复 Scope / 授权步骤**。
+
+### 开放模式关掉的是什么、没关掉的是什么
+
+- **取消了**：「必须先有一个授权范围挂在某个项目下」这项**业务要求**；项目校验、Scope 关联校验、公网白名单校验。
+- **没有取消**：显式 scope 时的**白名单**与**排除列表**（排除优先，对所有 Scope 生效）；目标**格式**校验；
+  **SSRF / 内网地址拒绝**（`core.policy.validate_resolved_address`）；并发与超时上限；**审计**。
+- 一句话：**「不要求授权」不等于「不做任何安全检查」**。
+- 显式 `scope_id` 不存在时**始终 403**，开放模式**也不放过**。
+- `open_scope()` 是**内部兼容层**（Open Test Execution Context）：**从不落库、不下发前端、不出现在任何授权 UI 里**，
+  `GET /api/scopes` 永远查不到它。开关关掉之后历史 open 任务的执行期复检会 403 —— 这是**预期行为不是缺陷**。
+
+### 工具闸门口径
+
+- 闸门是「**已注册且已接入**」= `selectable`（`core/tool_registry.py:476 assert_tools_selectable()`）；
+  **17 个已注册 runner 全部 `selectable=True`**；`default_enabled` 不变（只有 `subfinder`/`httpx` 为 `True`）。
+- `nuclei` 仍**不可选**（在 `KNOWN_UNAVAILABLE_TOOLS` 里，界面显示「未接入」并置灰；
+  显式指名 → **400，且在创建任务之前被拒**）。
+- ★ 不变量：「**这个名字没有元数据**」**绝不等于**「不受限」—— 只认注册表，查不到就拒绝。
+- `assert_tools_internet_allowed()` / `internet_allowed_tools()` 现在是 **deprecated 薄别名**，
+  新代码一律用 `assert_tools_selectable()` / `selectable_tools()`。
+
+### 旧首页退役对安全面的影响
+
+- `web/templates/index.html` 已删除；`GET /` 只有 **302 → `/scan-center`**；`POST /` 在**路由层 405**
+  （既不是 200、也不是 401）—— 旧首页表单的 `action=scan` / `action=chat` 两个动作随之消失，
+  「匿名 `POST /` 的 `action=chat` 可达真实执行」这条路径的**页面入口已不存在**。
+- **但** `agent/` 模块本身**仍在仓库里**，本轮**不**重构 Agent 架构；Agent 内部「直接调 `run_tools` / runner、
+  未改走 Job Service」的绕过行为**原样保留**（属 P0-6 阶段二，用户已明确「先不开工」）。
+  ★ **不要写成「已修复」**。
+- 本文件原有的 2026-10-04 两条修复记录（匿名 `action=chat` 需登录、匿名首页不下发授权资产/汇总）**保留原文**，
+  此处补一句口径：**随旧首页退役，这两条的载体已整体消失**（`app.py:index()` 的页面层已删除），
+  守卫改为「根路径只做 302、`POST /` 返 405」。守卫用例：
+  `tests/integration/test_web_baseline.py:21 test_root_redirects_to_scan_center`、
+  `tests/integration/test_m2_page_scan.py:59 test_retired_page_actions_are_405_and_create_no_job`、
+  `::100 test_home_page_template_file_is_gone`、`::157 test_root_path_only_redirects`。
+- **本轮不涉及**：Agent 架构重构、数据库模型重构；**未对任何真实公网目标发起扫描**。
