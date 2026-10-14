@@ -320,8 +320,7 @@ def _service_items(assets: list[dict], facts: list[_Fact]) -> list[dict]:
     两条来源，都来自**已经采集到的**数据，不做任何端口猜测或存活性推断：
 
     * URL 观测（``httpx``）—— ``scheme + host + port``，缺省端口按协议补齐；
-    * ``port`` / ``service`` 类型资产（``naabu`` / ``nmap`` 等；
-      **它们不在公网白名单里**，但本机任务可能出现）。
+    * ``port`` / ``service`` 类型资产（``naabu`` / ``nmap`` 等）。
     """
     rows: dict[str, dict] = {}
 

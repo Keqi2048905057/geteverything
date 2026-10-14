@@ -326,19 +326,36 @@ def check_env_file() -> list[Check]:
         )
 
     # 真实扫描开关由 core.safety 解析（config.Config 上并没有这一项）。
-    from core.safety import REAL_SCAN_ENV, real_scan_enabled
+    from core.safety import OPEN_SCAN_ENV, REAL_SCAN_ENV, open_scan_enabled, real_scan_enabled
 
     if real_scan_enabled():
         checks.append(
             Check(
                 "真实扫描总开关",
                 STATUS_WARN,
-                f"{REAL_SCAN_ENV}=true：mode=real 且 Scope.active_scan=true 时会真的调用外部工具",
-                "确认只打已授权目标；不用时改回 false",
+                f"{REAL_SCAN_ENV}=true：mode=real 时会真的调用外部工具",
+                "确认只打自己拥有或已获授权的目标；不用时改回 false",
             )
         )
     else:
         checks.append(Check("真实扫描总开关", STATUS_OK, f"{REAL_SCAN_ENV} 未开启（只允许 mock）"))
+
+    # 开放扫描模式：豁免「必须提供授权范围」这项业务要求，因此是**必看**的一项。
+    # 它不放松真实扫描总开关，也不放松目标格式 / 排除列表 / SSRF 防护，
+    # 但它的确让「没有 scope 也能提交任务」成为可能 —— 值得显式提醒一次。
+    if open_scan_enabled():
+        checks.append(
+            Check(
+                "开放扫描模式",
+                STATUS_WARN,
+                f"{OPEN_SCAN_ENV}=true：不要求授权范围，任意目标都可直接提交任务",
+                f"仅在本机测试 / 已获授权的环境开启；不用时改回 false（{OPEN_SCAN_ENV}）",
+            )
+        )
+    else:
+        checks.append(
+            Check("开放扫描模式", STATUS_OK, f"{OPEN_SCAN_ENV} 未开启（必须先有授权范围）")
+        )
 
     return checks
 

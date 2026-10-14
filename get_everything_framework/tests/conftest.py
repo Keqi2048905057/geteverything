@@ -34,20 +34,27 @@ os.environ.setdefault("SECRET_KEY", "test-only-" + "a1b2c3d4" * 6)
 # 「测试要断言什么」之间的交界，一旦测试跟随开发者本机的 .env，
 # 同一份代码在这台机器绿、在那台机器红，且红的原因与被测代码毫无关系。
 #
-# 实测到的两处（都是本机存在 .env 之后才暴露）：
+# 实测到的三处（都是本机存在 .env 之后才暴露）：
 #
 # * ``GEF_ALLOW_REAL_SCAN`` —— 本机 .env 里为 true 时，
 #   ``test_m2_security.py::test_health_exposes_mode_and_security_status``
 #   断言的 ``real_scan_enabled is False`` 被顶掉；
 # * ``GEF_LOG_FORMAT`` —— 本机 .env 里为 text 时，
 #   ``test_observability.py::test_configure_logging_filters_by_level``
-#   解析 JSON 失败（该用例断言的是 json 格式的默认行为）。
+#   解析 JSON 失败（该用例断言的是 json 格式的默认行为）；
+# * ``GEF_OPEN_SCAN_MODE`` —— **本机测试环境**的 .env 里为 true（那是本轮
+#   刻意打开的开放扫描模式）。它一旦漏进测试进程，
+#   ``test_policy.py::test_validate_job_targets_requires_scope_id`` 这类
+#   「没有 scope_id 必须 400」的守卫会集体失效（实测：DID NOT RAISE），
+#   于是整整一层「无授权范围即拒绝」的契约在测试里静默消失。
 #
-# 需要 real 模式的用例自己用 ``monkeypatch.setenv`` 打开（见
-# ``test_m4_runner_result.py::real_mode``），用例结束会自动回滚到这里设的值。
+# 需要 real / 开放模式的用例自己用 ``monkeypatch.setenv`` 打开（见
+# ``test_m4_runner_result.py::real_mode`` 与
+# ``test_public_scan_mode.py`` 的开放模式用例），用例结束会自动回滚到这里设的值。
 # ``config.load_dotenv()`` 默认**不覆盖**已存在的环境变量，因此这里的赋值
 # 足以让 .env 不再影响测试。
 os.environ["GEF_ALLOW_REAL_SCAN"] = "false"
+os.environ["GEF_OPEN_SCAN_MODE"] = "false"
 os.environ["GEF_LOG_FORMAT"] = "json"
 
 # 扫描节奏（``core.pace``）里低频档的**步骤间隔**同样钉死为 0：

@@ -9,6 +9,8 @@
 ``jobs/executor.py`` 的 ingest 接线没有断。
 """
 
+import re
+
 import pytest
 
 from core import assets as assets_store
@@ -271,10 +273,35 @@ def test_assets_page_hides_scope_names_when_anonymous(client):
     assert "401 unauthenticated" in body
 
 
-def test_assets_page_lists_scopes_when_authenticated(admin_client, scope_id):
+def test_assets_page_has_no_scope_filter(admin_client, scope_id):
+    """资产页**不再有**「授权范围」这个筛选维度（本轮落盘的前端变更）。
+
+    这条替换了原来的 ``test_assets_page_lists_scopes_when_authenticated``
+    （它断言登录后能从页面上读到 Scope 名称与 ID）。改口径而不删守卫的理由：
+    **筛选维度从三个变成两个**这件事本身要有人守着 —— 「少一个维度」是刻意的，
+    但「把整块筛选一起删掉」不是。所以这条同时钉两头：
+
+    * 范围维度**真的没了**：``#filter-scope`` / ``#diff-scope`` 两个下拉，以及
+      任何 ``scope_…`` 形状的实体 ID，都不再出现在页面上。断言时库里
+      **确实存在一个 Scope**（``scope_id`` 夹具刚建好的那个）—— 页面不该看见它；
+    * 类型 / 状态 / 值三个维度**仍在**：它们才是资产页现在的筛选口径。
+
+    ``scope_id`` 不再是资产的筛选维度：资产列表接口没有 ``scope_id`` 参数
+    （``assets.js:buildQuery()`` 不再拼它），两次任务对比也只看这两次任务各自的
+    观测。留一个用不上的下拉，只会让用户以为「按范围筛」这个能力其实存在 ——
+    这正是「前端不该展示用不上的内部模型」的同一条理由（方案第 4 节原则 2）。
+    """
     body = admin_client.get("/assets").get_data(as_text=True)
-    assert "资产 API 范围" in body
-    assert scope_id in body
+
+    # 范围维度：两个下拉与实体 ID 都不在页面上。
+    assert 'id="filter-scope"' not in body, "「全部授权资产」下拉又回来了"
+    assert 'id="diff-scope"' not in body, "「限定授权资产」下拉又回来了"
+    assert not re.search(r"scope_[0-9a-f]{6,}", body), "页面下发了 Scope 实体 ID"
+    assert scope_id not in body, "页面下发了本机真实存在的那个 Scope ID"
+
+    # 筛选维度仍在：删掉的是「范围」，不是「筛选」。
+    for control in ('id="filter-type"', 'id="filter-status"', 'id="filter-search"'):
+        assert control in body, f"筛选控件 {control} 不见了 —— 删掉的应当只是范围这一个维度"
 
 
 def test_assets_page_offers_all_types_and_statuses(admin_client):
@@ -285,9 +312,42 @@ def test_assets_page_offers_all_types_and_statuses(admin_client):
         assert status in body
 
 
-def test_index_links_to_assets_page(client):
-    """首页要有入口，否则资产页只能靠手输 URL 才能找到。"""
-    assert "/assets" in client.get("/").get_data(as_text=True)
+def test_scan_center_links_to_assets_page(client, admin_client):
+    """两个页面必须**互相可达**，否则资产页只能靠手输 URL 才能找到。
+
+    这条替换了原来的 ``test_index_links_to_assets_page``（它断言首页 HTML 里有
+    指向 ``/assets`` 的入口）。旧首页整体退役后，入口链变成：
+
+    ```text
+    GET /  --302-->  /scan-center  --「资产」链接-->  /assets  --「← 扫描中心」-->  /scan-center
+    ```
+
+    所以三点都要钉住：
+
+    1. ``GET /`` 是 **302 且 Location 指向 ``/scan-center``** —— 根路径只剩跳转
+       （``app.py:index()`` 里没有 POST 分支，这里断 302 而不是 200 文本）；
+    2. ``/scan-center`` 页面里有 ``/assets``，``/assets`` 页面里有 ``/scan-center``；
+    3. 两个页面里都**没有** ``href="/"`` —— 旧首页那条「← 任务」链接不得复活。
+       旧首页不在页面上了，任何指回 ``/`` 的链接都是把一个 302 当成目的地，
+       点下去会在浏览器里多跳一次，且暗示着「首页还在」这个已经不成立的事实。
+    """
+    # 1. 根路径只剩一次跳转。
+    root = client.get("/")
+    assert root.status_code == 302, f"GET / 不再是 302 跳转，而是 {root.status_code}"
+    assert "/scan-center" in root.headers.get("Location", ""), root.headers.get("Location")
+
+    # 2. 两页互相可达（用管理员客户端取，两个页面都渲染完整骨架）。
+    center = admin_client.get("/scan-center")
+    assert center.status_code == 200
+    center_body = center.get_data(as_text=True)
+    assert 'href="/assets"' in center_body, "扫描中心没有通往资产页的入口"
+
+    assets_body = admin_client.get("/assets").get_data(as_text=True)
+    assert 'href="/scan-center"' in assets_body, "资产页没有回扫描中心的入口"
+
+    # 3. 旧首页的「← 任务」链接（href="/"）不得复活。
+    for name, body in (("扫描中心", center_body), ("资产页", assets_body)):
+        assert 'href="/"' not in body, f"{name}又出现了指回旧首页的链接（href=\"/\"）"
 
 
 # ── 两次任务对比的页面入口（P1 §10 前端露出） ─────────────
@@ -317,10 +377,25 @@ def test_assets_page_diff_scope_select_is_empty_when_anonymous(client):
     assert "（scope_" not in body
 
 
-def test_assets_page_diff_scope_select_lists_scopes_when_authenticated(admin_client, scope_id):
+def test_assets_page_diff_has_no_scope_select(admin_client, scope_id):
+    """对比表单**不再有**「限定授权资产」下拉，但对比本身保留。
+
+    这条替换了原来的 ``test_assets_page_diff_scope_select_lists_scopes_when_authenticated``。
+    口径变化的原因写在 assets.html 里：两次任务对比只看**这两次任务自己的观测**
+    （否则「上次 A B C、这次 A C D」这种最常见的场景反而给不出「新增 D / 消失 B」），
+    与资产的授权范围无关 —— 既然对比结果根本不受范围影响，一个范围下拉就只是
+    一个**看起来能改变结论、实际什么也不改变**的控件。
+
+    同样两头都钉：``#diff-scope`` 消失，而 ``#diff-before`` / ``#diff-after``
+    这两个真正决定对比结果的下拉仍在 —— 删掉的是范围维度，不是对比功能。
+    """
     body = admin_client.get("/assets").get_data(as_text=True)
-    assert 'id="diff-scope"' in body
-    assert scope_id in body
+
+    assert 'id="diff-scope"' not in body, "「限定授权资产」下拉又回来了"
+    assert scope_id not in body, "对比表单又下发了 Scope 实体 ID"
+
+    for control in ('id="diff-before"', 'id="diff-after"'):
+        assert control in body, f"{control} 不见了 —— 对比功能本身不能被删掉"
 
 
 def test_assets_js_wires_diff_items_to_asset_detail(client):
@@ -346,21 +421,67 @@ def test_assets_js_never_renders_a_raw_scope_id_as_text(client):
     于是详情面板上会出现 ``scope_9f3c…``。这是「前端暴露内部模型」的典型形态：
     用户看到的应该是一个**能对上号的授权资产**，而不是一串数据库主键。
 
-    这里只做源码级守卫（项目没有浏览器测试）：翻了就是翻了 —— 一旦有人把
-    它改回原样，红的是这条测试，而不是某个用户的困惑。
+    当时这条守卫的要求是「必须走 ``scopeLabelById()`` 翻译一次」；本轮资产页把
+    授权范围整个筛选维度删掉之后，``scopeLabelById()`` 也一并删除了 —— 于是
+    等价且**更强**的口径是：``assets.js`` 里根本不出现 ``scope`` 这一族标识。
+    原来的「查表翻译」是「允许展示、但不许展示原始 ID」；现在是「连翻译都不需要，
+    因为这个维度不在这张页面上」。任何 ``scope`` 字样重新出现在这个文件里，
+    都意味着有人把范围维度搬了回来 —— 那时这条会红，而不是某个用户先看到
+    ``scope_9f3c…``。
+
+    这里只做**源码级守卫，不是行为级**（项目没有浏览器测试，纯 JS 不能在 pytest
+    里执行）：翻了就是翻了 —— 一旦有人把它改回原样，红的是这条测试。
     """
     script = client.get("/static/assets.js").get_data(as_text=True)
 
-    assert "function scopeLabelById(" in script, "缺少 scope_id → 文案 的翻译函数"
-    # 具名的那一行必须走翻译函数。
-    assert "scopeLabelById(asset.scope_id)" in script
-    # 不允许把 scope_id 直接当文案塞进 DOM（``textContent`` / ``el(...)`` 两种写法）。
-    for forbidden in (
-        '["所属范围", asset.scope_id ||',
-        'el("dd", null, asset.scope_id)',
-        "textContent = asset.scope_id",
-    ):
-        assert forbidden not in script, f"assets.js 又把 scope_id 当文案了: {forbidden}"
+    # 整体禁字：function scopeLabelById / asset.scope_id / "filter-scope" / "diff-scope" /
+    # 以及任何把 scope 当变量名的写法，都落在这个大小写不敏感的匹配里。
+    found = re.findall(r"\S*scope\S*", script, re.I)
+    assert not found, f"assets.js 里又出现了 scope 相关标识：{found[:8]}"
+
+    # 正向：范围下拉没了，任务下拉的**可见文案**改由 jobOptionLabel() 生成 ——
+    # 守卫不能只剩下「什么都不许有」，否则把整个 diff 功能删掉这条也会通过。
+    assert "function jobOptionLabel(" in script, "缺少 job→选项文案 的渲染函数"
+    assert "jobOptionLabel(job)" in script, "jobOptionLabel 定义了却没被 fillJobOptions 用上"
+
+
+def test_assets_diff_options_label_targets_and_tools(client):
+    """任务下拉的可见文案必须是「网址 + 使用的工具」（例如 ``example.com subfinder``）。
+
+    选任务的人认的是「这次扫了什么」，不是内部 ``job_…`` 主键。每个 ``<option>``
+    的 ``value`` 仍然是 ``job.id``（提交时要用），只有可见文案换成目标与工具 ——
+    这正是方案第 4 节原则 2 的正面用法：内部 ID 留在数据里，不上屏。
+
+    ★ **源码级守卫，不是行为级**：``assets.js`` 是纯前端脚本，pytest 里没有 DOM
+    也没有浏览器能跑它（本仓库的浏览器验收另在 ``test_scope_form_acceptance.py``，
+    且需要本机 Chrome）。所以这里钉的是「函数体里到底读没读 ``targets`` / ``tools``」
+    —— 只要这两个字段被读进来，展示形态就不可能是纯 job id。
+
+    两条纪律也在 ``jobOptionLabel`` 的注释里写着，此处按源码锚定：
+    ``targets`` / ``tools`` 都取不到时必须**退回 job id**，绝不产生空白选项。
+    """
+    script = client.get("/static/assets.js").get_data(as_text=True)
+
+    match = re.search(r"function jobOptionLabel\(job\)\s*\{(.*?)\n  \}", script, re.S)
+    assert match, "assets.js 里找不到 jobOptionLabel(job) 的函数体"
+    body = match.group(1)
+
+    assert "job.targets" in body, "选项文案没读任务目标 —— 用户看到的会是一串 job id"
+    assert "job.tools" in body, "选项文案没读任务工具 —— 「这次用了什么」就丢了"
+    # 两个字段要真的参与拼接（`targets.join` / `tools.join`），不是只读不用。
+    assert "targets.join(" in body and "tools.join(" in body, (
+        "读到了 targets / tools 却没拼进文案，展示形态不会是 `example.com subfinder`"
+    )
+    # 取不到目标与工具时退回 job id：空白选项比一串 ID 更难用。
+    # ★ 这里刻意**不**只断言「body 里出现过 job.id」—— 变异测试证明那种写法会漏：
+    # 把 `return fallback` 改成 `return ""`（隐藏掉兜底）之后，`var fallback =
+    # job.id || ""` 这一行还留着，`"job.id" in body` 依然为真、守卫照样绿，
+    # 而线上多出的是空白选项。所以要钉「fallback 确实由 job.id 派生」**且**
+    # 「两条兜底路径都真的 return fallback」（两者都空 / 拼完为空）。
+    assert re.search(r"var fallback\s*=\s*job\.id", body), "fallback 没有从 job.id 派生"
+    assert body.count("return fallback") >= 2, (
+        "取不到 targets / tools 时没有退回 job id（会渲染出空白选项）"
+    )
 
 
 def test_assets_js_keeps_internal_ids_and_db_columns_off_the_screen(client):

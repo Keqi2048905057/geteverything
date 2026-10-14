@@ -6,6 +6,13 @@
 * 目标在执行前必须通过 Scope 校验；
 * ``active_scan=False`` 时只允许本机 fixture 等被动测试，不允许真实外部扫描。
 
+**测试阶段补充（``allow_all`` / :func:`open_scope`）**：上面第一条已被
+``GEF_OPEN_SCAN_MODE``（见 :mod:`core.safety`）取代 —— 开放模式下不再要求
+先建授权范围，:func:`core.policy.require_scope` 会返回一个
+:func:`open_scope` 生成的「未限定范围」对象。该对象仍然沿用本模块的全部
+校验逻辑（目标格式必须合法、命中 ``excluded_domains`` 一律拒绝），只是
+不再有白名单可比 —— 「不要求授权」不等于「不做格式与排除检查」。
+
 设计要点：
 
 * 目标先被规范化（小写、去 scheme / 端口 / 路径、去尾点），再做匹配；
@@ -13,7 +20,7 @@
 * 匹配采用「相等或以 ``.<allowed>`` 结尾」，即 ``example.test`` 覆盖
   ``a.example.test``，但不覆盖 ``notexample.test``；
 * 拒绝 ``*`` 这类全放行通配符，必须显式列出允许的域名或网段；
-* IP 目标只能由 ``allowed_cidrs`` 放行。
+* IP 目标只能由 ``allowed_cidrs`` 放行（``allow_all`` 范围除外）。
 """
 
 from __future__ import annotations
@@ -194,6 +201,10 @@ class Scope:
         allowed_cidrs: 允许的 IP 网段。
         excluded_domains: 强制排除的域名/子域模式。
         active_scan: 是否允许真实外部扫描。
+        allow_all: **开放模式专用** —— 不再按白名单比对，任何格式合法的目标
+            都放行（命中 ``excluded_domains`` 的仍然拒绝）。它由
+            :func:`open_scope` 构造，只用于「测试阶段不要求先建授权范围」这一种
+            场景；用户手工创建的范围恒为 ``False``，因此白名单语义没有变化。
         created_at / created_by: 审计字段。
     """
 
@@ -205,6 +216,7 @@ class Scope:
     active_scan: bool = False
     created_at: str | None = None
     created_by: str | None = None
+    allow_all: bool = False
 
     def __post_init__(self):
         self.allowed_domains = [str(d).strip().lower() for d in self.allowed_domains if str(d).strip()]
@@ -213,7 +225,8 @@ class Scope:
 
         if not self.name or not str(self.name).strip():
             raise InvalidTargetError("Scope 必须提供 name")
-        if not self.allowed_domains and not self.allowed_cidrs:
+        # 开放范围不要求列白名单（它本来就没有白名单），其余范围仍然至少要有一项。
+        if not self.allow_all and not self.allowed_domains and not self.allowed_cidrs:
             raise InvalidTargetError("Scope 至少需要一项 allowed_domains 或 allowed_cidrs")
 
         for pattern in [*self.allowed_domains, *self.excluded_domains]:
@@ -242,9 +255,17 @@ class Scope:
         """
         target = normalize_target(raw)
 
+        # 「排除优先」在两种范围上都成立：开放范围也不是「什么都不查」，
+        # 使用者手工写下的排除列表照样挡住目标。
+        if any(_matches_domain(target.value, p) for p in self.excluded_domains):
+            return target, MATCH_EXCLUDED
+
+        if self.allow_all:
+            # 开放模式：不再比对白名单（它本来就没有）。格式合法性由
+            # ``normalize_target`` 在上面保证，排除列表在上面判过。
+            return target, MATCH_ALLOWED
+
         if target.kind == TARGET_KIND_DOMAIN:
-            if any(_matches_domain(target.value, p) for p in self.excluded_domains):
-                return target, MATCH_EXCLUDED
             if any(_matches_domain(target.value, p) for p in self.allowed_domains):
                 return target, MATCH_ALLOWED
             return target, MATCH_OUT_OF_SCOPE
@@ -315,6 +336,7 @@ class Scope:
             "allowed_cidrs": list(self.allowed_cidrs),
             "excluded_domains": list(self.excluded_domains),
             "active_scan": bool(self.active_scan),
+            "allow_all": bool(self.allow_all),
             "created_at": self.created_at,
             "created_by": self.created_by,
         }
@@ -331,4 +353,42 @@ class Scope:
             active_scan=bool(data.get("active_scan", False)),
             created_at=data.get("created_at"),
             created_by=data.get("created_by"),
+            allow_all=bool(data.get("allow_all", False)),
         )
+
+
+#: 开放模式的「未限定范围」ID。它不是数据库里的行 —— 没有任何 Scope 记录
+#: 会被创建，因此它不出现在 ``GET /api/scopes`` 的结果里，也不会被
+#: ``scope_store.get()`` 读到（那样反而会让「范围列表」凭空多一条假数据）。
+OPEN_SCOPE_ID = "open"
+
+#: 开放模式的展示名（前端把它翻译成「未限定（开放模式）」）。
+OPEN_SCOPE_NAME = "未限定（开放模式）"
+
+
+def open_scope() -> Scope:
+    """构造开放模式的「未限定范围」——**不落库**。
+
+    开放模式（见 :mod:`core.safety` 的 ``GEF_OPEN_SCAN_MODE``）下不再要求
+    使用者先建授权范围，:func:`core.policy.require_scope` 在 ``scope_id``
+    为空时返回本函数的结果，于是任务链路上「读回 Scope 再校验」的每一步
+    （``validate_job_targets`` / ``validate_step_target`` /
+    ``require_active_scan``）都有一条真实的代码路径可走，而不是各处加
+    ``if scope_id is None: 跳过``。
+
+    为什么这样做而不是让 ``scope_id`` 允许为空：
+    ``jobs`` 表的 ``scope_id`` 是 ``NOT NULL``，且 ``validate_step_target``
+    这类执行期复检**必须**有一个 Scope 对象才能复用既有判定逻辑。给一个
+    「什么都放行」的真实对象，比给一个 ``None`` 到处短路更不容易漏判 ——
+    将来新增一处 Scope 校验时，它自动对开放模式也生效。
+
+    ``active_scan=True``：开放模式的目的就是能直接跑真实扫描；真实扫描能否
+    真正发生仍由 ``GEF_ALLOW_REAL_SCAN`` 与执行期复检决定，这里不重复设闸。
+    """
+    return Scope(
+        id=OPEN_SCOPE_ID,
+        name=OPEN_SCOPE_NAME,
+        active_scan=True,
+        allow_all=True,
+        created_by="open-mode",
+    )

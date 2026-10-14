@@ -311,6 +311,7 @@ def test_collect_checks_covers_the_documented_dimensions(check_env):
         "WEB_DEBUG",
         "WEB_HOST",
         "真实扫描总开关",
+        "开放扫描模式",
         "外部工具",
         "旧结果库",
         "本机应用库",

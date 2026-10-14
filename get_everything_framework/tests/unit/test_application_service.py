@@ -66,13 +66,41 @@ def test_service_module_is_the_only_job_creation_orchestration():
         assert forbidden not in source, f"api/jobs.py 又出现了内联编排: {forbidden}"
 
 
-def test_app_page_delegates_to_service():
-    """首页表单也必须走 Service（此前它反向导入 api 层的私有函数）。"""
+def test_app_page_no_longer_carries_any_orchestration():
+    """旧首页退役后，``app.py`` **不承载任何**任务创建编排。
+
+    这条守卫的前身是 ``test_app_page_delegates_to_service``：那时首页还有一个
+    表单，守卫的要求是「它也必须走 Service，不许反向导入 ``api.jobs`` 的私有
+    函数」。旧首页（``web/templates/index.html``）整体退役后，守卫的**形态**
+    变了，但强度是提高的 —— 现在 ``app.py`` 连「抄第二遍」的载体都没有了：
+
+    * 编排的唯一入口是 ``/api/…`` + ``core.application.create_scan_job``；
+    * 页面侧的一切提交都只是转发到 ``/api/…``，视图层不参与判定。
+
+    因此这里既断言**旧编排痕迹全部消失**，也断言**新形态确实存在** ——
+    只写 ``not in`` 是不够的：把整块页面路由删干净同样能让那些断言通过，
+    而那样一来「首页 302 到扫描中心」这条产品行为就悄悄没了。
+    """
     import app as app_module
 
     source = inspect.getsource(app_module)
-    assert "create_scan_job" in source
-    assert "from api.jobs import _resolve_targets" not in source
+
+    # ① 不再有任何创建编排：连函数名都不出现。
+    assert "create_scan_job" not in source
+    # ② 不再反向导入 api 层的私有函数（第二条判定实现的来源）。
+    assert "from api.jobs import" not in source
+    # ③ 旧首页的上下文构造与范围选项加载一并退役。
+    assert "build_page_context" not in source
+    assert "_load_scope_options" not in source
+    # ④ 旧首页直接实例化结果库、拼历史记录的能力也已移除 ——
+    #    页面只调 ``_load_recent_jobs``（它内部走 ``core.jobs``）。
+    assert "ScanResultStore" not in source
+    assert "_to_ui_history" not in source
+
+    # ⑤ 新形态必须在：根路径只做一次 302 跳转，且**没有 POST 分支**。
+    assert "def scan_center()" in source, "扫描中心视图被删掉了"
+    assert '@app.route("/", methods=["GET"])' in source, "根路径不该再有 POST 分支"
+    assert 'url_for("scan_center")' in source
 
 
 def test_service_does_not_implement_scope_matching():
@@ -192,10 +220,38 @@ def test_create_scan_job_rejects_unknown_tool(scope_id):
         create_scan_job(scope_id=scope_id, targets=["a.example.test"], tools=["nuclei"])
 
 
-def test_create_scan_job_requires_scope(app_module):
-    """无 Scope 即拒绝（缺失 → 400，不是 403）。"""
-    with pytest.raises(BadRequestError):
+def test_create_scan_job_requires_scope(app_module, monkeypatch):
+    """Scope 缺失的处理**分两种情况**，两种都必须被钉住。
+
+    新口径（测试阶段）：``scope_id`` 可以留空，但只在
+    ``GEF_OPEN_SCAN_MODE=true`` 时才走 :func:`core.scope.open_scope` 的开放
+    执行上下文；开关没开时照样**明确 400 并点名那个环境变量**，
+    绝不静默放行，也绝不静默降级成 mock。
+
+    这里刻意两条分支都测：只测「关着时报错」会漏掉「开着时确实放行且用的是
+    开放范围」，只测「开着时放行」会漏掉「关着时把闸门放开」——后者才是危险的
+    那个方向（一份没设开关的部署会变成免授权扫描）。
+    """
+    from core.scope import OPEN_SCOPE_ID
+    from core.safety import OPEN_SCAN_ENV
+
+    # ① 开关关闭（默认，源码缺省也是关闭）：无 Scope → 400，且指出该设哪个变量。
+    monkeypatch.delenv(OPEN_SCAN_ENV, raising=False)
+    with pytest.raises(BadRequestError) as excinfo:
         create_scan_job(scope_id=None, targets=["a.example.test"], tools=["subfinder"])
+    assert excinfo.value.details["field"] == "scope_id"
+    assert excinfo.value.details["env"] == OPEN_SCAN_ENV
+    assert OPEN_SCAN_ENV in excinfo.value.message
+
+    # 空白串等同于缺失，不能绕过上面的判定。
+    with pytest.raises(BadRequestError):
+        create_scan_job(scope_id="   ", targets=["a.example.test"], tools=["subfinder"])
+
+    # ② 开关打开：放行，且落到开放范围（不落库的假范围，id 固定为 "open"）。
+    monkeypatch.setenv(OPEN_SCAN_ENV, "true")
+    submission = create_scan_job(scope_id=None, targets=["a.example.test"], tools=["subfinder"])
+    assert submission.scope.id == OPEN_SCOPE_ID
+    assert submission.job["scope_id"] == OPEN_SCOPE_ID
 
 
 def test_create_scan_job_rejects_unknown_scope(app_module):

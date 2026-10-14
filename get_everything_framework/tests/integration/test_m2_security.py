@@ -240,6 +240,11 @@ def test_health_exposes_mode_and_security_status(client):
     data = client.get("/health").get_json()
     assert data["modes"]["default_mode"] == "mock"
     assert data["modes"]["real_scan_enabled"] is False
+    # 开放扫描模式也必须如实暴露：它是「要不要有授权范围」这个问题的唯一答案，
+    # 藏起来会让使用者对着一个 400 猜半天。测试进程里它必须是 false ——
+    # 本机 .env 写成 true 时，`tests/conftest.py` 会把它钉回 false（见那里的注释）。
+    assert data["modes"]["open_scan_enabled"] is False
+    assert data["modes"]["open_scan_env"] == "GEF_OPEN_SCAN_MODE"
     assert data["security"]["secret_key"] in {"configured", "ephemeral"}
     assert data["security"]["debug_enabled"] is False
     assert data["security"]["bind_host_default"] == "127.0.0.1"

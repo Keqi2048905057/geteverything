@@ -1,22 +1,42 @@
-"""公网授权测试模式：端到端集成测试（方案第 9、11 节）。
+"""扫描中心 / 公网入口：端到端集成测试（测试阶段口径）。
 
-对应方案第 11 节的验收链路，以及第 9 节要求的五类测试：
+## 本轮口径（已落盘，不要改回去）
+
+授权业务整体取消，取而代之的是一个**默认关闭**的开关 ``GEF_OPEN_SCAN_MODE``
+（见 ``core/safety.py:open_scan_enabled``）。本文件覆盖的就是这套新口径：
 
 ```text
-Scope    —— 公网域名创建成功
-Policy   —— 未授权域名拒绝（403）
-Job      —— 公网任务进入 Job 队列
-Tool     —— 禁止工具无法提交
-Worker   —— 任务正常执行
+开放模式   —— 开关关闭时缺 scope_id → 400 并点名环境变量；开启时用 open_scope()
+Policy     —— 显式给 scope_id 时白名单**完全照旧**（越界 403、排除优先）
+Check      —— /api/public-jobs/check 是「目标格式预检」，不再有任何授权结论
+Job        —— 任务进入 Job 队列；project_id / project_name / authorized_public 恒为 None
+Tool       —— 只有未接入（nuclei）与未登记的工具不可提交，nmap 等已可自由勾选
+页面       —— 扫描中心是三步（确认目标 / 选择工具 / 创建任务），无授权面板
+Worker     —— 任务正常执行
 ```
 
+被取消的三道闸门（项目存在 → Scope 已关联到项目 → 公网工具白名单）在本文件里
+都有**反向守卫**：谁把它们加回来，对应用例就会红。**没有取消的**：目标格式与
+排除列表校验、SSRF 防护、限速 / 超时 / 并发、审计与结构化日志。
+
+## 不发起任何真实外部扫描
+
 **本文件不发起任何真实外部扫描。** 所有 real 模式用例都把
-``modules.registry.build_runner`` 换成假 runner，验证的是「闸门 + 执行链 + 落库」，
-而不是「工具真的打了公网」。这与 ``AGENTS.md`` 的硬约束一致：
+``modules.registry.build_runner`` 换成假 runner（``fake_real_runner`` 夹具），
+或显式使用 ``mode="mock"``；验证的是「闸门 + 执行链 + 落库」，而不是
+「工具真的打了公网」。这与 ``AGENTS.md`` 的硬约束一致：
 不扫描任何未授权的外部目标，默认只用 mock runner 与 ``127.0.0.1``。
 
 目标域名统一用 RFC 6761 保留域 ``example.test`` 及其子域 —— 即使某个用例
 意外走通了真实执行路径，打出去的也不是任何人的资产。
+
+## 环境开关必须钉死
+
+``tests/conftest.py`` 已经把 ``GEF_ALLOW_REAL_SCAN=false`` 钉死，但**没有**钉
+``GEF_OPEN_SCAN_MODE``：本机 ``.env`` 里那一行会通过 ``config.load_dotenv()``
+生效。因此本文件用一个 autouse 夹具把它钉成 ``false``，
+需要开放模式的用例自己 ``monkeypatch.setenv("GEF_OPEN_SCAN_MODE", "true")`` ——
+否则同一份代码在一台机器绿、在另一台机器红，红的理由还与被测代码无关。
 """
 
 import inspect
@@ -34,6 +54,28 @@ ADMIN_ONLY_ENDPOINTS = [
     ("post", "/api/public-jobs/check"),
     ("get", "/api/scan-center"),
 ]
+
+#: 预检响应的**完整**键集合。多一个键就会红 —— 这就是「不多说一句」的可执行版本。
+CHECK_KEYS = {"raw", "normalized", "kind", "valid", "verdict", "excluded", "message"}
+
+
+@pytest.fixture(autouse=True)
+def _pin_open_scan_mode_off(monkeypatch):
+    """把 ``GEF_OPEN_SCAN_MODE`` 钉成关闭（本机 ``.env`` 里那一行不作数）。
+
+    ``tests/conftest.py`` 钉了 ``GEF_ALLOW_REAL_SCAN`` 与 ``GEF_LOG_FORMAT``，
+    但**没有**钉这个开关；而本机 ``.env`` 里写着 ``GEF_OPEN_SCAN_MODE=true``，
+    它经 ``config.load_dotenv()`` 进入测试进程。不钉的话：
+
+    * 「缺 scope_id 应当 400」会变成「拿到开放范围、然后被 real 开关 403」；
+    * 关闭态的守卫整条失效，且红/绿取决于开发者本机的 ``.env``。
+
+    需要开放模式的用例自己 ``monkeypatch.setenv("GEF_OPEN_SCAN_MODE", "true")``，
+    用例结束自动回滚到这里的 false。
+    """
+    from core.safety import OPEN_SCAN_ENV
+
+    monkeypatch.setenv(OPEN_SCAN_ENV, "false")
 
 
 def _make_scope(admin_client, *, domains=("example.test",), active_scan=True, **overrides):
@@ -57,7 +99,12 @@ def _make_project(admin_client, *, scope_ids=(), **overrides):
     return resp.get_json()["project"]
 
 
-def _public_job(admin_client, project_id, scope_id, **overrides):
+def _public_job(admin_client, project_id=None, scope_id=None, **overrides):
+    """提交 ``POST /api/public-jobs``。
+
+    ``project_id`` / ``scope_id`` 在测试阶段都只是**可选**的兼容字段：
+    项目不再参与任何判定，``scope_id`` 留空即走开放模式（需 ``GEF_OPEN_SCAN_MODE``）。
+    """
     payload = {
         "project_id": project_id,
         "scope_id": scope_id,
@@ -137,7 +184,7 @@ def test_public_domain_scope_can_be_created(admin_client):
     assert body["active_scan"] is True
 
 
-def test_public_url_target_is_normalized_to_its_host(admin_client, monkeypatch):
+def test_public_url_target_is_normalized_to_its_host(admin_client):
     """方案第 6 节：用户会直接粘 URL（带协议或不带协议）—— 都要能走通。
 
     与 `test_public_ip_target_is_checked_against_allowed_cidrs` 同一条思路，
@@ -146,25 +193,28 @@ def test_public_url_target_is_normalized_to_its_host(admin_client, monkeypatch):
     「非法的 CIDR: www.example.test/a/b」—— 把一条完全正常的输入说成网段写错。
 
     这里同时守住「规范化之后落到同一个目标」：带协议、不带协议、带路径三种写法
-    必须指向同一个主机，否则授权判定会随写法而变。
+    必须指向同一个主机，否则**预检给出的结论**会随写法而变。
+
+    测试阶段口径：预检只回答「格式对不对 / 规范化成什么」，因此断言的是
+    ``valid`` / ``normalized`` / ``kind`` / ``verdict``，不再有 ``ready``
+    这个**条目级**字段（``ready`` 是 ``summary`` 里的计数）。
     """
-    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
     scope_id = _make_scope(admin_client, domains=["example.test"], active_scan=True)
-    project = _make_project(admin_client, scope_ids=[scope_id])
 
     for raw in ("www.example.test", "www.example.test/a/b", "https://www.example.test/a/b?q=1"):
         check = admin_client.post(
             "/api/public-jobs/check",
-            json={"targets": [raw], "project_id": project["id"]},
+            json={"targets": [raw]},
         ).get_json()["checks"][0]
         assert check["valid"] is True, (raw, check)
         assert check["normalized"] == "www.example.test", (raw, check)
-        assert check["ready"] is True, (raw, check)
+        assert check["kind"] == "domain", (raw, check)
+        assert check["verdict"] == "allowed", (raw, check)
+        assert check["excluded"] is False, (raw, check)
 
         resp = admin_client.post(
             "/api/public-jobs",
             json={
-                "project_id": project["id"],
                 "scope_id": scope_id,
                 "targets": [raw],
                 "strategy": "asset_discovery",
@@ -246,7 +296,25 @@ def test_get_missing_project_is_404(admin_client):
 # ── 扫描中心元数据 ─────────────────────────────────────────
 
 
-def test_scan_center_metadata_exposes_strategies_and_whitelist(admin_client):
+def test_scan_center_metadata_exposes_strategies_and_selectable_tools(admin_client):
+    """扫描中心元数据：策略模板 + **全部已接入工具都可勾选**。
+
+    本轮口径变更的实证在这里：
+
+    * ``selectable_tools`` 不再是一份「公网白名单」（过去只有 ``httpx`` /
+      ``subfinder``），而是**全部已注册 runner**。因此断言方式是
+      「与 ``modules.registry.get_supported_runners()`` 集合相等」——
+      写死 17 个名字会随注册表变化而失效，那样守卫反而会被人删掉；
+    * ``internet_allowed_tools`` 作为 deprecated 兼容键**与它同值**（旧客户端
+      不会炸，但新代码不得再据此判断「能不能打公网」）；
+    * ``nmap`` 这类高风险工具 ``selectable is True`` —— 这是「工具开放」的实证，
+      同时风险等级仍然如实标注（``high``）；
+    * ``projects`` 键**已移除**（授权项目业务取消）；
+    * ``nuclei`` 未接入 runner，必须如实出现在 ``restricted_tools`` 里。
+    """
+    from core.tool_registry import selectable_tools as registry_selectable_tools
+    from modules.registry import get_supported_runners
+
     body = admin_client.get("/api/scan-center").get_json()
 
     assert [item["key"] for item in body["strategies"]] == [
@@ -257,10 +325,20 @@ def test_scan_center_metadata_exposes_strategies_and_whitelist(admin_client):
     discovery = next(item for item in body["strategies"] if item["key"] == "asset_discovery")
     assert sorted(discovery["tools"]) == ["httpx", "subfinder"]
 
-    assert body["internet_allowed_tools"] == ["httpx", "subfinder"]
+    # 「工具开放」的可执行口径：可勾选名单 = 全部已注册 runner（两处取数一致）。
+    assert sorted(body["selectable_tools"]) == sorted(get_supported_runners())
+    assert body["selectable_tools"] == registry_selectable_tools()
+    # Deprecated 兼容键：同值，不得各写一份。
+    assert body["internet_allowed_tools"] == body["selectable_tools"]
+
     by_name = {item["tool_name"]: item for item in body["tools"]}
-    assert by_name["nmap"]["internet_allowed"] is False
+    assert by_name["nmap"]["selectable"] is True
     assert by_name["nmap"]["risk_level"] == "high"
+    # 未接入的 nuclei 仍然不可选 —— 这是唯一的工具闸门。
+    assert by_name.get("nuclei") is None, "nuclei 不得混进「能跑的工具」清单"
+
+    # 授权项目业务取消，元数据里也不再下发项目清单。
+    assert "projects" not in body
     # nuclei 未接入 runner，但必须如实出现，前端才能解释「为什么不让选」。
     assert [item["tool_name"] for item in body["restricted_tools"]] == ["nuclei"]
 
@@ -292,97 +370,173 @@ def test_check_endpoint_is_read_only(admin_client):
     assert len(audit.list_events(limit=500)) == before_events
 
 
-def test_check_endpoint_reports_ready_for_active_scope(admin_client, monkeypatch):
-    """范围已授权 + 环境开关开 → ready，并给出建议模式 real。
+def test_check_endpoint_reports_ready_for_a_valid_target(admin_client):
+    """合法目标 → ``valid`` / ``verdict=allowed`` / ``ready`` 计数 1 / 建议 real。
 
-    ``conftest.py`` 把 ``GEF_ALLOW_REAL_SCAN`` 钉成 false（测试不能跟随开发机
-    ``.env``），所以这里要显式打开才可能 ready —— 这本身就是第 3 道闸门的实证。
+    **注意这里断言的不再是「有没有授权」**：``ready`` 只是「格式合法且未被排除」
+    的个数。因此这条用例刻意**不建任何 Scope / 项目** —— 预检的结论与授权无关，
+    这正面钉住了「授权业务已取消」。
+
+    ``suggested_mode`` 反过来也一样：全部合法就是 ``real``（可以提交），
+    与 ``GEF_ALLOW_REAL_SCAN`` 无关 —— 预检不承诺任何执行期结论。
     """
-    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
-    scope_id = _make_scope(admin_client, active_scan=True)
-    project = _make_project(admin_client, scope_ids=[scope_id])
-
+    before_jobs = len(jobs_store.list_jobs())
     resp = admin_client.post(
         "/api/public-jobs/check",
-        json={"targets": ["www.example.test"], "project_id": project["id"]},
+        json={"targets": ["www.example.test"]},
     )
+    assert resp.status_code == 200, resp.get_json()
     body = resp.get_json()
     check = body["checks"][0]
 
-    assert check["ready"] is True
-    assert check["blocker"] == ""
+    assert check["valid"] is True
+    assert check["verdict"] == "allowed"
+    assert check["excluded"] is False
     assert check["normalized"] == "www.example.test"
-    assert check["matches"][0]["scope_id"] == scope_id
-    assert check["matches"][0]["project_id"] == project["id"]
-    assert body["summary"] == {"total": 1, "ready": 1, "blocked": 0}
+    assert check["kind"] == "domain"
+    assert body["summary"] == {"total": 1, "valid": 1, "invalid": 0, "excluded": 0, "ready": 1}
     assert body["suggested_mode"] == "real"
-    assert body["project_id"] == project["id"]
+    # Deprecated 回显位恒为 None：授权业务已取消，这里没有「命中哪份授权」可说。
+    assert body["scope_id"] is None
+    assert body["project_id"] is None
+    # 预检不落任务。
+    assert len(jobs_store.list_jobs()) == before_jobs
 
 
-def test_check_endpoint_separates_the_three_classic_blockers(admin_client, monkeypatch):
-    """三种「以前都叫 403」的情况，现在必须能分辨出来。
+def test_check_endpoint_verdict_is_independent_of_any_scope_or_project(admin_client):
+    """**有没有建过 Scope / 项目，预检结论完全一样** —— 正面钉住「不再看授权」。
 
-    这是 Phase 2 的核心价值：用户不再需要读错误消息反推缺了哪一道闸门。
+    这是本轮取消授权业务在预检接口上的可执行版本：把同一个目标在三种状态下各检
+    一次（什么都没有 → 有一个覆盖它的范围 → 有一个不覆盖它的范围），
+    三次结论必须逐字段相同。若谁把白名单判定加回预检，第三次立刻会红。
     """
-    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
+    target = {"targets": ["www.example.test"]}
 
-    # ① 有范围，但不覆盖目标 → not_authorized
-    other = _make_scope(admin_client, domains=["other.example.test"], active_scan=True)
-    _make_project(admin_client, scope_ids=[other])
-    body = admin_client.post(
-        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
-    ).get_json()
-    assert body["checks"][0]["blocker"] == "not_authorized"
-    assert len(body["checks"][0]["matches"]) == 0  # 无关范围不下发
+    def _check():
+        return admin_client.post("/api/public-jobs/check", json=target).get_json()["checks"][0]
 
-    # ② 覆盖但没开 active_scan → scope_inactive
-    inactive = _make_scope(admin_client, domains=["www.example.test"], active_scan=False)
-    _make_project(admin_client, scope_ids=[inactive])
-    body = admin_client.post(
-        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
-    ).get_json()
-    assert body["checks"][0]["blocker"] == "scope_inactive"
-    assert body["checks"][0]["real_scan_enabled"] is True
+    bare = _check()
 
-    # ③ 覆盖且已授权，但环境开关没开 → env_disabled
-    #    刻意换一个域名：前两步留下的范围仍然覆盖 www.example.test，
-    #    而其中一个没开 active_scan，会先命中 scope_inactive（那是正确结论）。
-    #    要单独验证 env_disabled，就必须让目标只被「已开 active_scan」的范围覆盖。
-    active = _make_scope(admin_client, domains=["env.example.test"], active_scan=True)
-    _make_project(admin_client, scope_ids=[active])
-    monkeypatch.delenv("GEF_ALLOW_REAL_SCAN", raising=False)
-    body = admin_client.post(
-        "/api/public-jobs/check", json={"targets": ["env.example.test"]}
-    ).get_json()
-    assert body["checks"][0]["blocker"] == "env_disabled"
-    assert body["checks"][0]["real_scan_enabled"] is False
-    # 范围本身是「已授权」的 —— 缺的只是环境开关，这一点必须能区分出来。
-    assert body["checks"][0]["matches"][0]["status"] == "ready"
+    covering = _make_scope(admin_client, domains=["example.test"], active_scan=True)
+    _make_project(admin_client, scope_ids=[covering])
+    with_covering = _check()
+
+    unrelated = _make_scope(admin_client, domains=["other.example.test"], active_scan=True)
+    _make_project(admin_client, scope_ids=[unrelated])
+    with_unrelated = _check()
+
+    def _verdict_shape(check):
+        # ``message`` 允许随「在不在某个已建范围内」变化（那是如实提示），
+        # 但**判定**必须一模一样。
+        return {key: check[key] for key in ("normalized", "kind", "valid", "verdict", "excluded")}
+
+    assert _verdict_shape(bare) == _verdict_shape(with_covering) == _verdict_shape(with_unrelated)
+    assert bare["valid"] is True and bare["verdict"] == "allowed"
 
 
-def test_check_endpoint_reports_no_scope_when_nothing_built(admin_client):
-    body = admin_client.post(
-        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
-    ).get_json()
-    assert body["checks"][0]["blocker"] == "no_scope"
-    assert body["checks"][0]["candidates"] == 0
-    assert body["suggested_mode"] == "mock"
+def test_check_endpoint_marks_an_invalid_target_without_blocking_the_batch(admin_client):
+    """坏目标只影响它自己 —— 批量预检不该被第一个格式错误中断。
 
-
-def test_check_endpoint_tolerates_bad_target_among_good_ones(admin_client, monkeypatch):
-    """坏目标只影响它自己 —— 批量试算不该被第一个格式错误中断。"""
-    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
-    scope_id = _make_scope(admin_client, active_scan=True)
-    _make_project(admin_client, scope_ids=[scope_id])
-
+    同时钉住非法目标的**字段形状**：``normalized`` / ``kind`` 为 ``None``、
+    ``verdict="invalid"``，且 ``summary.invalid`` 如实计数。
+    """
     body = admin_client.post(
         "/api/public-jobs/check",
         json={"targets": ["www.example.test", "not a host"]},
     ).get_json()
 
     assert [item["valid"] for item in body["checks"]] == [True, False]
-    assert body["checks"][1]["blocker"] == "invalid_target"
-    assert body["summary"] == {"total": 2, "ready": 1, "blocked": 1}
+    bad = body["checks"][1]
+    assert bad["verdict"] == "invalid"
+    assert bad["normalized"] is None
+    assert bad["kind"] is None
+    assert bad["excluded"] is False
+    assert bad["message"], "非法目标必须给出说明，而不是一个空字段"
+    assert body["summary"] == {"total": 2, "valid": 1, "invalid": 1, "excluded": 0, "ready": 1}
+    # 有非法目标时不建议 real。
+    assert body["suggested_mode"] == "mock"
+
+
+def test_check_endpoint_marks_an_invalid_target_as_mock_only(admin_client):
+    """整批都非法 → ``ready=0`` / ``suggested_mode=mock``。"""
+    body = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["not a host"]}
+    ).get_json()
+    assert body["checks"][0]["valid"] is False
+    assert body["summary"]["ready"] == 0
+    assert body["suggested_mode"] == "mock"
+
+
+def test_check_endpoint_excludes_only_when_the_scope_id_is_explicit(admin_client):
+    """命中排除列表 → ``excluded`` / ``verdict=excluded``（排除优先仍然生效）。
+
+    排除列表来自**使用者自己显式传进来的** ``scope_id``：预检不再做白名单判定，
+    但「排除优先」这条安全约束（``core/scope.py`` 的硬规则）一条没少。
+    这里刻意在同一批里既有被排除的、也有正常的，验证计数与判定各自独立。
+    """
+    scope_id = _make_scope(
+        admin_client,
+        domains=["example.test"],
+        excluded_domains=["secret.example.test"],
+    )
+
+    body = admin_client.post(
+        "/api/public-jobs/check",
+        json={
+            "targets": ["secret.example.test", "www.example.test"],
+            "scope_id": scope_id,
+        },
+    ).get_json()
+
+    excluded, allowed = body["checks"]
+    assert excluded["excluded"] is True
+    assert excluded["verdict"] == "excluded"
+    assert excluded["valid"] is True, "格式是合法的 —— 它只是被排除列表挡住"
+    assert "排除" in excluded["message"]
+
+    assert allowed["excluded"] is False
+    assert allowed["verdict"] == "allowed"
+
+    assert body["summary"] == {"total": 2, "valid": 2, "invalid": 0, "excluded": 1, "ready": 1}
+    # 有被排除的目标 → ready < total → 建议 mock（预检不承诺它会被执行）。
+    assert body["suggested_mode"] == "mock"
+
+
+def test_check_endpoint_exclusion_is_not_used_as_a_whitelist(admin_client):
+    """**不在**某个已建范围的白名单内，不构成「不能提交」。
+
+    这是「取消的是授权，不是排除列表」的另一半：范围里只写 ``example.test``，
+    而目标写成 ``outside.test`` —— 预检必须仍然 ``valid`` / ``allowed``，
+    只是消息里如实提示它不在已建范围内。谁把白名单判定加回来，这条会红。
+    """
+    scope_id = _make_scope(admin_client, domains=["example.test"])
+
+    check = admin_client.post(
+        "/api/public-jobs/check",
+        json={"targets": ["outside.test"], "scope_id": scope_id},
+    ).get_json()["checks"][0]
+
+    assert check["valid"] is True
+    assert check["verdict"] == "allowed"
+    assert check["excluded"] is False
+    assert "不影响提交" in check["message"]
+
+
+def test_check_endpoint_reports_no_scope_when_nothing_built(admin_client):
+    """一个 Scope 都没建过时，预检照样给出完整结论（不再有 ``blocker=no_scope``）。
+
+    这条替换原来的「``blocker == 'no_scope'``」：授权业务取消后，
+    「没建过范围」不再是任何一种阻塞，预检的结论与建过范围时完全一致。
+    """
+    body = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
+    ).get_json()
+    check = body["checks"][0]
+    assert check["valid"] is True
+    assert check["verdict"] == "allowed"
+    assert "blocker" not in check
+    assert "candidates" not in check
+    assert body["suggested_mode"] == "real"
 
 
 def test_check_endpoint_accepts_comma_separated_string(admin_client):
@@ -409,42 +563,95 @@ def test_check_endpoint_requires_json_object(admin_client):
 
 
 def test_check_endpoint_does_not_promise_more_than_it_verifies(admin_client):
-    """试算必须**如实声明**它没做 DNS 解析，不能假装已经全查过。"""
+    """预检必须**只说自己真查过的事**，不能给任何授权结论。
+
+    历史口径下这条钉的是 ``check["resolved_check_deferred"] is True`` ——
+    那时预检是「授权试算」，需要声明「DNS 解析这道执行期校验还没做」。
+
+    授权业务取消后预检只剩下格式判定，``resolved_check_deferred`` 随之消失，
+    但**这条守卫要守的东西更强了**：现在直接钉死 ``checks`` 项的**键集合**。
+    只要有人把授权结论（``eligible_scope_ids`` / ``blocker`` / ``matches`` /
+    ``status`` / ``active_scan`` …）加回来，键集合立刻不相等，用例变红。
+
+    这比断言某个布尔字段更难绕过：加字段、改字段名都会被抓到。
+    """
     scope_id = _make_scope(admin_client)
     _make_project(admin_client, scope_ids=[scope_id])
 
     check = admin_client.post(
         "/api/public-jobs/check", json={"targets": ["www.example.test"]}
     ).get_json()["checks"][0]
-    assert check["resolved_check_deferred"] is True
+    assert set(check) == {"raw", "normalized", "kind", "valid", "verdict", "excluded", "message"}
+    # 逐个再点名一次历史上存在过的授权结论键，防的是「换个名字加回来」。
+    for gone in ("eligible_scope_ids", "blocker", "matches", "candidates", "status", "active_scan"):
+        assert gone not in check, f"预检又返回了授权结论字段: {gone}"
 
 
 # ── Policy / Tool：闸门（方案第 9 节「未授权域名拒绝」「禁止工具无法提交」） ──
 
 
-def test_unattached_scope_is_rejected_before_job_creation(admin_client):
-    """Scope 存在但没挂到这个项目下 → 400，且任务一条都不能落库。"""
-    project = _make_project(admin_client)
-    scope_id = _make_scope(admin_client)  # 刻意不关联
+def test_unattached_scope_is_accepted_after_job_creation(admin_client):
+    """**本轮取消的那道闸门**：Scope 不再需要「挂到某个授权项目下」。
 
-    resp = _public_job(admin_client, project["id"], scope_id)
-    assert resp.status_code == 400
-    assert resp.get_json()["details"]["field"] == "scope_id"
-    assert jobs_store.list_jobs() == []
+    历史口径是「Scope 存在，但没关联到这个项目下 → 400」，理由是「授权证据
+    必须能追溯到某个项目」。测试阶段项目业务整体取消，这条要求随之消失：
+    一个**不挂任何项目**的 Scope，只要覆盖目标，就足以创建任务（202）。
+
+    这条是反向守卫 —— 谁把「必须挂项目」加回来，它就会红。
+    """
+    scope_id = _make_scope(admin_client)  # 刻意不关联任何项目
+    assert projects.find_by_scope(scope_id) is None, "前置条件：这个范围确实没挂项目"
+
+    resp = admin_client.post(
+        "/api/public-jobs",
+        json={"scope_id": scope_id, "targets": ["www.example.test"], "mode": "mock"},
+    )
+    assert resp.status_code == 202, resp.get_json()
+    body = resp.get_json()
+    assert body["scope_id"] == scope_id, "显式给的 scope 仍然被如实采用"
+    assert body["project_id"] is None, "项目已不参与这条链路"
+    assert len(jobs_store.list_jobs()) == 1
 
 
-def test_missing_project_is_404_and_creates_no_job(admin_client):
+def test_missing_project_id_is_ignored_and_creates_the_job(admin_client):
+    """不存在的 ``project_id`` **不再 404** —— 项目已不参与这条链路。
+
+    历史口径是「项目不存在 → 404，且一条任务都不落库」。现在 ``project_id``
+    只是被接受的兼容字段：既不校验，也不落库。这条用例同时证明两件事 ——
+    它**不影响创建**（202），且任务**确实落库**（不是被静默丢弃）。
+    """
     scope_id = _make_scope(admin_client)
-    resp = _public_job(admin_client, "proj_missing", scope_id)
-    assert resp.status_code == 404
-    assert jobs_store.list_jobs() == []
+
+    resp = _public_job(admin_client, "proj_missing", scope_id, mode="mock")
+    assert resp.status_code == 202, resp.get_json()
+    body = resp.get_json()
+    assert body["project_id"] is None
+    assert body["project_name"] is None
+    assert body["authorized_public"] is None
+
+    jobs = jobs_store.list_jobs()
+    assert len(jobs) == 1, "任务必须真的落库，而不是被静默忽略"
+    assert jobs_store.project_id_of_job(body["job_id"]) is None
 
 
 def test_missing_scope_id_is_400(admin_client):
+    """缺 ``scope_id`` 且开放模式未开 → 400，且**明确点名**要设哪个环境变量。
+
+    （开放模式本身的用例见本节末尾的「开放扫描模式」一节。）
+    """
+    from core.safety import OPEN_SCAN_ENV
+
     project = _make_project(admin_client)
-    resp = admin_client.post("/api/public-jobs", json={"project_id": project["id"], "targets": ["www.example.test"]})
+    resp = admin_client.post(
+        "/api/public-jobs", json={"project_id": project["id"], "targets": ["www.example.test"]}
+    )
     assert resp.status_code == 400
-    assert resp.get_json()["details"]["field"] == "scope_id"
+    body = resp.get_json()
+    assert body["error_code"] == "bad_request"
+    assert body["details"]["field"] == "scope_id"
+    assert body["details"]["env"] == OPEN_SCAN_ENV
+    assert OPEN_SCAN_ENV in body["error_message"]
+    assert jobs_store.list_jobs() == []
 
 
 def test_out_of_scope_target_is_403(admin_client):
@@ -458,19 +665,69 @@ def test_out_of_scope_target_is_403(admin_client):
     assert jobs_store.list_jobs() == []
 
 
-@pytest.mark.parametrize("blocked", ["nmap", "dirsearch", "naabu", "feroxbuster", "katana"])
-def test_blocked_tool_cannot_be_submitted(admin_client, blocked):
-    """方案第 9 节：禁止工具无法提交 —— 且必须在**创建任务之前**被拒。"""
-    scope_id = _make_scope(admin_client)
-    project = _make_project(admin_client, scope_ids=[scope_id])
+def test_unwired_tool_cannot_be_submitted(admin_client):
+    """工具闸门的**新语义**：只拒「未接入 runner」的工具（nuclei）。
 
-    resp = _public_job(admin_client, project["id"], scope_id, strategy="custom", tools=[blocked])
-    assert resp.status_code == 400
+    历史口径拒的是 ``nmap`` / ``dirsearch`` 这类「不允许打公网」的工具；
+    测试阶段只剩一种拒绝理由 —— 未接入。``nuclei`` 登记在案但本阶段没有 runner，
+    因此即使请求里显式指名，也必须在**创建任务之前**被 400 拒掉。
+
+    守卫强度与原来一致：错误字段是 ``tools``、被点名的工具在
+    ``unavailable_tools`` 里、且**库里一条任务都不能多**。
+    （``blocked_tools`` 是 deprecated 兼容键，值应与 ``unavailable_tools`` 相同。）
+
+    显式 ``mode="mock"``：本用例验的是工具闸门，不涉及真实执行链。
+    """
+    scope_id = _make_scope(admin_client)
+
+    resp = _public_job(
+        admin_client,
+        None,
+        scope_id,
+        strategy="custom",
+        tools=["nuclei"],
+        mode="mock",
+    )
+    assert resp.status_code == 400, resp.get_json()
     body = resp.get_json()
     assert body["error_code"] == "bad_request"
-    names = [item["tool_name"] for item in body["details"]["blocked_tools"]]
-    assert blocked in names
+    assert body["details"]["field"] == "tools"
+    names = [item["tool_name"] for item in body["details"]["unavailable_tools"]]
+    assert "nuclei" in names
+    assert body["details"]["blocked_tools"] == body["details"]["unavailable_tools"]
+    assert "nuclei" not in body["details"]["selectable_tools"]
     assert jobs_store.list_jobs() == []
+
+
+@pytest.mark.parametrize("tool", ["nmap", "dirsearch", "naabu", "feroxbuster", "katana"])
+def test_previously_blocked_tools_are_now_selectable(admin_client, tool):
+    """这五个工具**现在都可以提交** —— 这是「工具开放」的实证。
+
+    历史口径把它们列为「禁止提交」（``test_blocked_tool_cannot_be_submitted``）。
+    测试阶段取消公网白名单后，它们与其它已接入工具一样可被勾选：目标合法性由
+    使用者自己负责。守卫强度靠**另一半**保证：它们仍在
+    ``selectable_tools()`` 里，而 ``nuclei`` 不在 —— 谁把白名单加回来，
+    这条会红，闸门也仍然只拒未接入的工具。
+
+    显式 ``mode="mock"``：本用例只验「能被接受」，绝不真的跑外部命令。
+    """
+    from core.tool_registry import selectable_tools
+
+    assert tool in selectable_tools(), f"{tool} 应当可勾选"
+    assert "nuclei" not in selectable_tools()
+
+    scope_id = _make_scope(admin_client)
+    resp = _public_job(
+        admin_client,
+        None,
+        scope_id,
+        strategy="custom",
+        tools=[tool],
+        mode="mock",
+    )
+    assert resp.status_code == 202, resp.get_json()
+    job = jobs_store.get_job(resp.get_json()["job_id"])
+    assert job["tools"] == [tool]
 
 
 def test_template_cannot_be_smuggled_with_extra_tool(admin_client):
@@ -574,18 +831,30 @@ def test_real_mode_with_inactive_scope_is_403(admin_client, monkeypatch):
 
 
 def test_public_job_enters_queue_with_audit_record(admin_client, fake_real_runner):
-    scope_id = _make_scope(admin_client)
-    project = _make_project(admin_client, scope_ids=[scope_id])
+    """任务进入队列 + 审计记录；响应里**不再有任何授权结论**。
 
-    resp = _public_job(admin_client, project["id"], scope_id, targets=["www.example.test"])
+    响应形状是历史 ``POST /api/jobs`` 之上追加策略与执行上下文：三个
+    deprecated 键（``project_id`` / ``project_name`` / ``authorized_public``）
+    **恒为 None** 并在 ``deprecated_fields`` 里自报家门。授权业务取消后，
+    「这条任务被授权过」这个事实已经不存在，保留键名只为旧客户端不炸。
+
+    其余（``status`` / ``mode`` / ``strategy`` / ``total_steps`` / 落库 / 审计）
+    逐条保留 —— 闸门取消了，「任务确实被创建且可追溯」这件事一点没放松。
+    """
+    scope_id = _make_scope(admin_client)
+
+    resp = _public_job(admin_client, scope_id=scope_id, targets=["www.example.test"])
     assert resp.status_code == 202, resp.get_json()
     body = resp.get_json()
 
     assert body["status"] == "queued"
     assert body["mode"] == "real"
     assert body["strategy"] == "asset_discovery"
-    assert body["project_id"] == project["id"]
-    assert body["authorized_public"] is True
+    # Deprecated 授权字段：恒为 None，并如实自报。
+    assert body["project_id"] is None
+    assert body["project_name"] is None
+    assert body["authorized_public"] is None
+    assert body["deprecated_fields"] == ["project_id", "project_name", "authorized_public"]
     # 资产发现模板 = subfinder + httpx，一个目标 → 2 步
     assert body["total_steps"] == 2
 
@@ -594,6 +863,7 @@ def test_public_job_enters_queue_with_audit_record(admin_client, fake_real_runne
     assert job["status"] == "queued"
     assert job["mode"] == "real"
     assert sorted(job["tools"]) == ["httpx", "subfinder"]
+    assert jobs_store.project_id_of_job(body["job_id"]) is None
 
     # 方案第 11 节：不得创建无审计任务。
     events = [event for event in audit.list_events(limit=50) if event["event_type"] == audit.EVENT_JOB_CREATED]
@@ -679,30 +949,96 @@ def test_public_scan_api_never_calls_runners_directly():
         assert forbidden not in source, f"api/public_scan.py 出现了直达 Runner 的调用: {forbidden}"
 
 
+def _module_code_source(module) -> str:
+    """取模块源码，**去掉模块 docstring**。
+
+    ★ 为什么需要这一步：``api/public_scan.py`` 的模块 docstring 里**刻意**
+    写着「Policy 层仍然保留 ``validate_job_targets`` / ``validate_step_target``」
+    这句口径说明 —— 它是给人读的，不是代码。若直接对 ``inspect.getsource()``
+    做字面命中，注释会被当成「又加了一道闸门」，守卫随即变成锚在写法上的假警报。
+
+    做法与 ``test_api_auth_contract.py`` 里那条「先摘 docstring 再断言」一致：
+    用 AST 定位模块级 docstring 节点的源码片段并删掉，只对**代码**做断言。
+    """
+    import ast
+
+    source = inspect.getsource(module)
+    tree = ast.parse(source)
+    docstring_node = tree.body[0] if tree.body else None
+    if (
+        isinstance(docstring_node, ast.Expr)
+        and isinstance(docstring_node.value, ast.Constant)
+        and isinstance(docstring_node.value.value, str)
+    ):
+        segment = ast.get_source_segment(source, docstring_node)
+        if segment:
+            source = source.replace(segment, "", 1)
+    return source
+
+
 def test_public_job_orchestration_is_in_application_service():
-    """公网编排必须落在 ``core/application``，视图函数不得内联闸门。"""
+    """公网编排必须落在 ``core/application``，视图函数不得内联闸门。
+
+    本轮口径：视图调用的是**新名字** ``create_open_public_job``
+    （``create_authorized_public_job`` 已降级为同函数对象的 deprecated 别名，
+    这条由 ``test_legacy_alias_still_points_to_the_new_entry`` 单独钉住）。
+    """
     from api import public_scan
 
     source = inspect.getsource(public_scan)
-    assert "create_authorized_public_job" in source
-    # 视图层不得自己比较白名单或直接落库。
+    assert "create_open_public_job" in source
+    # 视图层不得自己比较工具名单或直接落库。
+    # ★ 断言的范围是**去掉 docstring 之后**的代码：模块 docstring 里点名
+    #   ``validate_job_targets`` 是在解释「Policy 层还剩什么」，不是调用。
+    code = _module_code_source(public_scan)
     for forbidden in (
+        "assert_tools_selectable",
         "assert_tools_internet_allowed",
         "validate_job_targets",
         "create_job_with_status",
         "resolve_mode",
     ):
-        assert forbidden not in source, f"api/public_scan.py 又出现了内联编排: {forbidden}"
+        assert forbidden not in code, f"api/public_scan.py 又出现了内联编排: {forbidden}"
+
+
+def test_public_scan_api_does_not_reintroduce_authorization_gates():
+    """视图层不得把三道授权闸门加回来（本轮取消它们，必须有反向守卫）。
+
+    黑名单刻意是**具体调用**而不是裸词：``project_id`` 作为兼容参数名仍会出现
+    （``payload.get("project_id")`` 后面接 ``create_open_public_job``），
+    用裸 ``project`` 会把这条合法写法也判红，守卫随即失去意义。
+
+    被禁的是「查项目」「验工具白名单」「内联目标校验 / 落库」这几件具体的事：
+    它们必须留在 ``core.application`` / ``core.policy`` 里，只发生一次。
+
+    ★ 同样只检查**去掉 docstring 之后**的代码，理由见 :func:`_module_code_source`。
+    """
+    from api import public_scan
+
+    code = _module_code_source(public_scan)
+    for forbidden in (
+        "projects.require",
+        "project_store",
+        "require_project",
+        "assert_tools_internet_allowed",
+        "validate_job_targets",
+        "create_job_with_status",
+        "resolve_mode",
+    ):
+        assert forbidden not in code, f"api/public_scan.py 又出现了授权闸门: {forbidden}"
 
 
 def test_service_delegates_to_single_job_entry():
     """公网入口必须**复用** ``create_scan_job``，而不是另写一条 Policy 判定。"""
     from core import application
 
-    source = inspect.getsource(application.create_authorized_public_job)
+    source = inspect.getsource(application.create_open_public_job)
     assert "create_scan_job(" in source
     assert "validate_job_targets" not in source
     assert "create_job_with_status" not in source
+    # 三道授权闸门（项目 / Scope 关联 / 公网白名单）都不该回到这一层。
+    for forbidden in ("projects.require", "require_project", "assert_tools_internet_allowed"):
+        assert forbidden not in source, f"create_open_public_job 又把授权闸门加回来了: {forbidden}"
 
 
 # ── 旧链路不受影响 ─────────────────────────────────────────
@@ -741,8 +1077,9 @@ def test_scan_center_page_renders_for_anonymous(client):
     assert "401 unauthenticated" in body
     # 但**骨架**不下发：匿名看到的是「为什么看不到」，不是一个空表单。
     assert 'id="strategy-list"' not in body
-    assert 'id="scope-form"' not in body
-    assert "步骤 1 · 输入目标" not in body
+    assert 'id="tool-list"' not in body
+    assert 'id="check-form"' not in body
+    assert "步骤 1 · 确认目标" not in body
 
 
 def test_anonymous_scan_center_does_not_leak_backend_jargon(client, admin_client):
@@ -750,7 +1087,7 @@ def test_anonymous_scan_center_does_not_leak_backend_jargon(client, admin_client
 
     ``app.py`` 的 ``scan_center()`` 视图**不强制登录**（否则匿名连导航都点不进来），
     但骨架整段是无条件渲染的 —— 实测匿名响应 8833 字符，管理员 8891 字符，
-    **只差 58 字符**：四步表单、项目 / 任务 / 详情三个面板、以及它们自带的后台术语
+    **只差 58 字符**：三步表单、任务 / 详情两个面板、以及它们自带的后台术语
     全部白送给匿名访客。这与首页的口径不一致（首页 ``build_page_context()``
     对匿名不下发任何数据），也与方案第 4 节「前端不显示数据库字段 / 内部模型」相抵触。
 
@@ -759,8 +1096,15 @@ def test_anonymous_scan_center_does_not_leak_backend_jargon(client, admin_client
     管那一条）。术语同样是内部模型 —— 匿名访客没有提交动作，不需要知道
     ``mock`` / ``worker`` / ``allowed_cidrs`` 是什么。
 
+    本轮新增 ``gef_open_scan_mode``：页面上的「开放扫描模式未开启」告警里带着
+    这个词，它同样是后台术语（一个环境变量名），不该下发给匿名访客。
+
     刻意**不**列入黑名单的两个词：``扫描中心``（顶部导航与标题，匿名点进来必须看得到）
     与 ``401 unauthenticated``（上面那条提示故意写出来的「为什么看不到」）。
+
+    骨架元素 id 已按**新**三步骨架更新：``scope-form`` / ``job-project`` /
+    ``job-scope`` 这三个元素整体删除，因此不再列入黑名单（留着一个不存在的 id
+    只会让人以为它还在某个分支里）。
     """
     body = client.get("/scan-center").get_data(as_text=True).lower()
 
@@ -770,6 +1114,7 @@ def test_anonymous_scan_center_does_not_leak_backend_jargon(client, admin_client
         "worker",
         "python -m",
         "gef_allow_real_scan",
+        "gef_open_scan_mode",
         "scope_violation",
         "allowed_domains",
         "allowed_cidrs",
@@ -780,13 +1125,10 @@ def test_anonymous_scan_center_does_not_leak_backend_jargon(client, admin_client
     ):
         assert term not in body, f"匿名扫描中心仍下发后台术语: {term!r}"
 
-    # 四个步骤的骨架元素一个都不能出现（术语未必带得出，元素 id 一定带得出）。
+    # 三步骨架的元素一个都不能出现（术语未必带得出，元素 id 一定带得出）。
     for element_id in (
         "check-form",
         "job-target",
-        "scope-form",
-        "job-project",
-        "job-scope",
         "strategy-list",
         "tool-list",
         "job-operator",
@@ -799,17 +1141,19 @@ def test_anonymous_scan_center_does_not_leak_backend_jargon(client, admin_client
 
     # 反向守卫：登录后骨架与术语照常下发 —— 这条修的是「谁看得见」，不是「还显示不显示」。
     admin_body = admin_client.get("/scan-center").get_data(as_text=True)
-    assert "步骤 1 · 输入目标" in admin_body
-    assert "真实扫描总开关未开启" in admin_body or "授权公网测试模式" in admin_body
+    assert "步骤 1 · 确认目标" in admin_body
+    # 两条告警之一必然在（本机 .env 与测试环境至少有一个开关是关的）。
+    assert "GEF_OPEN_SCAN_MODE" in admin_body or "GEF_ALLOW_REAL_SCAN" in admin_body
     assert "python -m jobs.worker" in admin_body
 
 
-def test_scan_center_scope_form_opts_out_of_native_validation():
-    """``#scope-form`` 必须带 ``novalidate`` —— 否则**第一个授权范围建不出来**。
+def test_scan_center_page_has_no_scope_authorization_forms():
+    """``#scope-form`` / ``#job-project`` / ``#job-scope`` 不得复活。
 
-    这个表单同时装着两个 ``required`` 下拉（``#job-project`` / ``#job-scope``）和
-    「添加授权范围」的 ``type=submit`` 按钮。原生约束校验跑在 ``submit`` 事件**之前**：
-    全新用户（两下拉都只有占位项）点按钮时 ``valueMissing=true``，浏览器直接拦下，
+    历史上这三个元素是「授权项目与范围」面板的核心：``#scope-form`` 同时装着两个
+    ``required`` 下拉（``#job-project`` / ``#job-scope``）和「添加授权范围」的
+    ``type=submit`` 按钮。原生约束校验跑在 ``submit`` 事件**之前**：全新用户
+    （两下拉都只有占位项）点按钮时 ``valueMissing=true``，浏览器直接拦下，
     ``scan_center.js:bindScopeForm`` 的 submit 回调**一次都不执行**。
 
     实测（headless Chrome，三状态，从真实渲染结果里原样截取该表单）：
@@ -824,30 +1168,33 @@ def test_scan_center_scope_form_opts_out_of_native_validation():
 
     状态 1 正是「全新用户第一次进来」——也就是最需要这个按钮的那一次。
 
-    ``novalidate`` 只关掉**浏览器原生**校验，不动服务端：``bindScopeForm`` 自己
-    给出「还没有授权项目…」/「至少填一个授权域名或授权网段」，服务端
-    ``POST /api/scopes`` 的 ``*`` 全放行拒绝与非法 CIDR 拒绝一条都没少
-    （``test_m2_security.py`` 守着）。
+    当时用 ``novalidate`` 解决；**本轮的处置更彻底**：授权项目与范围业务整体取消，
+    整个面板连同这三个元素一起删掉了，于是这个坑随之消失。守卫因此改成
+    **断言表单不复活** —— 谁把面板加回来，就同时把那个坑加了回来，
+    而 ``novalidate`` 未必会跟着回来。
 
-    守卫写成**正则**而不是 ``'novalidate' in source``：注释里就写着这个词，
-    纯字面命中会让「把属性删掉但留着注释」也算通过。
+    顺带保留一小段旧口径的防线：服务端 ``POST /api/scopes`` 的 ``*`` 全放行拒绝
+    与非法 CIDR 拒绝一条都没少（``test_m2_security.py`` 守着），
+    删掉的是**界面**，不是范围本身的校验。
     """
-    import re
     from pathlib import Path
 
     template = (
         Path(__file__).resolve().parents[2] / "web" / "templates" / "scan_center.html"
     ).read_text(encoding="utf-8")
 
-    match = re.search(r'<form[^>]*id="scope-form"[^>]*>', template)
-    assert match, "模板里找不到 #scope-form"
-    tag = match.group(0)
-    assert "novalidate" in tag, (
-        "#scope-form 又被加上原生约束校验了 —— 全新用户点「添加授权范围」不会有任何反应。"
-        f"实测标签: {tag!r}"
+    for element_id in ("scope-form", "job-project", "job-scope", "project-form", "project-list"):
+        assert f'id="{element_id}"' not in template, (
+            f"#${element_id} 复活了 —— 授权项目与范围业务已取消，"
+            "它同时会把「首个范围建不出来」那个原生校验坑带回来。"
+        )
+    # 与这两个元素配套的 JS 绑定同样不该存在（绑定一个不存在的元素是死代码，
+    # 而它一旦被误当作「还在生效」就会掩盖真正的缺口）。
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
     )
-    # 两个 required 下拉仍在（它们本身不是缺陷，缺的是 novalidate）。
-    assert 'id="job-project"' in template and 'id="job-scope"' in template
+    for removed in ("bindScopeForm", "bindProjectForm", "bindProjectSelectSync", "syncJobScopes"):
+        assert removed not in source, f"scan_center.js 里 {removed} 又回来了"
 
 
 def test_no_real_registrable_placeholder_domain_in_frontend():
@@ -885,76 +1232,126 @@ def test_no_real_registrable_placeholder_domain_in_frontend():
     assert not offenders, "前端又出现真实可注册域名占位符：\n" + "\n".join(offenders)
 
 
-def test_scan_center_page_renders_four_steps_for_admin(admin_client):
-    """Phase 1 的四步流程必须字面落在页面上（下一阶段规划方案第 5.2 节）。
+def test_scan_center_page_renders_three_steps_for_admin(admin_client):
+    """扫描中心现在是**三步**（本轮口径），且旧的四个步骤名不得复活。
 
-    四步的措辞是**用户视角**的（输入目标 → 确认授权状态 → 选择工具 → 创建任务），
-    不再出现「选择授权项目 / 选择扫描范围」这类要求用户先理解内部模型的步骤。
+    三步的措辞是**用户视角**的（确认目标 → 选择工具 → 创建任务）：授权业务取消
+    后，「确认授权状态」这一步没有任何内容可确认，于是它与「输入目标」合并成
+    「确认目标」（只做格式预检）。
+
+    工具名（``httpx`` / ``subfinder``）由 ``scan_center.js`` 从
+    ``/api/scan-center`` 动态渲染，**不在服务端页面里** —— 所以这里断言的是
+    工具清单容器 ``#tool-list`` 存在，而不是某几个工具名出现在 HTML 里。
+    （工具清单来自服务端这条不变量由
+    ``test_scan_center_js_never_hardcodes_tool_names`` 与
+    ``test_scan_center_tool_list_comes_from_server_payload`` 守着。）
     """
     resp = admin_client.get("/scan-center")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
 
     for heading in (
+        "步骤 1 · 确认目标",
+        "步骤 2 · 选择工具",
+        "步骤 3 · 创建任务",
+    ):
+        assert heading in body, heading
+    assert "创建任务" in body
+    # 工具清单容器必须在（内容由前端按服务端元数据填充）。
+    assert 'id="tool-list"' in body
+    assert 'id="strategy-list"' in body
+
+    # 旧的四个步骤名一律不得复活：其中两个是「授权状态」那一步的残骸。
+    for removed in (
         "步骤 1 · 输入目标",
         "步骤 2 · 确认授权状态",
         "步骤 3 · 选择工具",
         "步骤 4 · 创建任务",
+        "确认授权范围",
+        "执行模式与提交",
     ):
-        assert heading in body, heading
-    assert "创建任务" in body
-    assert "任务" in body
-    # 白名单要如实写进页面，用户才知道能选什么。
-    assert "httpx" in body and "subfinder" in body
-    # 旧流程的两个步骤名不得复活 —— 它们正是「重复步骤」本身。
-    for removed in ("确认授权范围", "执行模式与提交"):
         assert removed not in body, f"旧的步骤名又回来了: {removed}"
 
 
-def test_scan_center_page_exposes_authorization_consent(admin_client):
-    """步骤 2 必须有「我确认该目标属于授权范围」这一句显式确认（方案第 7 节）。
+def test_scan_center_page_has_no_authorization_consent(admin_client):
+    """授权确认复选框**已随界面一起去掉**（本轮口径）。
 
-    这条守的是两件事：
-    * 用户**看得见**自己确认了什么（而不是点一下按钮就默认被当成已确认）；
-    * 它必须写明自己是**使用者确认、不是安全边界** —— 否则下一个人很容易
-      以为「勾了就等于放行」，从而把它当成权限开关去改。
+    它从来不是安全边界：一个可被脚本置真的 JSON 布尔值，勾没勾都不改变服务端的
+    判定（服务端只「记录」它，见 ``create_open_public_job`` 的
+    ``authorization_confirmed`` 参数）。真正的边界一直是目标格式 / 排除列表 /
+    Policy / 环境开关。留着它反而制造「勾了就等于放行」的错觉，
+    因此本轮连界面一起删除。
+
+    这条是反向守卫：谁把复选框加回页面，它就会红。
+    （服务端**接受**这个兼容字段这件事仍由
+    ``test_authorization_confirmation_is_recorded_but_is_not_a_gate`` 守着 ——
+    删的是界面，不是兼容性。）
     """
     body = admin_client.get("/scan-center").get_data(as_text=True)
-    assert 'id="job-consent"' in body
-    assert 'name="authorization_confirmed"' in body
-    assert "我确认该目标属于授权范围" in body
-    assert "不是安全边界" in body
+    assert 'id="job-consent"' not in body
+    assert 'name="authorization_confirmed"' not in body
+    assert "我确认该目标属于授权范围" not in body
 
 
-def test_scan_center_page_offers_authorization_summary(admin_client):
-    """步骤 2 的摘要三行（目标 / 授权状态 / 授权资产）必须在页面上有落点。"""
+def test_scan_center_page_has_no_authorization_summary(admin_client):
+    """「授权状态摘要」三行（目标 / 授权状态 / 授权资产）**已整体删除**。
+
+    它显示的是服务端下发的 ``blocker`` / ``matches`` —— 而预检接口已经不再返回
+    这些字段（授权业务取消），摘要因此没有数据来源，留着只会渲染一行空话。
+    """
     body = admin_client.get("/scan-center").get_data(as_text=True)
     for element_id in ("consent-target", "consent-status", "consent-scope"):
-        assert f'id="{element_id}"' in body, element_id
-    assert "授权资产" in body
+        assert f'id="{element_id}"' not in body, element_id
+    assert "授权资产" not in body
 
 
-def test_scan_center_js_renders_the_consent_summary_from_server_data():
-    """摘要必须**回显服务端结论**，前端不得自己重写一份授权判定。
+def test_scan_center_js_has_no_authorization_pipeline():
+    """前端不得残留任何授权判定 / 已删字段的用法 —— 并钉住**新**口径的正向事实。
 
-    源码级守卫：``renderConsentSummary`` 必须读 ``BLOCKER_LABELS``（服务端下发的
-    ``blocker`` 的翻译表）与 ``matches[].status``，而不是自己比较
-    ``active_scan`` / 环境变量这类东西。
+    负向断言（旧管线整体删除）：``renderConsentSummary`` / ``BLOCKER_LABELS`` /
+    ``eligible_scope_ids`` / ``applyMatchedScope`` / ``job-scope`` / ``job-project`` /
+    ``internet_allowed`` 一个都不该在 ``scan_center.js`` 里。授权业务取消后，
+    前端**没有任何**依据可以自己判定授权。
+
+    正向断言（新守卫，不能只删旧断言）：工具可用性只读服务端下发的
+    ``tool.selectable``；提交时用 ``sameSet`` 比较「勾选结果 vs 模板工具」，
+    并据此提交 ``strategy``；勾选结果由 ``selectedCustomTools`` 读出。
     """
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
         encoding="utf-8"
     )
-    assert "function renderConsentSummary(" in source
-    assert "BLOCKER_LABELS[check.blocker]" in source
-    # 前端不得自己拼「已授权」的判定条件（那是服务端的结论）。
+    code_only = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith(("*", "//", "/*"))
+    )
+
+    for forbidden in (
+        "renderConsentSummary",
+        "BLOCKER_LABELS",
+        "eligible_scope_ids",
+        "applyMatchedScope",
+        "job-scope",
+        "job-project",
+        "internet_allowed",
+    ):
+        assert forbidden not in code_only, f"scan_center.js 残留旧授权管线: {forbidden}"
+
+    # 前端不得自己拼「已授权」的判定条件（那是服务端的事，而服务端现在也不判了）。
     for forbidden in (
         "check.real_scan_enabled =",
         "item.active_scan &&",
         "scope.active_scan && scope.allowed_domains",
     ):
         assert forbidden not in source, f"前端开始自己判定授权了: {forbidden}"
+
+    # 正向：可用性只读服务端字段；模板只是推荐组合，提交时比集合决定 strategy。
+    assert "tool.selectable" in source, "工具是否可勾选必须读服务端下发的 selectable"
+    assert "function sameSet(" in source
+    assert "function selectedCustomTools(" in source
+    assert "function presetOf(" in source
+    assert 'strategy = "custom";' in source
+    assert "payload.tools = chosen;" in source
 
 
 def test_scan_center_page_warns_when_real_scan_disabled(admin_client, monkeypatch):
@@ -1006,38 +1403,54 @@ def test_scan_center_page_has_no_default_target(admin_client):
     """页面**没有任何默认目标**：目标输入框只有 placeholder，没有 value。
 
     这条守的是「不填就替你扫某个站」这类事故 —— 占位符是示例，浏览器不会提交它。
+
+    本轮口径变更：``#scope-domains`` / ``#scope-cidrs`` 随授权面板一起删除，
+    因此唯一还需要检查默认值的输入框是 ``#job-target``。检查方式不变
+    （``value=`` 不得出现），只是列表缩短 —— 留着一个不存在的 id 会让用例
+    在「元素被删」时报出与默认值无关的红。
     """
     import re
 
     body = admin_client.get("/scan-center").get_data(as_text=True)
-    for field in ("job-target", "scope-domains", "scope-cidrs"):
+    for field in ("job-target",):
         tag = re.search(r'<input[^>]*id="' + field + r'"[^>]*>', body)
         assert tag is not None, f"页面缺少输入框 {field}"
         assert "value=" not in tag.group(0), f"{field} 带上了默认值: {tag.group(0)}"
+    # 被删掉的那两个元素不得复活（它们同样是「默认值」事故的载体）。
+    assert 'id="scope-domains"' not in body
+    assert 'id="scope-cidrs"' not in body
 
 
 def test_scan_center_page_hides_internal_ids_in_labels(admin_client):
-    """Phase 1「隐藏 Scope ID」的可执行口径：页面上不出现实体 ID 文案。
+    """Phase 1「隐藏 Scope ID」的可执行口径：页面上不出现**实体 ID**。
 
-    实体 ID 仍然存在（它要作为表单 value 提交），但**不能**出现在任何人类可读的
-    文案里。这里检查三种最容易漏进文案的写法，任何一条复活都会红。
+    历史口径是「实体 ID 仍然存在（作为 ``<select>`` 的 value 提交），但不能出现在
+    任何人类可读的文案里」—— 当时要守的是 ``scopeLabel()`` / ``projectLabel()``
+    这类翻译函数，因为下拉框的 option 文案很容易直接写成 ``scope.id``。
+
+    **本轮的变化**：下拉框与项目列表整体删除，实体 ID 在页面上已经没有任何
+    落脚点（既没有 value，也没有文案）。守卫因此升级成更强的形态：
+    断言页面里**不出现 ``scope_`` / ``proj_`` 形状的实体 ID**，
+    与 ``test_scan_center_page_does_not_leak_targets_or_jobs`` 用同一个正则口径。
+
+    这条同时守住「授权面板没有以别的方式复活」：任何新的下拉框 / 隐藏域只要
+    带出实体 ID，都会在这里被抓住。
     """
+    import re
+
+    body = admin_client.get("/scan-center").get_data(as_text=True)
+    assert re.search(r"scope_[0-9a-f]{32}", body) is None, "页面里出现了 Scope 实体 ID"
+    assert re.search(r"proj_[0-9a-f]{32}", body) is None, "页面里出现了项目实体 ID"
+    assert re.search(r"job_[0-9a-f]{32}", body) is None, "页面里出现了任务实体 ID"
+
+    # 服务端模板里也不得留下「把实体 ID 当文案」的写法（源码级兜底）。
     from pathlib import Path
 
-    js_path = Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js"
-    source = js_path.read_text(encoding="utf-8")
-
-    # 1) 下拉框文案必须走翻译函数，不允许直接把 ID 当 label。
-    assert "scopeLabel(" in source and "projectLabel(" in source
-    for forbidden in (
-        "option.textContent = scopeId",
-        "option.textContent = project.id",
-        "scopes.textContent = \"Scope \"",
-    ):
-        assert forbidden not in source, f"scan_center.js 又把内部 ID 当文案了: {forbidden}"
-
-    # 2) 列表里不再输出裸 ID 列。
-    assert 'id.textContent = project.id' not in source
+    template = (
+        Path(__file__).resolve().parents[2] / "web" / "templates" / "scan_center.html"
+    ).read_text(encoding="utf-8")
+    for forbidden in ("scope.id", "project.id", "scope_id }}", "project_id }}"):
+        assert forbidden not in template, f"scan_center.html 又把内部 ID 渲染出来了: {forbidden}"
 
 
 def test_scan_center_target_label_mentions_url(admin_client):
@@ -1052,7 +1465,7 @@ def test_scan_center_target_label_mentions_url(admin_client):
 
 
 def test_scan_center_js_submits_the_current_target_input_not_a_stale_snapshot():
-    """目标改了但没重新检查授权时，提交的必须是**输入框此刻的内容**。
+    """目标改了但没重新确认时，提交的必须是**输入框此刻的内容**。
 
     这是 Phase 1 审计发现的缺口：``bindJobForm`` 原来写的是
     ``lastTargets.length ? lastTargets : splitList($("job-target").value)`` ——
@@ -1060,11 +1473,13 @@ def test_scan_center_js_submits_the_current_target_input_not_a_stale_snapshot():
     绿灯说的是改后的那个站。服务端按改前的判定，用户看到的是另一个结论，
     这是最难排查的一类错（两边都没报错，只是说的不是同一件事）。
 
-    四条一起守：
-    ① 有 ``currentTargets()`` 这个唯一事实来源，且两次读的都不是快照；
+    测试阶段步骤 1 从「检查授权」改成「确认目标」，缺口**形状变了但风险一样**：
+    现在是「确认目标 → 改输入框 → 直接创建任务」。
+
+    三条一起守：
+    ① 有 ``currentTargets()`` 这个唯一事实来源，提交路径读的是它而不是快照；
     ② 输入框有 ``input`` 监听，改了就让旧结论失效；
-    ③ 摘要里的「目标」一行显示当前输入（否则它还在说旧目标）；
-    ④ 旧结论没作废时（兜底路径）拒绝提交，而不是拿它当依据。
+    ③ 旧结论还在但已经对不上输入时，兜底**拒绝提交**，而不是拿它当依据。
     """
     from pathlib import Path
 
@@ -1075,16 +1490,14 @@ def test_scan_center_js_submits_the_current_target_input_not_a_stale_snapshot():
     assert "function checkIsFresh()" in source
     assert "function invalidateCheckResult()" in source
 
-    # ① 提交路径取当前输入，不再优先用上一次试算的快照。
+    # ① 提交路径取当前输入，不再优先用上一次预检的快照。
     assert "var targets = currentTargets();" in source
     assert 'lastTargets.length ? lastTargets' not in source, "提交又回到快照了"
-    # ③ 摘要的目标行同样读当前输入。
-    assert "var shown = currentTargets();" in source
 
     # ② 输入框上的监听器是「改了就让旧结论失效」的唯一入口。
     assert 'input.addEventListener("input", function () {' in source
     assert "invalidateCheckResult();" in source
-    # ④ 旧结论还在但已经对不上输入时，兜底拒绝提交。
+    # ③ 旧结论还在但已经对不上输入时，兜底拒绝提交。
     assert "lastCheckPayload && !checkIsFresh()" in source
 
 
@@ -1126,15 +1539,48 @@ def test_scan_center_js_does_not_hardcode_pace_wording(admin_client):
         assert hardcoded not in source, f"scan_center.js 写死了节奏说明: {hardcoded}"
 
 
-def test_scan_center_page_separates_restricted_tools_note(admin_client):
-    """受限工具说明写进**独立**元素，不再往策略说明上累加。
+def test_scan_center_page_lists_unwired_tools_in_their_own_group(admin_client):
+    """未接入的工具（``nuclei``）**列在自己的能力分组里并置灰**，不另开一块说明。
 
-    累加会让「切换策略」后说明里混着上一轮的尾巴 —— 这正是 Phase 1 要清掉的
-    「异常展示」。这里断言容器存在且初始为空。
+    历史口径下这条叫 ``test_scan_center_page_separates_restricted_tools_note``：
+    那时有一块独立的 ``#restricted-note`` 容器，专门写「本阶段未接入/未开放的工具」。
+    测试阶段的工具清单改成**按能力分组渲染**，未接入项归到它自己声明的分组
+    （``nuclei`` → 漏洞检测）下，容器随之删除 —— 留着它会让同一个结论在页面上
+    出现两处，而两处迟早会不一致。
+
+    新守卫分两半，比原来更强：
+
+    * **服务端**：``nuclei`` 必须同时出现在 ``restricted_tools`` 与它所在分组的
+      ``tools`` 里，且 ``selectable is False``，``reason`` 非空；
+    * **源码**：``scan_center.js`` 必须真的把 ``restricted`` 渲染进分组网格，
+      而不是把它们过滤掉 —— 过滤掉就等于「藏起来」，使用者会以为是自己没找到。
     """
-    body = admin_client.get("/scan-center").get_data(as_text=True)
-    assert 'id="restricted-note"' in body
-    assert "本阶段未接入/未开放的工具" not in body
+    from pathlib import Path
+
+    payload = admin_client.get("/api/scan-center").get_json()
+    restricted = {item["tool_name"]: item for item in payload["restricted_tools"]}
+    assert "nuclei" in restricted, "nuclei 必须出现在 restricted_tools 里"
+    assert restricted["nuclei"]["selectable"] is False
+    assert restricted["nuclei"]["reason"], "未接入的工具必须给出原因，否则界面只能显示一个无语的灰块"
+    # ``restricted_tools`` 不是一份「扁平黑名单」：每条都自带 ``tool_group``，
+    # 前端据此把它摆进对应栏位。少了这个字段，「归到自己声明的分组」就无从谈起。
+    assert restricted["nuclei"]["tool_group"] == "vuln", "nuclei 没有声明它属于「漏洞检测」"
+
+    vuln_group = next((g for g in payload["tool_groups"] if g["key"] == "vuln"), None)
+    assert vuln_group is not None, "漏洞检测分组不见了"
+    assert "nuclei" not in [tool["tool_name"] for tool in vuln_group["tools"]], (
+        "nuclei 混进了可勾选清单：它没有 runner，不能出现在这里"
+    )
+    assert vuln_group["tools"] == [], "本阶段漏洞检测栏确实没有已接入的工具"
+
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
+    )
+    assert "unopened.forEach(function (tool) {" in source, (
+        "scan_center.js 不再把未接入的工具渲染进分组：它们被藏起来了，"
+        "使用者会以为是自己没找到"
+    )
+    assert "grid.appendChild(renderToolRow(tool, preset));" in source
 
 
 def test_scan_center_page_does_not_copy_any_strategy_description(admin_client):
@@ -1784,21 +2230,37 @@ def test_public_job_rejects_a_bad_operator(admin_client, fake_real_runner, bad):
     assert jobs_store.list_jobs() == []
 
 
-def test_public_job_snapshots_the_project_authorization_note(admin_client, fake_real_runner):
-    """授权备注取项目上那一份的**当前值**当快照，事后改项目不影响历史任务。"""
+def test_public_job_does_not_snapshot_any_project_authorization_note(admin_client, fake_real_runner):
+    """**本轮取消的行为**：任务不再从项目上取授权备注。
+
+    历史口径下这条叫 ``test_public_job_snapshots_the_project_authorization_note``：
+    创建任务时把项目上的 ``authorization_note`` 抄一份存进任务，作为「依据哪份
+    授权」的审计证据。测试阶段项目业务整体取消 —— 请求里即使带着 ``project_id``，
+    它也不参与任何判定，因此任务上**不该**再出现项目那侧的备注。
+
+    这是反向守卫：谁把「任务必须挂一份项目授权备注」加回来，它就会红。
+    （``authorization_confirmed`` 仍然会被如实记录，那是另一条用例守的。）
+    """
     scope_id = _make_scope(admin_client)
     project = _make_project(admin_client, scope_ids=[scope_id])
-    note = project["authorization_note"]
 
     job_id = _public_job(admin_client, project["id"], scope_id).get_json()["job_id"]
 
+    created = jobs_store.created_detail_of_job(job_id)
+    assert created["authorization_note"] is None, (
+        "任务上又出现了项目授权备注快照：项目业务正在复活"
+    )
     detail = admin_client.get(f"/api/jobs/{job_id}").get_json()["job"]
-    assert detail["authorization"]["note"] == note
-    assert jobs_store.created_detail_of_job(job_id)["authorization_note"] == note
+    assert detail["authorization"]["note"] is None
+    assert detail["project_id"] is None, "project_id 只能作为 deprecated 兼容字段恒为 null"
 
 
 def test_public_job_records_the_strategy(admin_client, fake_real_runner):
-    """扫描策略要留在任务上：不能只知道跑了哪些工具，还得知道用哪个模板跑的。"""
+    """扫描策略要留在任务上：不能只知道跑了哪些工具，还得知道用哪个模板跑的。
+
+    ``project_id`` 只做兼容回显且**恒为 null** —— 它是 deprecated 字段，
+    不再表示「这条任务挂在哪个项目下」。
+    """
     scope_id = _make_scope(admin_client)
     project = _make_project(admin_client, scope_ids=[scope_id])
 
@@ -1810,8 +2272,8 @@ def test_public_job_records_the_strategy(admin_client, fake_real_runner):
     assert jobs_store.strategy_of_job(job_id) == "web_fingerprint"
     detail = admin_client.get(f"/api/jobs/{job_id}").get_json()["job"]
     assert detail["strategy"] == "web_fingerprint"
-    # 项目也要读得回来：审计上下文是「依据哪份授权」，光有 scope 不够。
-    assert detail["project_id"] == project["id"]
+    # Deprecated 兼容字段：请求里给过 project_id，回显仍然是 null（不参与业务）。
+    assert detail["project_id"] is None
 
 
 def test_authorization_confirmation_is_recorded_but_is_not_a_gate(admin_client, fake_real_runner):
@@ -2097,143 +2559,98 @@ def test_job_detail_frontend_shows_the_phase3_context(admin_client):
     assert "不是安全边界" in script
 
 
-# ── 方案第 6 节：目标 → 授权资产的自动匹配（`resolve_scope(target)`） ──
+# ── 已取消：目标 → 授权资产的自动匹配（`resolve_scope(target)`） ──
 #
-# 注意命名：这里**不是**另一份工作单里的「Phase 4 结果体验」。
-# 本项来自 `6GetEverything-下一阶段规划方案.md` 第 6 节（Step 1 目标输入 →
-# 「系统后台：调用 ``resolve_scope(target)``，自动判断」）与第 16 节①
-# （「输入目标 → **自动匹配 scope** → 选择工具 → 创建 job」）。
+# 历史背景：`6GetEverything-下一阶段规划方案.md` 第 6 节要求「输入目标后系统后台
+# 自动判断该挂哪一份授权资产」，第 16 节① 把链路写成
+# 「输入目标 → **自动匹配 scope** → 选择工具 → 创建 job」。
+#
+# **测试阶段这一整条链路被取消**：不再有授权资产可选，任务默认落在开放测试执行
+# 上下文（``scope_id == "open"``）。原先的三条用例（``eligible_scope_ids`` 契约、
+# 前端 ``applyMatchedScope``、自动匹配驱动建任务）钉的都是已删除的能力，
+# 因此换成三条**反向守卫** —— 谁把那套自动匹配加回来，它们就红。
 
 
-def test_check_endpoint_exposes_the_auto_match_contract(admin_client, monkeypatch):
-    """试算响应里的 ``eligible_scope_ids`` 必须**只含真正放行**的范围。
+def test_check_endpoint_has_no_scope_matching_contract(admin_client):
+    """预检响应里**不得**再出现「哪份授权资产放行」这类结论。
 
-    前端 Phase 4 的自动匹配（方案第 6 节 ``resolve_scope(target)``）就吃这个字段。
-    因此它必须同时满足两件事，否则「自动选中」会变成一条绕过授权的捷径：
+    历史口径下 ``eligible_scope_ids`` 是前端自动匹配的输入。授权业务取消后它
+    没有意义了，留着反而危险：前端一旦读它，就会重新长出一条「先匹配资产再
+    提交」的路径，而那条路径的存在本身会让使用者以为「必须先有授权资产」。
 
-    * 覆盖目标 → 在里面（否则自动匹配永远选不中，功能是死的）；
-    * **命中排除列表** → 不在里面（``matches`` 里仍然有它，那是诊断信息，
-      但它**不构成授权**）—— 否则自动匹配会把用户送进一个必然 403 的组合。
+    这条逐字点名历史上出现过的字段，**并且**断言 ``checks`` 项的键集合完整相等
+    —— 前者防「原样加回来」，后者防「换个名字加回来」。
     """
-    monkeypatch.setenv("GEF_ALLOW_REAL_SCAN", "true")
     allowed = _make_scope(admin_client, domains=["example.test"], active_scan=True)
-    # 刻意用**另一个根域**：``example.test`` 会覆盖它的所有子域，
-    # 若两个范围同在 ``example.test`` 下，「命中排除」的那一个会同时被
-    # 允许范围覆盖，断言就分不清「排除生效」与「别的范围放行」。
-    excluded_only = _make_scope(
-        admin_client,
-        domains=["blocked.test"],
-        excluded_domains=["secret.blocked.test"],
-    )
-    project = _make_project(admin_client, scope_ids=[allowed, excluded_only])
+    _make_project(admin_client, scope_ids=[allowed])
 
-    body = admin_client.post(
-        "/api/public-jobs/check",
-        json={"targets": ["www.example.test"], "project_id": project["id"]},
-    ).get_json()
-    assert body["checks"][0]["eligible_scope_ids"] == [allowed]
-
-    denied = admin_client.post(
-        "/api/public-jobs/check",
-        json={"targets": ["secret.blocked.test"], "project_id": project["id"]},
+    check = admin_client.post(
+        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
     ).get_json()["checks"][0]
-    # 诊断信息仍在（用户需要知道「是你自己的排除列表挡住了」），但它不构成授权。
-    assert [item["scope_id"] for item in denied["matches"]] == [excluded_only]
-    assert denied["matches"][0]["verdict"] == "excluded"
-    assert denied["eligible_scope_ids"] == []
-    assert denied["ready"] is False
+
+    assert set(check) == {"raw", "normalized", "kind", "valid", "verdict", "excluded", "message"}
+    for gone in ("eligible_scope_ids", "matches", "ready", "blocker", "candidates", "resolved_check_deferred"):
+        assert gone not in check, f"预检又返回了授权匹配结论: {gone}"
 
 
-def test_scan_center_js_auto_selects_the_scope_from_server_verdict():
-    """方案第 6 节：自动匹配只**选中**服务端判定过的资产，不自己做授权判定。
+def test_scan_center_js_has_no_scope_auto_matching(admin_client):
+    """``scan_center.js`` 里不得再有「自动选中授权资产」这条流水线。
 
-    四条口径一起守（详见 ``scan_center.js:applyMatchedScope``）：
-    ① 候选来自服务端结论 ``eligible_scope_ids``，前端不得自己比对
-       ``verdict`` / ``allowed_domains`` / ``active_scan`` —— 那会变成第二条授权判定；
-    ② 试算完成后才自动选，且**先选后渲染摘要**（否则摘要显示上一个选中项）；
-    ③ 有歧义（多目标命中不同资产）时如实说明交给用户，不猜；
-    ④ 自动匹配**不扩大任何范围**：它只改 ``<select>`` 的选中项，
-       既不新增目标、也不改 Scope —— 「禁止为了体验删除 Scope 校验」一字未动。
+    前端源码级守卫（项目没有浏览器测试）。被禁的是那套自动匹配的**载体**：
+    读服务端授权结论、改 ``<select>`` 选中项、以及「先匹配后渲染摘要」的固定顺序。
+    它们一旦复活，页面就会重新要求使用者先有授权资产 —— 而那正是本轮删掉的东西。
+
+    ★ 断言范围是**代码行**：注释里解释「这套自动匹配已经取消」是允许的，也很必要。
     """
     from pathlib import Path
 
     source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
         encoding="utf-8"
     )
-    assert "function applyMatchedScope(" in source
-    assert "eligible_scope_ids" in source, "自动匹配必须读服务端结论"
-    # ① + ② 一次到位：候选读服务端结论，且「先匹配、后渲染摘要」顺序固定。
-    assert (
-        "var autoOutcome = applyMatchedScope(payload);\n"
-        "    renderConsentSummary();" in source
-    ), "自动匹配必须发生在渲染摘要之前"
-    # ③ 歧义与「已选中」两种如实说明都在。
-    assert "多个目标命中的授权资产不一致" in source
-    assert "已自动选中覆盖该目标的授权资产" in source
-
-    # ① 前端不得自己重算授权：这些写法只允许出现在服务端的响应里。
     code_only = "\n".join(
         line for line in source.splitlines() if not line.strip().startswith(("*", "//", "/*"))
     )
-    for forbidden in (
-        "item.verdict ===",
-        'item.status === "ready"',
-        "scope.allowed_domains.indexOf",
-        "scope.active_scan &&",
+    for gone in (
+        "applyMatchedScope",
+        "eligible_scope_ids",
+        "projectSelect",
+        "scopeSelect",
+        "renderConsentSummary",
+        "applyMatchedProject",
     ):
-        assert forbidden not in code_only, f"前端开始自己判定授权了: {forbidden}"
-
-    # ④ 自动匹配只动下拉框的选中项，不碰目标与 Scope 本身。
-    assert "scopeSelect.value = scopeId;" in source
-    assert "projectSelect.value = owner.id;" in source
+        assert gone not in code_only, f"scan_center.js 又出现了自动匹配授权资产的代码: {gone}"
 
 
-def test_target_to_job_flow_uses_the_auto_matched_scope(admin_client, fake_real_runner):
-    """方案第 16 节①：**输入目标 → 自动匹配 scope → 选择工具 → 创建 job** 整条链路。
+def test_scan_center_js_never_sends_a_scope_or_project(admin_client):
+    """提交请求体里**不得**出现 ``scope_id`` / ``project_id``。
 
-    这条把 §16 ① 的链路在服务端侧跑完整：前端那条「自动选中」用的是试算响应里的
-    ``eligible_scope_ids[0]``，因此这里就用**同一个来源**驱动创建请求 —— 前端
-    改了取数口径（例如改成自己比对 ``matches``），这条链路的输入就跟着变，
-    而不是靠源码字符串守卫。
+    这是「工具开放、免授权」这条口径在最外层的样子：扫描中心只需要目标 + 策略 +
+    工具 + 节奏，服务端按开放模式给出执行上下文。前端一旦重新带上 ``scope_id``，
+    就说明有人把「选一份授权资产」这一步又接回去了。
 
-    同时覆盖 §16 ② 的「授权目标」一行：任务创建成功、``tools`` 正确保存、
-    ``scope`` 正确关联。
+    ★ 顺带钉住 ``/api/public-jobs/check`` 也**只传 targets** —— 预检不再需要
+    任何授权上下文，传了就意味着前端还认为有东西要匹配。
+
+    ★ 断言范围是**代码行**：文件头的模块注释里**刻意**写着「删掉了把 scope_id /
+    project_id 随请求发出去的那两行」这句口径说明，拿整份源码做字面命中会把
+    这句注释算成违规。
     """
-    # 两份授权资产，各挂一个项目：自动匹配必须挑中覆盖目标的那一个，而不是「第一个」。
-    unrelated = _make_scope(admin_client, domains=["other.example.test"], active_scan=True)
-    _make_project(admin_client, name="无关授权项目", scope_ids=[unrelated])
-    matched = _make_scope(admin_client, domains=["example.test"], active_scan=True)
-    project = _make_project(admin_client, scope_ids=[matched], name="目标所在授权项目")
+    from pathlib import Path
 
-    check = admin_client.post(
-        "/api/public-jobs/check", json={"targets": ["www.example.test"]}
-    ).get_json()["checks"][0]
-    assert check["ready"] is True
-    assert check["eligible_scope_ids"] == [matched]
-
-    # 「选择工具」：资产发现模板（= subfinder + httpx），与页面上选中的模板同义。
-    resp = admin_client.post(
-        "/api/public-jobs",
-        json={
-            "project_id": project["id"],
-            "scope_id": check["eligible_scope_ids"][0],
-            "targets": ["www.example.test"],
-            "strategy": "asset_discovery",
-        },
+    source = (Path(__file__).resolve().parents[2] / "web" / "static" / "scan_center.js").read_text(
+        encoding="utf-8"
     )
-    assert resp.status_code == 202, resp.get_json()
-    body = resp.get_json()
-    assert body["status"] == "queued"
-    assert body["mode"] == "real"
-    assert body["strategy"] == "asset_discovery"
-    assert body["scope_id"] == matched
+    code_only = "\n".join(
+        line for line in source.splitlines() if not line.strip().startswith(("*", "//", "/*"))
+    )
+    for gone in ("scope_id", "project_id"):
+        assert gone not in code_only, f"scan_center.js 又在请求里带上了 {gone}"
 
-    job = jobs_store.get_job(body["job_id"])
-    assert job["scope_id"] == matched
-    assert sorted(job["tools"]) == ["httpx", "subfinder"]
-    assert job["targets"] == ["www.example.test"]
-    # 自动匹配不改授权范围：任务只落在被选中的那一份资产上。
-    assert len(jobs_store.list_jobs()) == 1
+    # 正向对照：目标和工具确实在传（少了这条，「什么都不传」也会让上面两条变绿）。
+    assert "targets: targets" in code_only
+    assert "var chosen = selectedCustomTools();" in code_only
+    assert "payload.tools = chosen;" in code_only, "自定义策略没有把勾选的工具带上"
+    assert 'postJSON("/api/public-jobs/check", { targets: targets })' in code_only
 
 
 # ── 方案第 13 节：后端安全边界（Job 审计六项 + 拒绝任意字符串工具） ──

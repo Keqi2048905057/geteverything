@@ -14,10 +14,14 @@
     工具能力元数据的**唯一来源**是 :mod:`core.tool_registry`；本接口与
     ``/api/scan-center`` 只是它的**两个读出点**：工具的中文说明
     （``description``）、能力分组（``tool_group`` / ``tool_group_label``）、
-    风险等级（``risk_level`` / ``risk_label``）、是否允许公网
-    （``internet_allowed``）全部来自 :meth:`core.tool_registry.ToolPolicy.to_dict`，
+    风险等级（``risk_level`` / ``risk_label``）、是否可勾选
+    （``selectable``）全部来自 :meth:`core.tool_registry.ToolPolicy.to_dict`，
     与 ``/api/scan-center`` 是同一次调用的结果 ——
     两个接口不可能对同一个工具给出不同的说明（有测试逐字段比对）。
+
+    ``internet_allowed`` 仍然出现在条目里，但它是 **deprecated 兼容键**，
+    值恒等于 ``selectable``：测试阶段起「公网白名单」语义已取消，
+    工具能否被勾选只取决于「是否已注册且已接入」。
 
     **两个读出点不等价，不要互换**（方案第 9 节写「前端动态读取 ``GET /api/tools``」，
     实现走的是 ``/api/scan-center``，理由如下）：
@@ -59,7 +63,8 @@ def _registry_fields(tool_name: str) -> dict:
     未登记不应该发生（``tests/unit/test_tool_registry.py`` 要求每个 runner 都有
     条目），但这里也不抛异常：``/api/tools`` 是匿名可读的列表接口，
     为了一个字段缺失而整页 500 比少一个字段更糟。降级值一律取「最保守」：
-    ``internet_allowed=False``、``risk_level="high"``。
+    ``selectable=False``（连同 deprecated 的 ``internet_allowed=False``）、
+    ``risk_level="high"``。
     """
     policy = get_tool_policy(tool_name)
     if policy is not None:
@@ -68,9 +73,10 @@ def _registry_fields(tool_name: str) -> dict:
         "tool_name": tool_name,
         "risk_level": "high",
         "risk_label": "未登记",
-        "internet_allowed": False,
+        "selectable": False,
+        "internet_allowed": False,  # Deprecated 兼容键，值同 selectable
         "default_enabled": False,
-        "reason": "该工具没有在 core.tool_registry 里登记权限元数据，按禁止处理",
+        "reason": "该工具没有在 core.tool_registry 里登记元数据，按不可用处理",
         "description": "",
         "tool_group": "",
         "tool_group_label": "",
@@ -91,8 +97,9 @@ def _build_tool_payload(tool_name: str) -> dict:
           （``subdomain`` / ``url`` / ``alive`` / ``web`` / ``port``）；
         * ``description`` / ``tool_group`` / ``tool_group_label`` —— 注册表里的
           用途说明与能力分组；
-        * ``risk_level`` / ``risk_label`` / ``internet_allowed`` /
-          ``default_enabled`` / ``reason`` —— 权限元数据。
+        * ``risk_level`` / ``risk_label`` / ``selectable`` /
+          ``default_enabled`` / ``reason`` —— 可用性元数据
+          （``internet_allowed`` 一并给出，但它是 deprecated 兼容键）。
     """
     # 根据工具名构建运行器实例
     runner = build_runner(tool_name)
@@ -126,6 +133,7 @@ def list_tools():
                     "tool_group_label": "资产发现",
                     "risk_level": "low",
                     "risk_label": "低（被动/轻量探测）",
+                    "selectable": true,
                     "internet_allowed": true,
                     "default_enabled": true,
                     "reason": "",

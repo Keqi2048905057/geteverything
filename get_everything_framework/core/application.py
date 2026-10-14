@@ -46,21 +46,34 @@ Worker / Runner         jobs/worker.py → jobs/executor.py → modules/
   ``create_scope`` / ``create_export`` / ``request_cancel`` / ``retry_job``
   尚未收拢，按「不要一次性无边界重写」的原则分批做）。
 * :func:`resolve_targets` —— 目标来源解析（显式列表 + 受控 ``upload_id``）。
-* :func:`create_authorized_public_job` —— **授权公网测试模式**下创建任务的唯一入口
-  （公网授权测试模式体验版方案第 4、6 节）。它在 :func:`create_scan_job` 之前
-  叠加「项目 / 项目内 Scope / 公网工具白名单」三道闸门，然后原样委派，
-  因此 Policy / Scope / mode 判定仍然只有一份实现。
+* :func:`create_authorized_public_job` —— **兼容入口**（历史名，见下方「口径变更」）。
+  它现在只做「策略 → 工具」解析与「工具是否已接入」校验，然后原样委派给
+  :func:`create_scan_job`，不再做项目校验、Scope 关联与公网白名单。
+* :func:`create_open_public_job` —— 扫描中心使用的入口，语义与上面那个完全相同。
+
+## 口径变更（测试阶段）
+
+历史入口 ``create_authorized_public_job`` 在 :func:`create_scan_job` 之前叠加了
+三道公网专属闸门（项目存在 → Scope 已关联到该项目 → 工具在公网白名单内）。
+测试阶段这三道全部取消：
+
+* **项目校验**：取消。目标由使用者自己负责，不再要求先建授权项目；
+* **Scope 关联**：取消。``scope_id`` 现在可以留空 —— 由
+  ``core.policy.require_scope`` 在 ``GEF_OPEN_SCAN_MODE=true`` 时给出
+  开放测试执行上下文；未开启该开关时**明确 400 并点名这个环境变量**；
+* **公网白名单**：取消。工具只按「是否已注册且已接入」判定
+  （:func:`core.tool_registry.assert_tools_selectable`），``nuclei`` 仍然不可选。
+
+**没有取消的**：Policy / Scope 的格式与排除校验、SSRF 防护、并发与超时限制、
+输出限制、审计与结构化日志。这些都在 :func:`create_scan_job` 与执行期里，
+一条都没动。
 
 ## 各处共享的同一条入口
 
 ```text
-POST /api/jobs      → api/jobs.py:create_job      ┐
-首页表单 POST /      → app.py:index               ├→ create_scan_job()
-Agent（P0-6 迁移中） → agent/action.py            ┘
-
-POST /api/public-jobs → api/public_scan.py        ┐
-扫描中心页面 POST /     → app.py:scan_center       ├→ create_authorized_public_job()
-                                                  ┘   → create_scan_job()
+POST /api/jobs        → api/jobs.py:create_job      ┐
+POST /api/public-jobs → api/public_scan.py          ├→ create_scan_job()
+扫描中心页面 POST      → app.py:scan_center          ┘
 ```
 """
 
@@ -70,7 +83,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from config import SCAN_LIMITS
-from core import audit, jobs as jobs_store, observability, projects, uploads
+from core import audit, jobs as jobs_store, observability, uploads
 from core.errors import BadRequestError
 from core.job_limits import (
     FIELD_RATE_LIMIT,
@@ -86,7 +99,7 @@ from core.safety import MODE_MOCK, MODE_REAL, resolve_mode
 from core.scope import Scope
 from core.tool_registry import (
     STRATEGY_ASSET_DISCOVERY,
-    assert_tools_internet_allowed,
+    assert_tools_selectable,
     resolve_strategy_pace,
     resolve_strategy_tools,
 )
@@ -277,7 +290,7 @@ def create_scan_job(
     # 用 ``resolve_pace`` 而不是宽松的 ``coerce_pace``：请求体里写了拼错的档位
     # （例如 ``"low"``）必须报错，而不是静默落成 ``normal`` —— 那样使用者会以为
     # 自己已经用了最保守的一档。读**库里的**历史值才用宽松版本（见 core/jobs.py）。
-    # ``create_authorized_public_job`` 已经把模板档位与请求档位合并过，
+    # ``create_open_public_job`` 已经把模板档位与请求档位合并过，
     # 这里再走一次是幂等的（合法档位合并后仍是它自己），不存在第二份判定。
     try:
         resolved_pace = resolve_pace(DEFAULT_PACE, pace)
@@ -429,22 +442,23 @@ def create_scan_job(
 
 @dataclass(frozen=True)
 class AuthorizedJobSubmission:
-    """一次「授权公网测试」提交的结果。
+    """一次「扫描中心 / 公网入口」提交的结果。
 
-    在 :class:`JobSubmission` 之外多带项目与策略信息，让页面不必再回查一次；
-    真正的任务字段仍然是同一个 ``job`` 字典。
+    类名保留历史名（``Authorized``），但语义已经变了：测试阶段起这条链路
+    **不再做任何授权判定**，因此它多带的信息只剩策略、工具、节奏。
+    ``project`` 现在是 ``None`` —— 项目已不参与业务逻辑。
 
     Attributes:
         submission: 底层 Job 提交结果（复用同一条编排）。
-        project: 该项目（授权证据的组织单位）。
+        project: 恒为 ``None``（保留字段以兼容旧调用方读取）。
         strategy: 生效的策略模板 key。
-        tools: 最终工具列表（已过公网白名单）。
-        targets: 已过 Scope 校验的目标。
+        tools: 最终工具列表（已过「是否已接入」校验）。
+        targets: 已过 Scope 格式 / 排除校验的目标。
         pace: 最终生效的节奏（模板缺省与请求合并后的结果，只能收紧）。
     """
 
     submission: JobSubmission
-    project: Project
+    project: Project | None
     strategy: str
     tools: list[str]
     targets: list[str]
@@ -453,18 +467,23 @@ class AuthorizedJobSubmission:
     def to_dict(self) -> dict:
         """``POST /api/public-jobs`` 的响应体（沿用 202 Accepted）。
 
-        在 :meth:`JobSubmission.to_dict` 的基础上追加公网专属字段。
-        ``authorization`` 只回**是否确认过**与备注长度级别的元数据，
-        不回备注原文：原文在 ``GET /api/jobs/<id>`` 与审计里可查，没有必要
-        在每次提交的响应里再散一份。
+        在 :meth:`JobSubmission.to_dict` 的基础上追加策略与节奏。
+
+        **Deprecated 兼容字段**（``project_id`` / ``project_name`` /
+        ``authorized_public``）：值一律为 ``None``。它们不再参与任何业务逻辑，
+        保留键名只是为了不让尚未升级的旧客户端在解析时炸掉。
+        **新代码不得读取它们** —— 「这条任务被授权过」这个事实已经不存在，
+        真正的依据只有 ``scope_id``（开放模式下是 ``"open"``）与审计记录。
         """
         payload = self.submission.to_dict()
         payload.update(
             {
-                "project_id": self.project.id,
-                "project_name": self.project.name,
+                # Deprecated：不再有授权项目，值恒为 None。
+                "project_id": None,
+                "project_name": None,
+                "authorized_public": None,
+                "deprecated_fields": ["project_id", "project_name", "authorized_public"],
                 "strategy": self.strategy,
-                "authorized_public": True,
                 "operator": self.submission.operator,
                 "authorization_confirmed": self.submission.authorization_confirmed,
                 "limits": self.submission.limits.to_dict(),
@@ -473,11 +492,10 @@ class AuthorizedJobSubmission:
         return payload
 
 
-def create_authorized_public_job(
+def create_open_public_job(
     *,
-    project_id: str | None,
-    scope_id: str | None,
     targets: Any = None,
+    scope_id: str | None = None,
     upload_id: Any = None,
     strategy: str | None = None,
     tools: Any = None,
@@ -487,30 +505,23 @@ def create_authorized_public_job(
     idempotency_key: Any = None,
     created_by: str = "local-admin",
     operator: Any = None,
+    project_id: Any = None,
     authorization_confirmed: Any = None,
     rate_limit: Any = None,
     timeout_seconds: Any = None,
 ) -> AuthorizedJobSubmission:
-    """创建「授权公网测试」任务 —— 公网模式下创建任务的**唯一**入口。
+    """扫描中心创建任务的入口：解析策略 → 校验工具已接入 → 委派给 :func:`create_scan_job`。
 
-    与 :func:`create_scan_job` 的关系是**叠加而非并列**：本函数在它之前多做
-    三道公网专属闸门，然后**原样调用**它，因此 Policy / Scope / mode 判定
-    仍然只发生在那一个地方，不存在第二条实现。
+    与 :func:`create_scan_job` 的关系是**叠加而非并列**：本函数只多做两件事
+    （策略模板解析、工具是否已接入），然后**原样调用**它，因此 Policy / Scope /
+    mode 判定仍然只发生在那一个地方，不存在第二条实现。
 
-    公网专属闸门（按顺序，任一条不过就在**创建任务之前**失败）：
+    **本函数不做授权判定**（测试阶段口径，见模块 docstring）：
 
-    1. ``project_id`` 必填且项目必须存在（404 记录在案）；
-    2. ``scope_id`` 必须**已关联到该项目** —— 光有 Scope 不算授权证据；
-    3. 策略模板解析出的工具必须全部在公网白名单内
-       （:func:`core.tool_registry.assert_tools_internet_allowed`）；
-    4. 节奏档位由模板缺省与请求合并得出，且**只能收紧**
-       （:func:`core.tool_registry.resolve_strategy_pace`）。
-       「低频资产发现」因此不会被一次请求改回常规档。
-
-    Phase 3 增补的审计上下文（第 14 节：操作者记录 / 授权备注 / 扫描策略 /
-    限速配置 / 超时配置）：``operator`` 与 ``authorization_confirmed`` 透传下去，
-    授权备注取**项目上那一份的当前值**作为快照 —— 项目说明事后被改，
-    这条任务的依据仍是创建当时那一份。
+    * 不查项目、不查 Scope 关联、不查公网白名单；
+    * ``scope_id`` 可留空 —— 由 ``core.policy.require_scope`` 在
+      ``GEF_OPEN_SCAN_MODE=true`` 时给出开放测试执行上下文；
+      未开启该开关时**明确 400 并点名这个环境变量**，绝不静默降级成 mock。
 
     模式语义（刻意如此，不要改成「静默降级」）：缺省 ``real``。
     如果环境开关 ``GEF_ALLOW_REAL_SCAN`` 没开，这里会**明确报 403**，
@@ -518,9 +529,8 @@ def create_authorized_public_job(
     报错严重得多的误导。
 
     Args:
-        project_id: 授权测试项目 ID，必填。
-        scope_id: 项目下已关联的 Scope ID，必填。
         targets: 显式目标列表。
+        scope_id: 授权范围 ID（可选）。留空即使用开放测试执行上下文。
         upload_id: 受控上传 ID（与 ``targets`` 可同时给出）。
         strategy: 策略模板 key，缺省 ``asset_discovery``。
         tools: 自定义工具列表（仅 ``custom`` 模板允许）。
@@ -531,49 +541,31 @@ def create_authorized_public_job(
         idempotency_key: 可选幂等键。
         created_by: 创建者标识（``jobs`` 表的列）。
         operator: 操作者标识（Phase 3）。空值退化为 ``local-admin``。
-        authorization_confirmed: 页面上的授权确认复选框。**如实记录**是否
-            勾选，但**不作为闸门** —— 授权由 Scope / Policy / 环境开关判定，
-            一个可被脚本置真的复选框不该成为安全边界。
+        project_id: **Deprecated 且被忽略**。旧客户端仍会传它；这里既不校验
+            也不落库（审计里的 ``project_id`` 因此不再出现）。
+        authorization_confirmed: 页面上的授权确认复选框。**如实记录**是否勾选，
+            但**不作为闸门** —— 一个可被脚本置真的复选框不该成为安全边界。
+            测试阶段页面已不再出现这个复选框，此参数仅为兼容旧客户端保留。
         rate_limit: 每秒请求上限（可选，只能收紧）。
         timeout_seconds: 单步超时秒数（可选，只能收紧）。
 
     Returns:
-        AuthorizedJobSubmission: 含 job / project / strategy / tools / targets。
+        AuthorizedJobSubmission: 含 job / strategy / tools / targets。
 
     Raises:
-        BadRequestError: 项目或 Scope 相关参数缺失、策略非法、工具越权、
-            ``rate_limit`` / ``timeout_seconds`` 越界。
-        NotFoundError: 项目不存在。
-        ScopeViolationError: 环境开关未开，或目标越界。
+        BadRequestError: 策略非法、工具未接入或未登记、
+            ``rate_limit`` / ``timeout_seconds`` 越界；未开启开放模式且未给
+            ``scope_id`` 时同样 400（``details["env"]`` 点明环境变量）。
+        ScopeViolationError: 环境开关未开，或目标越界 / 命中排除列表。
     """
-    project = projects.require(str(project_id or "").strip() or "")
-
-    scope_ref = str(scope_id or "").strip()
-    if not scope_ref:
-        raise BadRequestError(
-            "必须提供 scope_id：授权公网测试必须指定项目下的授权范围",
-            details={"field": "scope_id"},
-        )
-    if scope_ref not in project.scope_ids:
-        # 「Scope 存在」不等于「这个项目授权了它」。两者都要成立才放行。
-        raise BadRequestError(
-            f"Scope {scope_ref} 未关联到项目 {project.id}："
-            "请先在项目下添加该授权范围，再创建公网测试任务",
-            details={
-                "field": "scope_id",
-                "project_id": project.id,
-                "attached_scope_ids": list(project.scope_ids),
-            },
-        )
-
-    # 工具闸门：先按模板解析，再验公网白名单（顺序不能反 ——
-    # 「模板里塞了 nmap」必须在创建任务之前被拒）。
+    # 工具闸门：先按模板解析，再验「是否已注册且已接入」（顺序不能反 ——
+    # 「模板里塞了未接入的工具」必须在创建任务之前被拒）。
     resolved_strategy = (strategy or "").strip() or None
     resolved_tools = resolve_strategy_tools(resolved_strategy, split_str_list(tools, "tools"))
-    assert_tools_internet_allowed(resolved_tools)
+    assert_tools_selectable(resolved_tools)
 
     # 节奏闸门：模板自带一档（当前三档模板全是 ``light``），请求体只能收紧。
-    # 放在工具闸门之后：工具越权是更根本的问题，应当先报出来。
+    # 放在工具闸门之后：工具不可用是更根本的问题，应当先报出来。
     resolved_pace = resolve_strategy_pace(resolved_strategy, pace)
 
     # 授权确认：如实**记录**，但不作为闸门。理由写在参数文档里 ——
@@ -582,9 +574,9 @@ def create_authorized_public_job(
     if authorization_confirmed is not None:
         confirmed = bool(authorization_confirmed)
 
-    # 缺省 real：公网授权测试的语义就是真实扫描，不静默降级。
+    # 缺省 real：扫描中心的语义就是真实扫描，不静默降级。
     submission = create_scan_job(
-        scope_id=scope_ref,
+        scope_id=scope_id,
         targets=targets,
         tools=resolved_tools,
         upload_id=upload_id,
@@ -594,13 +586,8 @@ def create_authorized_public_job(
         created_by=created_by,
         pace=resolved_pace,
         operator=operator,
-        # 项目与策略在这里落成审计上下文：它们是「公网入口」独有的信息，
-        # 因此只有这条链会传（老入口 ``POST /api/jobs`` 传的是 ``None``）。
-        project_id=project.id,
+        # 项目 / 授权说明不再参与：审计里只留策略与限速/超时这些执行上下文。
         strategy=resolved_strategy or STRATEGY_ASSET_DISCOVERY,
-        # 授权说明取**项目上那一份的当前值**当快照：项目说明事后被改，
-        # 这条任务所依据的仍然是创建当时那一份原文。
-        authorization_note=project.authorization_note,
         authorization_confirmed=confirmed,
         rate_limit=rate_limit,
         timeout_seconds=timeout_seconds,
@@ -608,9 +595,15 @@ def create_authorized_public_job(
 
     return AuthorizedJobSubmission(
         submission=submission,
-        project=project,
+        project=None,
         strategy=resolved_strategy or STRATEGY_ASSET_DISCOVERY,
         tools=resolved_tools,
         targets=list(submission.targets),
         pace=resolved_pace,
     )
+
+
+#: **Deprecated 别名**：历史函数名。语义已变（不再做授权判定），
+#: 保留它只为让尚未升级的调用方 / 测试不至于 ``ImportError``。
+#: 新代码一律用 :func:`create_open_public_job`。
+create_authorized_public_job = create_open_public_job

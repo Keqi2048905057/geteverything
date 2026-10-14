@@ -15,10 +15,18 @@ Job / Step 执行前 → validate_step_target()
 
 设计取舍（重要，不要静默改动）：
 
-* **无 Scope 即拒绝**：``scope_id`` 为空直接 400，不存在直接 403；
-* **整体拒绝**：多目标里只要有一个越界，整个请求被拒，不做部分执行；
+* **无 Scope 即拒绝，除非开放模式**：源码默认仍然要求
+  「每一个任务挂在显式授权 Scope 上」，``scope_id`` 为空直接 400。只有
+  ``GEF_OPEN_SCAN_MODE=true`` 时才改为返回
+  :func:`core.scope.open_scope` 的「开放测试执行上下文」，任务照常创建。
+  关闭状态下 400 的文案**必须点名这个环境变量** —— 使用者看到的应该是
+  「怎么打开」，而不是一句无从下手的「必须提供 scope_id」；
+* **开放模式不得静默降级**：没有开 Open Mode 就明确 400，不允许偷偷把
+  ``real`` 降级成 ``mock`` 让请求「看起来成功」；
+* **给定 Scope 时仍然整体拒绝**：多目标里只要有一个越界，整个请求被拒，
+  不做部分执行；
 * **环回/私网/链路本地一律拒绝**，除非该地址被 ``allowed_cidrs`` **显式**放行
-  —— 这是 SSRF 防护的核心，不能因为「本机联调」而放宽；
+  —— 这是 SSRF 防护的核心，不因为「不要求授权」而放宽；
 * **解析失败不阻断**：DNS 查不到时无法判断，交给 Runner 去报 ``network_error``。
   这条是有意为之：本机 fixture（``*.test``）与离线环境必须仍可跑通。
   解析**成功**时则逐个地址校验，命中禁止网段就拒绝。
@@ -34,7 +42,8 @@ from urllib.parse import urlsplit
 
 from core import scope_store
 from core.errors import BadRequestError, InvalidTargetError, ScopeViolationError
-from core.scope import Scope, normalize_target
+from core.safety import OPEN_SCAN_ENV, open_scan_enabled
+from core.scope import OPEN_SCOPE_ID, Scope, normalize_target, open_scope
 
 #: DNS 解析器签名：``host -> [ip, ...]``。注入它可以让测试完全不碰网络。
 Resolver = Callable[[str], list[str]]
@@ -95,30 +104,55 @@ def resolve_host(host: str) -> list[str]:
 def require_scope(scope_id: str | None) -> Scope:
     """把 ``scope_id`` 解析成 Scope；缺失 400、不存在 403。
 
+    **开放模式分支**：``GEF_OPEN_SCAN_MODE=true`` 且 ``scope_id`` 为空时，
+    返回 :func:`core.scope.open_scope` 的开放测试执行上下文（``id="open"``）。
+    它不是数据库里的授权范围，只用来走通
+    「Job 创建 → Executor 复检」这条既有调用链，见该函数的 docstring。
+
+    ``scope_id`` **显式给出但不存在**时始终 403，开放模式也不放过 ——
+    收到一个具体 ID 却查不到，说明调用方状态不一致，直接报错比悄悄替换成
+    开放范围更安全。
+
     Raises:
-        BadRequestError: ``scope_id`` 为空。
+        BadRequestError: ``scope_id`` 为空且开放模式未开启
+            （``details["env"]`` 明确给出需要设置的环境变量）。
         ScopeViolationError: Scope 不存在。
     """
     if not scope_id or not str(scope_id).strip():
-        raise BadRequestError(
-            "必须提供 scope_id：没有授权范围不允许创建扫描任务",
-            details={"field": "scope_id"},
-        )
-    return scope_store.require(str(scope_id).strip())
+        if not open_scan_enabled():
+            raise BadRequestError(
+                f"必须提供 scope_id：没有授权范围不允许创建扫描任务。"
+                f"测试阶段如需免授权直接扫描，请在 .env 中设置 {OPEN_SCAN_ENV}=true 后重启服务",
+                details={"field": "scope_id", "env": OPEN_SCAN_ENV},
+            )
+        return open_scope()
+
+    resolved = str(scope_id).strip()
+    # 开放范围**从不落库**，所以执行期用 ``"open"`` 复检时不能去数据库找它。
+    # 反过来，开关被关掉之后，历史任务的复检会落到 ``scope_store.require``
+    # 并因查不到而 403 —— 这正是「执行期复检」要的效果（配置变更后不继续放行），
+    # 不是缺陷；关闭开关的人预期如此。
+    if resolved == OPEN_SCOPE_ID and open_scan_enabled():
+        return open_scope()
+    return scope_store.require(resolved)
 
 
 def validate_job_targets(scope_id: str | None, targets: list[str]) -> tuple[Scope, list[str]]:
     """Job 创建时的统一校验：Scope 必须存在，目标必须全部在授权范围内。
 
+    开放模式（``GEF_OPEN_SCAN_MODE=true``）下 :func:`require_scope` 会给出
+    开放测试执行上下文，于是这里的 ``scope.validate_targets`` 只保留两件事：
+    **目标格式合法** 与 **未命中排除列表**。这是刻意的 —— 免授权不等于免校验。
+
     Args:
-        scope_id: 请求中的授权范围 ID（M2 起必填）。
+        scope_id: 请求中的授权范围 ID（未开启开放模式时必填）。
         targets: 待校验的原始目标列表。
 
     Returns:
         tuple[Scope, list[str]]: ``(scope, 规范化后的目标值列表)``。
 
     Raises:
-        BadRequestError: ``scope_id`` 缺失，或目标列表为空。
+        BadRequestError: ``scope_id`` 缺失且未开启开放模式，或目标列表为空。
         InvalidTargetError: 目标既不是合法域名也不是 IP/CIDR。
         ScopeViolationError: Scope 不存在，或任一目标越界（整体拒绝）。
     """

@@ -7,34 +7,42 @@
 「这个范围允不允许主动扫描」。于是只要 Scope 里放了公网域名，用户就能把
 ``nmap`` / ``dirsearch`` 这类会对外网目标产生高强度流量的工具一起勾上。
 
-本模块把工具按**风险等级**与**是否允许打公网**显式建模，并给出三档扫描策略模板，
-让「授权公网测试模式」可以在不碰 Runner、不碰 Scope/Policy 判定的前提下，
-于 Application Service 层多出一道**工具白名单**闸门。
+本模块把工具按**风险等级**与**是否已接入可选**显式建模，并给出三档扫描策略模板，
+让界面与 Application Service 共用同一份「这个工具现在能不能被勾选」的答案。
 
-## 扫描节奏（Scan Profile 的第二维，下一阶段方案第 5、6 节 Phase 3）
+## 口径变更（测试阶段，2026 起）
 
-「引入 Scan Profile」不能只等于「换个工具组合」：同一组工具在别人的资产上
-可以打得多快，是使用者真正关心的第二个问题。因此每个模板额外带一档
-``pace``（见 :mod:`core.pace`），由 :func:`resolve_strategy_tools` 的姊妹函数
-``core.application.create_authorized_public_job`` 解析并落进任务审计，
-最终由 ``jobs.executor`` 在执行期**真正执行**（降低并发 / 请求速率 / 步骤间隔），
-而不是只在页面上写一句「低频」。
+历史口径是「公网白名单只有 ``subfinder`` + ``httpx``」，字段叫 ``internet_allowed``，
+语义是**「允许打公网」**。该口径已取消：目标由使用者自己负责，工具是否可选
+不再取决于「公网 / 内网」。
 
-节奏**不是**安全闸门：Scope、``active_scan``、``GEF_ALLOW_REAL_SCAN``、
-公网工具白名单各自独立判定，本模块不参与，也不放松其中任何一条。
+新口径只有一条：**这个工具是否已注册、是否已接入 runner**。
+
+* 已注册且已接入 → ``selectable=True``，界面可勾选，可进任务；
+* 未接入（例如 ``nuclei``）→ ``selectable=False``，界面显示「未接入」并置灰，
+  即使请求里显式指名也会在**创建任务之前**被拒。
+
+判定入口是 :func:`assert_tools_selectable`，被
+``core.application.create_authorized_public_job`` 与 ``create_scan_job`` 调用，
+视图层不得自行比较。
+
+⚠️ **``internet_allowed`` 是 deprecated 兼容名**：``ToolPolicy.to_dict()``
+仍会输出这个键（值等于 ``selectable``），供尚未升级的旧客户端读取；
+``internet_allowed_tools()`` / ``assert_tools_internet_allowed()`` 作为旧函数名的
+别名保留。**新代码一律使用 ``selectable`` 系列**，不要再写「公网白名单」的语义。
+
+## 风险等级仍然保留
+
+``risk_level`` 与 ``reason`` 仍然如实标注（``naabu`` / ``nmap`` / ``dirsearch`` /
+``feroxbuster`` / ``shuffledns`` 是 ``high``）。它们**不是**闸门 —— 界面照常让
+使用者勾选，只是把「这个工具会对目标产生明显流量」讲清楚。
 
 ## 与既有边界的关系
 
 * 本模块**不判定 Scope**，也**不判定环境开关** —— 那两件事仍然只发生在
   ``core.policy`` 与 ``core.safety``；
-* 本模块只回答一个问题：「这次请求选中的工具，是否允许用于公网目标」；
-* 判定入口是 :func:`assert_tools_internet_allowed`，被
-  ``core.application.create_authorized_public_job`` 调用，视图层不得自行比较。
-
-## 第一阶段口径（方案第 8 节）
-
-只放行 ``httpx`` 与 ``subfinder``；``nmap`` / ``dirsearch`` / 爆破类工具一律
-``internet_allowed=False``，即使请求里显式指名也会在**创建任务之前**被拒。
+* 本模块只回答一个问题：「这次请求选中的工具，是否已注册且已接入」；
+* 节奏（``pace``）不是安全闸门，理由见下。
 """
 
 from __future__ import annotations
@@ -80,8 +88,8 @@ RISK_LABELS = {
 # 是第四种含义。再叫 ``category``，代码里就再也说不清「按分类查结果」与
 # 「按分类选工具」的区别，因此这里叫 ``tool_group``。
 #
-# 分组**不是**权限：它只决定界面上把工具摆在哪一栏。能不能打公网仍然只看
-# ``internet_allowed``，能不能跑仍然只看 Scope / Policy / 环境开关。
+# 分组**不是**权限：它只决定界面上把工具摆在哪一栏。能不能被勾选只看
+# ``selectable``（= 已注册且已接入），能不能跑仍然只看 Scope / Policy / 环境开关。
 
 GROUP_RECON = "recon"
 GROUP_SERVICE = "service"
@@ -145,24 +153,25 @@ def get_tool_group(key: str) -> ToolGroup | None:
 
 @dataclass(frozen=True)
 class ToolPolicy:
-    """单个工具的注册与权限元数据（方案第 5 节字段表 + 第 9 节 Tool Registry）。
+    """单个工具的注册与可用性元数据（方案第 5 节字段表 + 第 9 节 Tool Registry）。
 
     Attributes:
         tool_name: 工具名，与 ``modules/registry.RUNNER_REGISTRY`` 的键一致。
-        risk_level: ``low`` / ``medium`` / ``high``。
-        internet_allowed: 是否允许用于**公网**目标。
-        default_enabled: 是否在「自定义」策略里默认勾选。
-        reason: 面向使用者的说明，用于解释为何不允许公网。
+        risk_level: ``low`` / ``medium`` / ``high``。**只用于提示**，不是闸门。
+        selectable: 这个工具**是否已注册且已接入 runner**，因而可被使用者勾选。
+            ``False`` 只有一种情况：登记在案但尚未接入（如 ``nuclei``）。
+        default_enabled: 是否在「自定义」策略里默认勾选。测试阶段**不因为
+            「工具开放」就把它改成 True**：页面由使用者自己勾。
+        reason: 面向使用者的说明 —— 在旧口径里它解释「为什么不让打公网」，
+            现在改为解释「这个工具会对目标产生什么流量」（高风险工具仍然有）。
         description: 这个工具**做什么**（方案第 9 节 ``description``）。
-            与 ``reason`` 是两个问题：``description`` 回答「它能干什么」，
-            ``reason`` 回答「为什么现在不让它打公网」。
         tool_group: :data:`TOOL_GROUPS` 里的分组 key（方案第 9 节 ``category``；
             改名理由见本文件「工具分组」一节）。
     """
 
     tool_name: str
     risk_level: str
-    internet_allowed: bool
+    selectable: bool
     default_enabled: bool
     reason: str = ""
     # 新增字段一律**追加在 reason 之后**并带默认值：本表的构造点用的是位置参数，
@@ -170,12 +179,25 @@ class ToolPolicy:
     description: str = ""
     tool_group: str = ""
 
+    @property
+    def internet_allowed(self) -> bool:
+        """**Deprecated**：旧字段名，等价于 :attr:`selectable`。
+
+        保留它只是为了让尚未升级的调用方不至于 ``AttributeError``。
+        新代码一律用 ``selectable`` —— 「是否允许打公网」这个语义已经取消，
+        再沿用它会让读者以为还有什么公网白名单在起作用。
+        """
+        return self.selectable
+
     def to_dict(self) -> dict:
         return {
             "tool_name": self.tool_name,
             "risk_level": self.risk_level,
             "risk_label": RISK_LABELS.get(self.risk_level, self.risk_level),
-            "internet_allowed": self.internet_allowed,
+            "selectable": self.selectable,
+            # Deprecated 兼容字段：值恒等于 ``selectable``。旧前端读它不会坏，
+            # 但不要再据此写「公网白名单」的判断（新前端读 ``selectable``）。
+            "internet_allowed": self.selectable,
             "default_enabled": self.default_enabled,
             "reason": self.reason,
             # Tool Registry：让前端能动态渲染「这一栏、这个工具、干什么用的」，
@@ -188,15 +210,17 @@ class ToolPolicy:
 
 #: 17 个已注册 runner 的权限元数据与注册信息（方案第 5 节 + 第 9 节 Tool Registry）。
 #:
-#: 公网白名单刻意只有两个（方案第 8 节）：它们都是**被动/轻量**探测 ——
-#: ``subfinder`` 查的是公开数据源（证书透明度、被动 DNS 库），
-#: ``httpx`` 是对「已经存在的 URL」发一次带超时的 GET。
-#: 其余工具要么会爆破目录、要么会扫端口，全部留在公网白名单外。
+#: **测试阶段口径**：全部已注册 runner 一律 ``selectable=True`` —— 工具不再按
+#: 「能不能打公网」分类，使用者自己负责目标的合法性。``default_enabled`` 保持
+#: 原样（只有 ``subfinder`` / ``httpx`` 默认勾选），页面由使用者自己勾。
 #:
-#: ``description`` / ``tool_group`` 与 ``internet_allowed`` **互不影响**：
-#: 前两者只用于界面把工具摆对位置、说清用途；能不能打公网仍然只看
-#: ``internet_allowed``，能不能跑仍然只看 Scope / Policy / 环境开关。
-#: 把某个工具挪到别的分组**不会**让它变得可用，这一点有测试锁定。
+#: ``risk_level`` 与 ``reason`` 仍然如实标注：``naabu`` / ``nmap`` / ``dirsearch`` /
+#: ``feroxbuster`` / ``shuffledns`` 是 ``high``，提示「会对目标产生明显流量」。
+#: 它们**不是**闸门 —— 界面照常让使用者勾选。
+#:
+#: ``description`` / ``tool_group`` 与 ``selectable`` **互不影响**：前两者只用于
+#: 界面把工具摆对位置、说清用途。把某个工具挪到别的分组**不会**改变它能否被选中，
+#: 这一点有测试锁定。
 TOOL_POLICIES: dict[str, ToolPolicy] = {
     "subfinder": ToolPolicy(
         "subfinder",
@@ -217,149 +241,149 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
     "dnsx": ToolPolicy(
         "dnsx",
         RISK_LOW,
+        True,
         False,
-        False,
-        reason="DNS 批量解析会产生大量查询，本阶段不开放公网",
+        reason="批量 DNS 解析，查询量取决于输入规模",
         description="批量 DNS 解析：A / CNAME / 泛解析判定。",
         tool_group=GROUP_RECON,
     ),
     "assetfinder": ToolPolicy(
         "assetfinder",
         RISK_LOW,
+        True,
         False,
-        False,
-        reason="公开数据源查询，本阶段不开放公网",
+        reason="只查公开数据源，不向目标发包",
         description="子域发现：只查公开数据源（crt.sh 等）。",
         tool_group=GROUP_RECON,
     ),
     "waybackurls": ToolPolicy(
         "waybackurls",
         RISK_LOW,
+        True,
         False,
-        False,
-        reason="历史 URL 提取，本阶段不开放公网",
+        reason="只查 Wayback Machine，不向目标发包",
         description="历史 URL 提取：从 Wayback Machine 取回目标曾出现过的路径。",
         tool_group=GROUP_CONTENT,
     ),
     "amass": ToolPolicy(
         "amass",
         RISK_MEDIUM,
+        True,
         False,
-        False,
-        reason="深度枚举会同时主动与被动词询目标，本阶段不开放公网",
+        reason="深度枚举会同时主动与被动词询目标，耗时与流量都较大",
         description="深度子域枚举：被动数据源 + 主动解析，覆盖面最广也最重。",
         tool_group=GROUP_RECON,
     ),
     "amass_intel": ToolPolicy(
         "amass_intel",
         RISK_MEDIUM,
+        True,
         False,
-        False,
-        reason="ASN 情报收集，本阶段不开放公网",
+        reason="按组织名反查归属网段，会查询多个外部数据源",
         description="ASN / 组织情报：按组织名反查归属网段与资产。",
         tool_group=GROUP_RECON,
     ),
     "enscan": ToolPolicy(
         "enscan",
         RISK_MEDIUM,
+        True,
         False,
-        False,
-        reason="企业信息收集依赖外部数据源 Cookie，本阶段不开放公网",
+        reason="依赖外部数据源 Cookie，需先在设置里配置",
         description="企业信息收集：工商、备案（ICP）、子公司等。",
         tool_group=GROUP_RECON,
     ),
     "oneforall": ToolPolicy(
         "oneforall",
         RISK_MEDIUM,
+        True,
         False,
-        False,
-        reason="综合型工具，内部会主动请求目标，本阶段不开放公网",
+        reason="综合型工具，内部会主动请求目标做存活确认",
         description="综合子域收集：聚合多数据源并对结果做存活确认。",
         tool_group=GROUP_RECON,
     ),
     "gospider": ToolPolicy(
         "gospider",
         RISK_MEDIUM,
+        True,
         False,
-        False,
-        reason="爬虫会持续抓取目标站点，本阶段不开放公网",
+        reason="爬虫会持续抓取目标站点，请求数取决于站点规模",
         description="站点爬虫：抓链接、JS 文件、表单与第三方资源。",
         tool_group=GROUP_CONTENT,
     ),
     "katana": ToolPolicy(
         "katana",
         RISK_MEDIUM,
+        True,
         False,
-        False,
-        reason="爬虫会持续抓取目标站点，本阶段不开放公网",
+        reason="爬虫会持续抓取目标站点，请求数取决于站点规模",
         description="爬虫（可解析 JS 渲染路径）：枚举可访问的端点。",
         tool_group=GROUP_CONTENT,
     ),
     "naabu": ToolPolicy(
         "naabu",
         RISK_HIGH,
+        True,
         False,
-        False,
-        reason="端口扫描，禁止用于公网目标",
+        reason="端口扫描：会对目标产生明显流量，请确认目标属于你自己或已获授权",
         description="端口扫描：对目标网段探测开放端口。",
         tool_group=GROUP_SERVICE,
     ),
     "nmap": ToolPolicy(
         "nmap",
         RISK_HIGH,
+        True,
         False,
-        False,
-        reason="端口与服务扫描，禁止用于公网目标",
+        reason="端口与服务扫描：会对目标产生明显流量，请确认目标属于你自己或已获授权",
         description="端口与服务扫描：含服务版本识别。",
         tool_group=GROUP_SERVICE,
     ),
     "dirsearch": ToolPolicy(
         "dirsearch",
         RISK_HIGH,
+        True,
         False,
-        False,
-        reason="目录爆破，禁止用于公网目标",
+        reason="目录爆破：请求数取决于字典大小，请确认目标属于你自己或已获授权",
         description="目录与文件枚举：按字典请求常见路径。",
         tool_group=GROUP_CONTENT,
     ),
     "feroxbuster": ToolPolicy(
         "feroxbuster",
         RISK_HIGH,
+        True,
         False,
-        False,
-        reason="递归目录爆破，禁止用于公网目标",
+        reason="递归目录爆破：请求数取决于字典与站点规模，请确认目标属于你自己或已获授权",
         description="递归目录爆破：发现一层就继续往下钻。",
         tool_group=GROUP_CONTENT,
     ),
     "shuffledns": ToolPolicy(
         "shuffledns",
         RISK_HIGH,
+        True,
         False,
-        False,
-        reason="DNS 字典爆破，禁止用于公网目标",
+        reason="DNS 字典爆破：流量取决于字典大小，请确认目标属于你自己或已获授权",
         description="DNS 字典爆破：用字典批量解析子域，流量取决于字典大小。",
         tool_group=GROUP_RECON,
     ),
     "alterx": ToolPolicy(
         "alterx",
         RISK_HIGH,
+        True,
         False,
-        False,
-        reason="变体字典生成，属爆破链路前置步骤，本阶段不开放公网",
+        reason="本身只生成变体字典，不发包；产出的候选通常交给爆破类工具",
         description="变体字典生成：按已知域名拼出候选子域，供爆破类工具使用。",
         tool_group=GROUP_ASSIST,
     ),
 }
 
 #: 方案第 5 节提到但**本项目 runner 注册表里没有**的工具。
-#: 单独登记是为了让「Web 信息收集」模板能如实展示它被限制，而不是装作它可用。
+#: 单独登记是为了让界面如实展示它「已登记但未接入」，而不是装作它可用。
 KNOWN_UNAVAILABLE_TOOLS: dict[str, ToolPolicy] = {
     "nuclei": ToolPolicy(
         "nuclei",
         RISK_MEDIUM,
         False,
         False,
-        reason="模板化漏洞扫描：本阶段未接入 runner，且 internet_allowed=false",
+        reason="模板化漏洞扫描：本阶段未接入 runner，不可勾选",
         description="模板化漏洞扫描：按社区模板匹配已知漏洞指纹（尚未接入）。",
         tool_group=GROUP_VULN,
     ),
@@ -435,61 +459,115 @@ def group_tool_policies(
     ]
 
 
-def internet_allowed_tools() -> list[str]:
-    """公网白名单（方案第 8 节第一阶段只放行的那些）。"""
-    return sorted(
-        name for name, policy in TOOL_POLICIES.items() if policy.internet_allowed
-    )
+def selectable_tools() -> list[str]:
+    """当前**可勾选**的工具名单（已注册且已接入 runner）。
+
+    测试阶段口径：除未接入的 :data:`KNOWN_UNAVAILABLE_TOOLS` 外，全部已注册
+    工具都可勾选。名单只从 :data:`TOOL_POLICIES` 里取，因此「未登记」
+    永远不会被当成「可用」。
+
+    它**不是**安全闸门，只是给界面与错误消息一份一致的清单：
+    真正的闸门是 :func:`assert_tools_selectable`（创建任务前）与
+    ``core.policy`` / ``core.safety``（执行前）。
+    """
+    return sorted(name for name, policy in TOOL_POLICIES.items() if policy.selectable)
 
 
-def assert_tools_internet_allowed(tools: list[str]) -> None:
-    """校验一组工具是否都允许用于公网目标。
+def assert_tools_selectable(tools: list[str]) -> None:
+    """校验一组工具是否都**已注册且已接入**。
 
-    这是「授权公网测试模式」的**唯一**工具闸门，由 Application Service 调用；
+    这是「工具闸门」的**唯一**实现，由 Application Service 调用；
     视图层不得自行实现这段比较。
+
+    与旧函数 :func:`assert_tools_internet_allowed` 的差别只有语义：
+    旧口径拒的是「不允许打公网的工具」（``nmap`` / ``dirsearch`` …），
+    新口径拒的只有「未接入的工具」（``nuclei``）与「未登记的工具」。
 
     Args:
         tools: 已解析的工具名列表。
 
     Raises:
-        BadRequestError: 名单为空、含未登记工具，或含不允许公网的工具。
+        BadRequestError: 名单为空、含未登记工具，或含未接入的工具。
     """
     if not tools:
         raise BadRequestError("必须提供至少一个工具", details={"field": "tools"})
 
-    blocked: list[dict] = []
+    unavailable: list[dict] = []
     unknown: list[str] = []
 
     for tool_name in tools:
         policy = get_tool_policy(tool_name)
         if policy is None:
-            # 未登记的工具不能因为「没人给它写元数据」而被放行。
-            unknown.append(tool_name)
+            # ``get_tool_policy`` 只查 :data:`TOOL_POLICIES`，而 ``nuclei`` 这类
+            # 「登记在案但未接入」的工具住在 :data:`KNOWN_UNAVAILABLE_TOOLS`。
+            # 不先查这一层，``nuclei`` 会被误报成「未登记」—— 对使用者是两种
+            # 完全不同的结论（「这工具不存在」vs「它存在但本阶段没接上」），
+            # 而界面正是靠后者显示「未接入」并置灰。
+            restricted = KNOWN_UNAVAILABLE_TOOLS.get(tool_name)
+            if restricted is None:
+                # 未登记的工具不能因为「没人给它写元数据」而被放行。
+                unknown.append(tool_name)
+                continue
+            unavailable.append(
+                {
+                    "tool_name": tool_name,
+                    "risk_level": restricted.risk_level,
+                    "reason": restricted.reason or "该工具尚未接入",
+                }
+            )
             continue
-        if not policy.internet_allowed:
-            blocked.append(
+        if not policy.selectable:
+            unavailable.append(
                 {
                     "tool_name": tool_name,
                     "risk_level": policy.risk_level,
-                    "reason": policy.reason or "该工具不允许用于公网目标",
+                    "reason": policy.reason or "该工具尚未接入",
                 }
             )
 
     if unknown:
         raise BadRequestError(
-            f"以下工具没有公网权限元数据，禁止用于公网目标: {', '.join(unknown)}",
+            f"以下工具未登记，禁止使用: {', '.join(unknown)}",
             details={"field": "tools", "unknown_tools": unknown},
         )
-    if blocked:
-        names = ", ".join(item["tool_name"] for item in blocked)
+    if unavailable:
+        names = ", ".join(item["tool_name"] for item in unavailable)
         raise BadRequestError(
-            f"以下工具被禁止用于公网目标: {names}",
+            f"以下工具尚未接入，暂不可用: {names}",
             details={
                 "field": "tools",
-                "blocked_tools": blocked,
-                "internet_allowed_tools": internet_allowed_tools(),
+                "unavailable_tools": unavailable,
+                "blocked_tools": unavailable,  # Deprecated 兼容键，值同 unavailable_tools
+                "selectable_tools": selectable_tools(),
+                "internet_allowed_tools": selectable_tools(),  # Deprecated 兼容键
             },
         )
+
+
+# ── Deprecated 别名（旧函数名保留，新代码不要再用） ─────────
+#
+# 「公网白名单」这个语义已经取消：工具是否可选只取决于「是否已接入」。
+# 直接把旧名字删掉会让尚未升级的调用方 / 第三方脚本 ``ImportError``，
+# 因此保留两个薄别名，并在 docstring 里写清它们是历史包袱。
+# 新代码一律用 :func:`selectable_tools` / :func:`assert_tools_selectable`。
+
+
+def internet_allowed_tools() -> list[str]:
+    """**Deprecated**：等价于 :func:`selectable_tools`。
+
+    名字里的「公网白名单」语义已取消 —— 返回值现在等于「全部可勾选的工具」，
+    因此**不要**再拿它去判断「能不能打公网」。
+    """
+    return selectable_tools()
+
+
+def assert_tools_internet_allowed(tools: list[str]) -> None:
+    """**Deprecated**：等价于 :func:`assert_tools_selectable`。
+
+    旧口径拒绝 ``nmap`` / ``dirsearch`` 等「不允许打公网」的工具；新口径只拒绝
+    未接入的工具（``nuclei``）与未登记的工具。调用方升级时请直接换名。
+    """
+    assert_tools_selectable(tools)
 
 
 # ── 扫描策略模板（方案第 4 节步骤 3） ─────────────────────
@@ -540,21 +618,19 @@ class ScanStrategy:
 
 
 #: 三档模板（方案第 4 节；节奏维度见下一阶段方案第 5、6 节 Phase 3）。
-#: 工具名**必须**在 :data:`TOOL_POLICIES` 里且 ``internet_allowed=True``，
+#: 工具名**必须**在 :data:`TOOL_POLICIES` 里且 ``selectable=True``，
 #: 否则 :func:`resolve_strategy_tools` 会拒绝 ——
-#: 这条不变量有测试锁定，避免以后有人往模板里塞一个禁止公网的工具。
+#: 这条不变量有测试锁定，避免以后有人往模板里塞一个未接入的工具。
 #:
-#: 三档模板的节奏**一律是** ``light``：公网授权测试打的是**别人的**资产，
-#: 「拿到书面授权」不等于「可以施加任意流量」。这条默认值是硬约束的一部分，
-#: 请求体只能把它收紧（本来就是最紧的一档），永远无法放松
+#: 三档模板的节奏**一律是** ``light``：这是「不因为拿到授权就施加任意流量」的
+#: 默认值，请求体只能把它收紧（本来就是最紧的一档），永远无法放松
 #: —— 见 :func:`resolve_strategy_pace`。
-#: ``normal`` 档因此只出现在**不带模板**的历史入口（``POST /api/jobs``、
-#: 首页表单），那里的目标由使用者自己提供，行为与引入本模块之前逐字节一致。
+#: ``normal`` 档因此只出现在**不带模板**的历史入口（``POST /api/jobs``）。
 STRATEGIES: dict[str, ScanStrategy] = {
     STRATEGY_ASSET_DISCOVERY: ScanStrategy(
         key=STRATEGY_ASSET_DISCOVERY,
         name="资产发现",
-        description="被动子域枚举 + 存活探测。低频档，适合作为授权公网测试的第一步。",
+        description="被动子域枚举 + 存活探测。低频档，适合作为第一步。",
         tools=["subfinder", "httpx"],
         risk_level=RISK_LOW,
         pace=PACE_LIGHT,
@@ -571,7 +647,7 @@ STRATEGIES: dict[str, ScanStrategy] = {
     STRATEGY_CUSTOM: ScanStrategy(
         key=STRATEGY_CUSTOM,
         name="自定义模式",
-        description="由使用者自行勾选工具，仍受公网白名单与低频节奏限制。",
+        description="由使用者自行勾选工具，仍受低频节奏与执行安全层限制。",
         tools=[],
         risk_level=RISK_LOW,
         pace=PACE_LIGHT,
@@ -670,7 +746,7 @@ def resolve_strategy_tools(key: str | None, tools: list[str] | None = None) -> l
         if not requested:
             raise BadRequestError(
                 "自定义模式必须显式选择至少一个工具",
-                details={"field": "tools", "internet_allowed_tools": internet_allowed_tools()},
+                details={"field": "tools", "selectable_tools": selectable_tools()},
             )
         return requested
 

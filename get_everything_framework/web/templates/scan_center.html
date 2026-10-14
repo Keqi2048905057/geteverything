@@ -13,7 +13,6 @@
       <span class="brand-text">扫描中心</span>
     </div>
     <div class="topbar-right">
-      <a class="btn btn-ghost" href="{{ url_for('index') }}">← 任务</a>
       <a class="btn btn-ghost" href="{{ url_for('assets_page') }}">资产</a>
       <span id="health-badge" class="badge badge-unknown" title="正在检测 /health">健康检查中…</span>
       {% if is_authenticated %}
@@ -25,32 +24,33 @@
     </div>
   </header>
 
-  {# 匿名分支**只有**这一段：一句「需先登录」。真实扫描总开关告警原本挂在
-     `{% elif not real_scan_enabled %}` 上，匿名也会看到 `GEF_ALLOW_REAL_SCAN` /
-     `scope_violation` / `mock` 这些内部开关名 —— 只有登录后才有提交动作，
-     那条告警对匿名既无意义、又白送内部模型，因此移进下面的登录分支。 #}
+  {# 匿名分支**只有**这一段：一句「需先登录」。骨架自己写着 `GEF_OPEN_SCAN_MODE` /
+     `queued` / `worker` / `python -m` / `Policy` 这些后台术语，全量下发给匿名访客
+     等于把内部模型白送出去（方案第 4 节原则 2）。 #}
   {% if not is_authenticated %}
     <div class="alert alert-error" role="alert">
-      扫描中心涉及授权证据与目标清单，需先登录；未登录时相关接口返回
+      扫描中心用于提交与查看扫描任务，需先登录；未登录时相关接口返回
       <code>401 unauthenticated</code>。
     </div>
   {% endif %}
 
   <main class="layout layout-wide">
-    {# 匿名只看到上面那条「需先登录」的提示，四步骨架与项目 / 任务 / 详情面板一律
-       不渲染 —— 与首页同一口径（`app.py` 的 `build_page_context()` 对匿名不下发
-       任何数据）。骨架自己就写着 `mock` / `queued` / `worker` / `python -m` /
-       `allowed_domains` / `allowed_cidrs` / `active_scan` / `Policy` / `Scope`
-       这些后台术语，全量下发给匿名访客等于把内部模型白送出去（方案第 4 节原则 2）。
-
-       **闸门边界**：`<script>` 引入、顶部导航与上面那条登录提示必须在闸门**之外**，
+    {# **闸门边界**：`<script>` 引入、顶部导航与上面那条登录提示必须在闸门**之外**，
        否则匿名连页面都点不进来、也看不到「为什么看不到」。
        页面本身**仍然可达**（返回 200），只是不含骨架。 #}
     {% if is_authenticated %}
+    {% if not open_scan_enabled %}
+      <div class="alert alert-error" role="alert">
+        开放扫描模式未开启（<code>GEF_OPEN_SCAN_MODE=false</code>）：
+        此处提交的任务会被 <code>400 bad_request</code> 拒绝。
+        在项目根 <code>.env</code> 中设为 <code>GEF_OPEN_SCAN_MODE=true</code>
+        后<strong>重启 Web 服务</strong>，再回来提交。
+      </div>
+    {% endif %}
     {% if not real_scan_enabled %}
       <div class="alert alert-error" role="alert">
         真实扫描总开关未开启（<code>GEF_ALLOW_REAL_SCAN=false</code>）：
-        此处提交的公网任务会被 <code>403 scope_violation</code> 拒绝。
+        此处提交的真实任务会被 <code>403 scope_violation</code> 拒绝。
         在项目根 <code>.env</code> 中设为 <code>true</code> 后<strong>重启 Web 服务</strong>，再回来提交。
         演练可改用「本地验证模式（mock）」。
       </div>
@@ -60,159 +60,58 @@
       <h2>创建任务</h2>
 
       <div class="sc-warning">
-        <strong>授权公网测试模式</strong>：这里创建的任务会调用真实外部工具，对目标发出真实网络请求。
-        请只提交你自己拥有、或<strong>已获得书面授权</strong>的目标；授权说明会随项目一并写入审计日志。
-        被列入公网白名单的工具只有 <code>{{ internet_allowed_tools | join('、') }}</code>。
+        <strong>请只提交你自己拥有、或已获得授权的目标。</strong>
+        这里创建的任务会调用真实外部工具，对目标发出真实网络请求；
+        你选择的目标与工具都会随任务写入审计日志。
       </div>
 
-      <!-- 步骤 1：输入目标 → 立即试算授权 -->
+      <!-- 步骤 1：确认目标（只做格式预检，不判断授权） -->
       <div class="sc-step">
-        <h3>步骤 1 · 输入目标</h3>
+        <h3>步骤 1 · 确认目标</h3>
         <form class="form" id="check-form" autocomplete="off">
           <label for="job-target">目标（域名 / IP / 网段 / URL，逗号分隔，最多 {{ max_targets_per_job }} 个）</label>
           <!-- placeholder 只是示例，浏览器不会把它当成值提交 —— 页面**没有默认目标**。 -->
-          <input type="text" id="job-target" name="targets" placeholder="www.example.test" required>
+          <input type="text" id="job-target" name="targets" placeholder="example.com" required>
 
           <div class="sc-actions">
             <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-              检查授权
+              确认目标
             </button>
           </div>
         </form>
         <p class="sc-step-note" id="check-summary">
-          先填目标并点「检查授权」，页面会告诉你它落在哪个授权范围内、还缺哪一道闸门。
+          填好目标后点「确认目标」，页面会逐个检查格式是否合法（域名 / IP / 网段 / URL），
+          并给出规范化结果。这一步<strong>不判断授权</strong>，只做提交前的格式预检。
         </p>
         <div id="check-result"></div>
       </div>
 
-      <!-- 步骤 2：确认授权状态（方案第 7 节） -->
+      <!-- 步骤 2：选择工具（全部已接入工具可自由勾选） -->
       <div class="sc-step">
-        <h3>步骤 2 · 确认授权状态</h3>
-
-        <dl class="sc-consent-summary" id="consent-summary">
-          <dt>目标</dt><dd id="consent-target">（还没填）</dd>
-          <dt>授权状态</dt><dd id="consent-status">（还没选授权资产）</dd>
-          <dt>授权资产</dt><dd id="consent-scope">（还没选）</dd>
-        </dl>
-
-        <p class="sc-step-note">
-          授权范围是后端的权限模型，你只需要确认目标属于哪份授权资产。
-          这里选中的资产会作为本次任务的授权依据写入审计。
-        </p>
-
-        <details class="sc-details" id="scope-create" hidden>
-          <summary>还没有授权项目？先建一个授权项目</summary>
-          <div class="sc-details-body">
-            <p class="sc-step-note">
-              授权范围必须挂在授权项目下，项目的「授权说明」（谁授权、范围、凭据形式）
-              就是公网扫描的授权证据，会随任务一并写入审计。
-            </p>
-            <form class="form" id="project-form" autocomplete="off">
-              <label for="project-name">项目名称</label>
-              <input type="text" id="project-name" name="name" placeholder="学校官网授权测试" required>
-
-              <label for="project-note">授权说明（谁授权、范围、凭据形式）</label>
-              <input type="text" id="project-note" name="authorization_note"
-                     placeholder="2026-10-02 校方信息中心书面授权，仅被动信息收集" required>
-
-              <label for="project-owner">负责人（可选）</label>
-              <input type="text" id="project-owner" name="owner" placeholder="张三">
-
-              <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-                创建授权项目
-              </button>
-            </form>
-          </div>
-        </details>
-
-        {# ★ 这个 form 同时装着「两个 required 下拉」和「添加授权范围」的 submit 按钮。
-           原生约束校验跑在 submit 事件**之前**：全新用户（两下拉都只有占位项）点按钮时
-           `valueMissing=true`，浏览器直接拦下，`scan_center.js:bindScopeForm` 的
-           submit 回调**一次都不执行** —— 也就是**第一个授权范围在界面上根本建不出来**。
-           实测（headless Chrome，三状态）：状态 1/2 的 `submit` 触发 0 次，状态 3 才 1 次。
-
-           `novalidate` 关掉的只是**浏览器原生**校验，不是服务端校验：提交后仍由
-           `bindScopeForm` 自己给出文案（「还没有授权项目，请先在上面的表单里创建一个」
-           /「至少填一个授权域名或授权网段」），服务端 `POST /api/scopes` 的
-           `*` 全放行拒绝、非法 CIDR 拒绝一条都没少。
-           不要把 `novalidate` 当成「关掉校验」删掉 —— 删了就等于把首次使用锁死。 #}
-        <form class="form" id="scope-form" autocomplete="off" novalidate>
-          <label for="job-project">授权项目</label>
-          <select id="job-project" name="project_id" required>
-            <option value="">还没有授权项目</option>
-          </select>
-
-          <label for="job-scope">授权资产</label>
-          <select id="job-scope" name="scope_id" required>
-            <option value="">这个项目还没有授权范围</option>
-          </select>
-          <p class="sc-step-note" id="scope-feedback">
-            只列出所选项目下的授权资产 —— 选错项目就选不到它，从界面上避免张冠李戴。
-          </p>
-
-          <label class="check-inline sc-consent" for="job-consent">
-            <input type="checkbox" id="job-consent" name="authorization_confirmed">
-            <span>
-              我确认该目标属于授权范围。这是一次使用者确认，不是安全边界 ——
-              能不能真的扫仍然由服务端的授权判定与真实扫描开关共同决定，
-              勾上它不会放开任何权限。
-            </span>
-          </label>
-
-          <details class="sc-details" id="scope-add">
-            <summary>给这个项目新增一份授权资产</summary>
-            <div class="sc-details-body">
-              <label for="scope-domains">授权域名（逗号分隔；子域用 *.example.com 或直接写根域）</label>
-              <input type="text" id="scope-domains" name="allowed_domains" placeholder="www.example.test">
-
-              <label for="scope-cidrs">授权网段（逗号分隔，可选）</label>
-              <input type="text" id="scope-cidrs" name="allowed_cidrs" placeholder="203.0.113.0/24">
-
-              <label class="check-inline" for="scope-active">
-                <input type="checkbox" id="scope-active" name="active_scan" checked>
-                允许对该范围进行真实外部扫描
-              </label>
-
-              <button type="submit" class="btn btn-primary" {% if not is_authenticated %}disabled{% endif %}>
-                添加授权范围
-              </button>
-              <p class="sc-step-note">
-                框架禁止 <code>*</code> 这类全放行通配符，必须逐个显式列出。
-              </p>
-            </div>
-          </details>
-        </form>
-      </div>
-
-      <!-- 步骤 3：选择工具 -->
-      <div class="sc-step">
-        <h3>步骤 3 · 选择工具</h3>
+        <h3>步骤 2 · 选择工具</h3>
         <div class="sc-strategies" id="strategy-list"></div>
         <!-- 这里刻意**只放中性占位**，不放任何模板的说明文案：说明的唯一来源是
-             服务端下发的 ``strategies[].description``，由 scan_center.js 写进这个元素。
-             此前这里逐字抄了「资产发现」那一档的描述，后端改描述后它会静默过期 ——
-             首屏一闪而过的旧文案同样是「前端写死第二份」。 -->
+             服务端下发的 ``strategies[].description``，由 scan_center.js 写进这个元素。 -->
         <p class="sc-step-note" id="strategy-note">正在加载策略说明…</p>
-        <div id="restricted-note" hidden></div>
 
-        <!-- 工具清单始终显示（方案第 8 节「工具选择中心」）：选了模板时它列出
-             「本次会用哪些工具」并置灰；切到自定义模式才可勾选。清单本身由
-             /api/scan-center 动态下发，前端不写死任何工具名。 -->
+        <!-- 工具清单始终显示：模板只是**推荐组合**，点它就把它的工具勾上，
+             之后每一项仍可自由增删；未接入的工具（如 nuclei）单独列出并置灰。
+             清单本身由 /api/scan-center 动态下发，前端不写死任何工具名。 -->
         <div id="custom-tools">
-          <p class="sc-step-note" id="tool-list-note">本次会用到的工具（由所选模板决定）。</p>
-          <div class="sc-tools" id="tool-list"></div>
+          <p class="sc-step-note" id="tool-list-note">正在加载工具清单…</p>
+          <div id="tool-list"></div>
         </div>
       </div>
 
-      <!-- 步骤 4：创建任务（执行模式的选择与提交合并在这一步） -->
+      <!-- 步骤 3：创建任务（高级选项与提交合并在这一步） -->
       <div class="sc-step">
-        <h3>步骤 4 · 创建任务</h3>
+        <h3>步骤 3 · 创建任务</h3>
         <form class="form" id="job-form" autocomplete="off">
           <label for="job-operator">操作者（写入审计，可留空）</label>
           <input type="text" id="job-operator" name="operator" autocomplete="off"
                  placeholder="例如：张三 —— 本仓库没有身份体系，这是自称，不是登录身份">
           <p class="sc-step-note">
-            它会连同目标、授权资产、时间一起写入任务审计，事后能对上「谁提交的」。
+            它会连同目标、时间一起写入任务审计，事后能对上「谁提交的」。
             它是<strong>记录</strong>而不是权限：填什么都不影响能不能扫。
           </p>
 
@@ -243,59 +142,62 @@
         <p class="sc-step-note" id="job-feedback">
           提交后立即返回任务 ID（<code>queued</code>），由 worker 异步执行。
           执行前请确认 worker 已启动：<code>python -m jobs.worker</code>。
-          任务创建必须依次通过「项目 → 项目内授权资产 → 公网工具白名单 → Policy / Scope / 模式」，
+          服务端仍会校验工具是否已接入、目标格式、限速 / 超时是否越界，
           任何一条不过都会在<strong>创建任务之前</strong>被拒绝。
         </p>
       </div>
     </section>
 
+    <!-- 任务列表：默认折叠（不占位置）；带 ?job_id= 进来时自动展开，
+         否则「点通知里的链接跳过来」会看到一个收起来的面板、找不到那条任务。 -->
     <section class="panel">
-      <h2>授权项目与范围</h2>
-      <div id="project-list"></div>
-      <p class="hint">
-        关联项目<strong>不会</strong>放开任何权限 —— 能不能真实扫描仍然由
-        授权范围的<strong>真实扫描开关</strong>与环境总开关共同决定。
-      </p>
-    </section>
+      <details class="sc-jobs" id="jobs-panel"{% if focus_job_id %} open{% endif %}>
+        <summary>
+          <span class="sc-jobs-title">任务</span>
+          <span class="sc-jobs-count">
+            {% if recent_jobs %}最近 {{ recent_jobs | length }} 条{% else %}还没有任务{% endif %}
+          </span>
+        </summary>
 
-    <section class="panel">
-      <h2>任务</h2>
-      {% if recent_jobs %}
-        <table class="jobs" id="jobs-table">
-          <thead>
-            <tr>
-              <th>ID</th><th>状态</th><th>进度</th><th>模式</th><th>创建时间</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for job in recent_jobs %}
-              <tr data-job-id="{{ job.id }}" class="{% if job.id == focus_job_id %}job-focus{% endif %}">
-                <td class="mono">{{ job.id }}</td>
-                <td><span class="status status-{{ job.status }}">{{ job.status }}</span>
-                    {% if job.error_code %}<span class="mono err">{{ job.error_code }}</span>{% endif %}
-                </td>
-                <td>
-                  <div class="progress" title="{{ job.done_steps }}/{{ job.total_steps }}">
-                    <span style="width: {{ job.progress }}%"></span>
-                  </div>
-                  <span class="mono">{{ job.progress }}%</span>
-                </td>
-                <td class="mono">{{ job.mode }}</td>
-                <td class="mono">{{ job.created_at }}</td>
-                <td>
-                  <button type="button" class="btn btn-ghost job-detail" data-job-id="{{ job.id }}">详情</button>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        <p class="hint">状态每 3 秒自动刷新；「详情」展开每个步骤的状态、错误码与耗时。</p>
-      {% else %}
-        <p class="hint">
-          还没有任务。按左侧四步走：填目标 → 确认授权状态 → 选工具 → 创建任务。
-          创建后若状态一直停在 <code>queued</code>，说明 worker 没在跑。
-        </p>
-      {% endif %}
+        <div class="sc-details-body">
+          {% if recent_jobs %}
+            <table class="jobs" id="jobs-table">
+              <thead>
+                <tr>
+                  <th>ID</th><th>状态</th><th>进度</th><th>模式</th><th>创建时间</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for job in recent_jobs %}
+                  <tr data-job-id="{{ job.id }}" class="{% if job.id == focus_job_id %}job-focus{% endif %}">
+                    <td class="mono">{{ job.id }}</td>
+                    <td><span class="status status-{{ job.status }}">{{ job.status }}</span>
+                        {% if job.error_code %}<span class="mono err">{{ job.error_code }}</span>{% endif %}
+                    </td>
+                    <td>
+                      <div class="progress" title="{{ job.done_steps }}/{{ job.total_steps }}">
+                        <span style="width: {{ job.progress }}%"></span>
+                      </div>
+                      <span class="mono">{{ job.progress }}%</span>
+                    </td>
+                    <td class="mono">{{ job.mode }}</td>
+                    <td class="mono">{{ job.created_at }}</td>
+                    <td>
+                      <button type="button" class="btn btn-ghost job-detail" data-job-id="{{ job.id }}">详情</button>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            <p class="hint">状态每 3 秒自动刷新；「详情」展开每个步骤的状态、错误码与耗时。</p>
+          {% else %}
+            <p class="hint">
+              还没有任务。按上面三步走：确认目标 → 选工具 → 创建任务。
+              创建后若状态一直停在 <code>queued</code>，说明 worker 没在跑。
+            </p>
+          {% endif %}
+        </div>
+      </details>
     </section>
 
     <section class="panel" id="job-detail-panel" hidden>

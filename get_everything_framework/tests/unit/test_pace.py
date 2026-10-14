@@ -141,12 +141,34 @@ def test_normal_budget_is_empty():
     assert pace.tool_overrides_for("normal", "httpx") == {}
 
 
-def test_light_budget_covers_the_public_whitelist():
-    """公网白名单里的每个工具都要有低频预算，否则「低频」对它就是空话。"""
-    from core.tool_registry import internet_allowed_tools
+def test_light_budget_covers_the_tools_it_defines():
+    """低频预算**恰好**只覆盖它定义的那两个轻量工具。
 
-    for tool_name in internet_allowed_tools():
-        assert pace.tool_overrides_for("light", tool_name), f"{tool_name} 没有低频预算"
+    口径已变更：过去是「公网白名单里的每个工具都要有低频预算」，
+    现在工具已全部开放勾选（见 ``core.tool_registry.selectable_tools``），
+    但低频档**只**为 ``subfinder`` / ``httpx`` 定义预算，其余工具沿用自身
+    默认配置。理由写在 ``core/pace.py`` 的 ``LIGHT_TOOL_BUDGET`` 注释里：
+    「这里不假装知道 nmap 打别人的站该多快」——
+    给爆破类工具编一个并发与速率，等于凭空发明一个既非工具默认、
+    也非使用者选择的值，反而更难解释。
+
+    另一半守卫同样重要：**未定义预算 ≠ KeyError**。已开放的工具在低频档下
+    必须安全退化为 ``{}``（沿用工具默认配置），绝不能因为「这个名字不在表里」
+    就把任务弄挂 —— ``jobs/executor`` 拿到的是一次普通调用，不是异常。
+    """
+    from core.tool_registry import selectable_tools
+
+    assert set(pace.LIGHT_TOOL_BUDGET) == {"subfinder", "httpx"}
+
+    for tool_name in selectable_tools():
+        overrides = pace.tool_overrides_for("light", tool_name)
+        assert isinstance(overrides, dict), f"{tool_name} 的低频覆盖必须是字典"
+        # 要么空字典（未定义预算，沿用工具默认），要么非空（真的降了速）。
+        # 中间状态（例如返回 None）会让 executor 的合并逻辑直接炸。
+        if tool_name in pace.LIGHT_TOOL_BUDGET:
+            assert overrides, f"{tool_name} 定义了低频预算却返回空字典"
+        else:
+            assert overrides == {}, f"{tool_name} 没有低频预算，应当退化为空字典"
 
 
 def test_light_budget_is_stricter_than_the_tool_defaults():

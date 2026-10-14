@@ -1,51 +1,57 @@
 /* Get Everything Framework — 扫描中心前端
  *
- * 页面上的四步（下一阶段规划方案第 5.2 节的新流程）：
+ * 页面上的三步（测试阶段口径）：
  *
- *   步骤 1 · 输入目标      → 填目标，点「检查授权」调 POST /api/public-jobs/check
- *   步骤 2 · 确认授权状态  → 看「目标 / 授权状态 / 授权资产」三行摘要，
- *                            选项目 + 选授权资产，并勾选「我确认该目标属于授权范围」
- *   步骤 3 · 选择工具      → 选 Scan Profile（资产发现 / Web 基础检查 / 自定义），
- *                            每张卡片上同时写明**节奏**（低频 / 常规）
- *   步骤 4 · 创建任务      → mock 或 real，创建任务
+ *   步骤 1 · 确认目标  → 填目标，点「确认目标」调 POST /api/public-jobs/check，
+ *                        逐个回报格式是否合法、规范化结果、是否命中排除列表
+ *   步骤 2 · 选择工具  → 选模板（资产发现 / Web 基础检查 / 自定义）作为**推荐组合**，
+ *                        下面每个已接入的工具都可以自由勾选
+ *   步骤 3 · 创建任务  → mock 或 real、限速 / 超时 → 创建任务
  *
- * 与旧流程的差别（方案第 2 节「删除重复步骤」）：原来的「步骤 2 选项目 → 再选范围」
- * 两个概念被合并成一步「确认授权状态」，页面只要求用户回答「目标属于哪份授权」，
- * 不再要求他先理解项目 / 范围 / scope_id 这套内部模型。
+ * ── 与上一版的差别（测试阶段改造） ──────────────────────────────
+ * 授权业务整体取消，因此这一版**删掉**了：授权项目列表、项目下的范围下拉、
+ * 「新增授权范围」表单、「我确认该目标属于授权范围」勾选、以及把 scope_id /
+ * project_id 随请求发出去的那两行。步骤 1 也从「检查授权 / 还缺哪一道闸门」
+ * 改成纯粹的**目标格式预检** —— 后端 /api/public-jobs/check 已经不再返回
+ * `eligible_scope_ids` / `blocker` / `matches`，前端自然也不该再解释它们。
  *
- * ── Scan Profile = 工具组合 + 节奏（下一阶段方案第 5、6 节 Phase 3） ──
- * 节奏（`core/pace.py`）是「这个 Profile 打得多快」，不是权限：
+ * 删除的是**授权业务流程**，不是安全边界：目标格式、排除列表、SSRF 防护、
+ * 限速 / 超时 / 并发、审计与结构化日志全部留在服务端，一条没少。
+ *
+ * ── 工具为什么可以自由勾选 ────────────────────────────────────
+ * 服务端下发的每个工具条目带 `selectable`：**已注册且已接入 runner** 的工具
+ * 才为 true。前端据此决定勾选框能不能点 —— 这是**可用性**提示，不是安全边界：
+ * 就算有人手改 DOM 把 `nuclei` 勾上并提交，服务端
+ * `assert_tools_selectable()` 仍会在创建任务**之前**拒绝它。
+ * （旧字段名 `internet_allowed` 是 deprecated 兼容键，前端不再使用。）
+ *
+ * ── Scan Profile = 工具组合 + 节奏（`core/pace.py`） ───────────
+ * 节奏是「这一次打得多快」，不是权限：
  *  * `light`  低频 —— 后端把并发与每秒请求数压下来，并在真实步骤之间留间隔；
  *  * `normal` 常规 —— 完全沿用工具自身配置（历史行为）。
  * 前端的责任只有两件：**如实显示**，以及**原样转发**。合并规则（模板档位与
  * 请求档位取更保守的一档）只在服务端实现一次，因此这里把 pace 改错也放松不了
  * 任何东西 —— 这正是「前端不是安全边界」的既有约定。
  *
- * ── 为什么第 1 步是「检查授权」而不是直接创建任务 ──────────────
- * 以前用户填完目标点创建，越界 / 没开 active_scan / 没开环境开关这三种情况
- * 都表现为同一个 `403 scope_violation`，只能靠读错误消息反推缺了哪一道。
- * 现在第 1 步先把结论摊开：目标落在哪个范围内、还缺什么。
- * 这一步**只读**，不创建任务、不写审计；匹配用的是 Policy 内部同一个
- * `Scope.match_target`，所以「试算说能过」与「真提交能过」不会不一致。
+ * ── 模板与自由勾选如何共存 ────────────────────────────────────
+ * 点一张模板卡片 = 把它的工具**勾上**（仍然可以再改），而不是把清单锁死。
+ * 提交时前端比一次集合：
  *
- * ── 展示口径（Phase 1：隐藏内部 ID、去后台术语） ──────────────
- * 用户看到的是
+ *   * 勾选结果与当前模板的工具**一致**   → 原样提交该模板，不传 tools；
+ *   * 勾选结果被改过（或选的就是自定义） → 提交 `strategy=custom` + `tools=[…]`。
  *
- *     学校官网
- *     www.example.test
- *     已授权
+ * 这样「用户实际会跑哪些工具」与「审计里记的策略名」永远对得上：改过就说
+ * 自定义，没改就记模板名。判定仍在服务端（`resolve_strategy_tools`）。
  *
- * 而不是 `scope_9f3c…`。所有可见文案都走 scopeLabel() / projectLabel() /
- * describeScopeTargets() / scopeStateLabel() 四个翻译函数；实体 ID 只作为
- * `<option value>` 与请求体字段（不可见）。
- * 目标清单来自既有的、需登录的 `GET /api/scopes`，不塞进 `/api/scan-center`
- * —— 那条接口「不下发目标清单」的既有约定与测试保持有效。
+ * ── 展示口径 ──────────────────────────────────────────────────
+ * 工具清单、能力分组、每个工具的用途与风险等级、限速上下界、模板说明**全部**
+ * 来自 `GET /api/scan-center`：前端一个工具名、一个栏位名都不写死，后端加一个
+ * 工具页面就自动多一行。模板说明的唯一来源是 `strategies[].description`。
  *
  * ── 安全约定 ──────────────────────────────────────────────────
  *   * 每一个提交动作都只是**转发**到 API，闸门全部在服务端
- *     （项目 → 项目内范围 → 公网工具白名单 → Policy / Scope / 模式）；
- *     前端不做、也不能做「能不能扫」的判断；
- *   * 被禁用的工具在界面上置灰，这是**可用性**提示而不是安全边界；
+ *     （工具是否已接入 → Policy / 模式开关）；
+ *   * 被禁用的工具在界面上置灰并写明原因；
  *   * 不使用任何前端框架、不引入 CDN 资源。
  */
 
@@ -64,28 +70,10 @@
   var metadata = null;
   /** pace key → {pace, pace_label, pace_description, step_delay_seconds} */
   var paceIndex = {};
-  /** scope_id → Scope 对象（来自 `GET /api/scopes`），用于把 ID 翻译成人话。 */
-  var scopeIndex = {};
-  /** 上一次试算的原始目标，用于「补范围」时自动带过去。 */
+  /** 上一次预检的原始目标，用于判断「这份结论是不是还对得上输入框」。 */
   var lastTargets = [];
-  /** 上一次试算的完整响应，用于步骤 2 的「授权状态」摘要（只读回显）。 */
+  /** 上一次预检的完整响应（只用于回显，不参与任何判定）。 */
   var lastCheckPayload = null;
-
-  // 缺哪一道闸门 → 人话。后端给 `blocker`，这里只做翻译，不做判定。
-  var BLOCKER_LABELS = {
-    invalid_target: "目标格式不合法",
-    no_scope: "还没有任何授权范围",
-    not_authorized: "这个目标不在任何已授权范围内",
-    scope_inactive: "目标已被授权，但该范围没有开启真实扫描",
-    env_disabled: "范围已授权，但环境总开关 GEF_ALLOW_REAL_SCAN 没开",
-  };
-
-  var STATUS_LABELS = {
-    ready: "已授权，可真实扫描",
-    scope_inactive: "已授权，但未开启真实扫描",
-    excluded: "命中排除列表（排除优先，等于拒绝）",
-    out_of_scope: "不在该范围内",
-  };
 
   function $(id) {
     return document.getElementById(id);
@@ -135,110 +123,42 @@
       .filter(Boolean);
   }
 
-  /** 目标输入框**此刻**的内容（用户可能刚改过，与上一次试算无关）。 */
+  /** 两个数组是否**同集合**（顺序无关，用于「勾选结果 vs 模板工具」的比较）。 */
+  function sameSet(a, b) {
+    var left = (a || []).slice().sort();
+    var right = (b || []).slice().sort();
+    if (left.length !== right.length) return false;
+    for (var i = 0; i < left.length; i += 1) {
+      if (left[i] !== right[i]) return false;
+    }
+    return true;
+  }
+
+  /** 目标输入框**此刻**的内容（用户可能刚改过，与上一次预检无关）。 */
   function currentTargets() {
     var input = $("job-target");
     return splitList(input ? input.value : "");
   }
 
   /**
-   * 上一次试算结果是否仍然对应当前输入。
+   * 上一次预检结果是否仍然对应当前输入。
    *
-   * 试算结论（能不能扫、命中哪份授权资产）是**针对某一组目标**算出来的；
-   * 用户改完输入框却没重新点「检查授权」时，那份结论就只是一段历史。
-   * 页面若继续拿它当依据，就会出现「摘要写着 A 已授权、实际提交的是 B」
-   * 这种最难排查的错 —— 用户看到的是绿灯，服务端按 B 判定。
+   * 预检结论是**针对某一组目标**算出来的；用户改完输入框却没重新点「确认目标」时，
+   * 那份结论就只是一段历史。页面若继续拿它当依据，就会出现「摘要说 A 合法、
+   * 实际提交的是 B」这种最难排查的错。
    */
   function checkIsFresh() {
     if (!lastCheckPayload || !lastTargets.length) return false;
     return currentTargets().join("\u0000") === lastTargets.join("\u0000");
   }
 
-  /** 输入变了：把上一次试算的结论作废，并如实告诉用户要重新检查。 */
+  /** 输入变了：把上一次预检的结论作废，并如实告诉用户要重新确认。 */
   function invalidateCheckResult() {
     lastCheckPayload = null;
     lastTargets = [];
     var box = $("check-result");
     if (box) box.textContent = "";
-    setText("check-summary", "目标已改动，请重新点「检查授权」再创建任务。", false);
-    renderConsentSummary();
-  }
-
-  // ── 把内部 ID 翻译成用户能读的文案 ────────────────────────
-
-  /** 某个范围的授权目标（域名 + 网段），只用于展示。 */
-  function describeScopeTargets(scope) {
-    if (!scope) return "";
-    var parts = [];
-    if (scope.allowed_domains && scope.allowed_domains.length) {
-      parts.push(scope.allowed_domains.join("、"));
-    }
-    if (scope.allowed_cidrs && scope.allowed_cidrs.length) {
-      parts.push(scope.allowed_cidrs.join("、"));
-    }
-    return parts.join("、") || "（未填写目标）";
-  }
-
-  /** 范围的授权状态文案。 */
-  function scopeStateLabel(scope) {
-    if (!scope) return "未知";
-    return scope.active_scan ? "已授权" : "仅被动（未开真实扫描）";
-  }
-
-  /**
-   * 下拉框里的一项范围：`学校官网 · www.example.test · 已授权`。
-   *
-   * 这是「隐藏 Scope ID」的落点 —— 返回值里**不含**任何实体 ID。
-   */
-  function scopeLabel(scopeId) {
-    var scope = scopeIndex[scopeId];
-    if (!scope) return "授权范围（名称待读取）";
-    return scope.name + " · " + describeScopeTargets(scope) + " · " + scopeStateLabel(scope);
-  }
-
-  /** 项目下拉框文案：只用名称与负责人，不带 `proj_…`。 */
-  function projectLabel(project) {
-    if (!project) return "授权项目";
-    return project.name + (project.owner ? " · 负责人 " + project.owner : "");
-  }
-
-  function projectById(projectId) {
-    if (!metadata || !metadata.projects) return null;
-    return (
-      metadata.projects.filter(function (item) {
-        return item.id === projectId;
-      })[0] || null
-    );
-  }
-
-  function scopeById(scopeId) {
-    return scopeIndex[scopeId] || null;
-  }
-
-  // 服务端统一的错误体形状：error_code + error_message（+ details）。
-  function describeError(result) {
-    var data = result.data || {};
-    var message = data.error_message || ("HTTP " + result.status);
-    var details = data.details || {};
-
-    if (details.blocked_tools && details.blocked_tools.length) {
-      var names = details.blocked_tools.map(function (item) {
-        return item.tool_name + "（" + (item.reason || item.risk_level) + "）";
-      });
-      message += "；被禁工具: " + names.join("、");
-    }
-    if (details.unknown_tools && details.unknown_tools.length) {
-      message += "；未登记工具: " + details.unknown_tools.join("、");
-    }
-    if (details.attached_scope_ids) {
-      // 不把 `scope_…` 原样倒给用户；能翻译就翻译，翻不出来只说数量。
-      var attached = details.attached_scope_ids.map(function (id) {
-        var scope = scopeById(id);
-        return scope ? scope.name : "一个已关联范围";
-      });
-      message += "；该项目当前已关联: " + (attached.join("、") || "（还没有）");
-    }
-    return message;
+    setText("check-summary", "目标已改动，请重新点「确认目标」。", false);
   }
 
   function riskBadge(tool) {
@@ -259,7 +179,7 @@
   }
 
   /**
-   * 按服务端下发的 ``limits`` 元数据渲染限速 / 超时输入框（Phase 3）。
+   * 按服务端下发的 ``limits`` 元数据渲染限速 / 超时输入框。
    *
    * 字段名（``rate_limit`` / ``timeout_seconds``）、上下界与中文说明**全部**来自
    * ``/api/scan-center`` 的 ``limits`` —— 与工具清单、分组、节奏同一口径：
@@ -324,50 +244,51 @@
     return payload;
   }
 
-  // ── 元数据（项目 / 范围 / 策略 / 工具权限） ───────────────
+  // 服务端统一的错误体形状：error_code + error_message（+ details）。
+  function describeError(result) {
+    var data = result.data || {};
+    var message = data.error_message || ("HTTP " + result.status);
+    var details = data.details || {};
+
+    // 未接入 / 未登记的工具。``unavailable_tools`` 是当前字段名，
+    // ``blocked_tools`` 是 deprecated 兼容字段（旧服务端只给后者）。
+    var unavailable = details.unavailable_tools || details.blocked_tools || [];
+    if (unavailable.length) {
+      var names = unavailable.map(function (item) {
+        if (typeof item === "string") return item;
+        return item.tool_name + "（" + (item.reason || item.risk_level) + "）";
+      });
+      message += "；不可用工具: " + names.join("、");
+    }
+    if (details.unknown_tools && details.unknown_tools.length) {
+      message += "；未登记工具: " + details.unknown_tools.join("、");
+    }
+    return message;
+  }
+
+  // ── 元数据（策略 / 工具 / 分组 / 限速） ──────────────────
 
   function loadMetadata() {
-    return Promise.all([
-      getJSON("/api/scan-center").catch(function (err) {
-        if (String(err.message).indexOf("401") !== -1) return null; // 未登录：页面已有提示
+    return getJSON("/api/scan-center")
+      .catch(function (err) {
+        // 未登录：页面已有提示，静默停手。
+        if (String(err.message).indexOf("401") !== -1) return null;
         throw err;
-      }),
-      getJSON("/api/scopes").catch(function () {
-        return null; // 范围读取失败不阻断其余渲染
-      }),
-    ])
-      .then(function (results) {
-        var center = results[0];
-        var scopes = results[1];
+      })
+      .then(function (center) {
         if (!center) return;
-
-        scopeIndex = {};
-        if (scopes && scopes.scopes) {
-          scopes.scopes.forEach(function (scope) {
-            scopeIndex[scope.id] = scope;
-          });
-        }
-
         metadata = center;
         paceIndex = {};
         (center.paces || []).forEach(function (item) {
           paceIndex[item.pace] = item;
         });
         renderStrategies(center.strategies, center.restricted_tools);
-        // 工具清单跟着**当前选中**的模板渲染：首屏要能看见「这一次会用哪些工具」，
-        // 而不是等用户点一下卡片才出现。模板模式下列表置灰但可见。
+        // 工具清单跟着**当前选中**的模板渲染：首屏就要能看见「这一次会用哪些工具」。
         // 分组元数据同样来自服务端（``tool_groups``），前端不写死任何栏位名。
-        renderToolList(
-          center.tools,
-          center.restricted_tools,
-          activeStrategyOf(center.strategies),
-          center.tool_groups
-        );
-        fillProjectSelects(center.projects);
-        renderProjects(center.projects);
-        // 限速 / 超时的输入框同样由服务端元数据生成（Phase 3）。
+        var active = activeStrategyOf(center.strategies);
+        renderToolList(center.tools, center.restricted_tools, center.tool_groups, presetOf(active));
+        // 限速 / 超时的输入框同样由服务端元数据生成。
         renderLimits(center.limits);
-        renderConsentSummary();
       })
       .catch(function () {
         setText("check-summary", "扫描中心元数据读取失败，请刷新页面重试。", true);
@@ -381,6 +302,16 @@
       if (item.key === ACTIVE_STRATEGY) found = item;
     });
     return found;
+  }
+
+  /** 模板 → 「要预勾哪些工具」的集合；自定义模板或空模板返回 ``null``（用默认勾选）。 */
+  function presetOf(strategy) {
+    if (!strategy || strategy.key === "custom" || !(strategy.tools || []).length) return null;
+    var preset = {};
+    strategy.tools.forEach(function (name) {
+      preset[name] = true;
+    });
+    return preset;
   }
 
   function renderStrategies(strategies, restrictedTools) {
@@ -434,93 +365,52 @@
           node.classList.toggle("is-selected", node.getAttribute("data-strategy") === strategy.key);
         });
         setText("strategy-note", strategy.name + "：" + strategy.description, false);
-        // 工具清单要跟着模板走：模板模式下置灰并显示模板的工具，
-        // 自定义模式下开放勾选。清单数据仍来自服务端（不发第二次请求）。
+        // 模板只是**推荐组合**：点它就把它的工具勾上，之后仍然可以自由增删。
         if (metadata) {
           renderToolList(
             metadata.tools,
             metadata.restricted_tools,
-            strategy,
-            metadata.tool_groups
+            metadata.tool_groups,
+            presetOf(strategy)
           );
         }
-        setText(
-          "tool-list-note",
-          strategy.key === "custom"
-            ? "自定义模式：勾选要用的工具（被禁工具无法勾选）。"
-            : "本次会用到的工具（由所选模板决定）。",
-          false
-        );
       });
       box.appendChild(label);
     });
 
-    // 首屏（还没点过任何卡片）也要显示**当前选中那一个**的节奏，
+    // 首屏（还没点过任何卡片）也要显示**当前选中那一个**的说明与节奏，
     // 而不是 HTML 里写死的一句 —— 写死的文案会随着模板改动悄悄过期。
-    var active = null;
-    strategies.forEach(function (strategy) {
-      if (strategy.key === ACTIVE_STRATEGY) active = strategy;
-    });
+    var active = activeStrategyOf(strategies);
     if (active) {
       ACTIVE_PACE = active.pace || ACTIVE_PACE;
       setText("strategy-note", active.name + "：" + active.description, false);
-      setText(
-        "tool-list-note",
-        active.key === "custom"
-          ? "自定义模式：勾选要用的工具（被禁工具无法勾选）。"
-          : "本次会用到的工具（由所选模板决定）。",
-        false
-      );
-    }
-
-    // 受限工具单独说明一次，避免用户以为界面漏了 nuclei。
-    // 写进**独立**的提示元素，不再往 strategy-note 上累加 ——
-    // 累加会让「切换策略」后的说明里混着上一次的尾巴。
-    var restrictedBox = $("restricted-note");
-    if (restrictedBox) {
-      restrictedBox.textContent = "";
-      if (restrictedTools && restrictedTools.length) {
-        restrictedBox.hidden = false;
-        restrictedBox.appendChild(
-          hint(
-            "本阶段未接入/未开放的工具：" +
-              restrictedTools
-                .map(function (item) {
-                  return item.tool_name + "（" + item.reason + "）";
-                })
-                .join("；")
-          )
-        );
-      } else {
-        restrictedBox.hidden = true;
-      }
     }
   }
 
   /**
-   * 渲染**一个**工具条目（勾选框 + 名称 + 风险徽标 + 用途说明 + 权限说明）。
+   * 渲染**一个**工具条目（勾选框 + 名称 + 风险徽标 + 用途说明 + 可用性说明）。
    *
    * 抽成独立函数是因为清单要按能力分组渲染多次；条目形态只有一份，
    * 因此不会出现「分组里长一个样、扁平列表里长另一个样」。
    *
-   * @param {Object} tool 服务端下发的工具条目（``tool_name`` / ``internet_allowed`` …）。
-   * @param {boolean} isCustom 当前是否自定义模式（决定能否勾选）。
-   * @param {Object} preset 模板模式下「本次会用到的工具」集合。
+   * @param {Object} tool 服务端下发的工具条目（``tool_name`` / ``selectable`` …）。
+   * @param {Object|null} preset 模板预设集合；``null`` 表示按 ``default_enabled`` 勾选。
    */
-  function renderToolRow(tool, isCustom, preset) {
-    var locked = tool.internet_allowed && !isCustom;
+  function renderToolRow(tool, preset) {
+    var selectable = Boolean(tool.selectable);
     var row = document.createElement("label");
-    row.className = "sc-tool" + (tool.internet_allowed ? "" : " is-blocked");
+    row.className = "sc-tool" + (selectable ? "" : " is-blocked");
 
     var check = document.createElement("input");
     check.type = "checkbox";
     check.name = "custom_tool";
     check.value = tool.tool_name;
-    // 白名单外的工具永远不可勾；模板模式下白名单内的也置灰（由模板决定）。
-    check.disabled = !tool.internet_allowed || locked;
-    check.checked = isCustom
-      ? Boolean(tool.default_enabled && tool.internet_allowed)
-      : Boolean(preset[tool.tool_name]);
+    // 未接入的工具永远不可勾 —— 这是**可用性**提示，真正的闸门是服务端的
+    // ``assert_tools_selectable()``（手改 DOM 也过不去）。
+    check.disabled = !selectable;
+    if (selectable) {
+      check.checked = preset ? Boolean(preset[tool.tool_name]) : Boolean(tool.default_enabled);
+    }
     row.appendChild(check);
 
     var body = document.createElement("span");
@@ -540,12 +430,13 @@
 
     var meta = document.createElement("span");
     meta.className = "sc-tool-meta";
-    if (!tool.internet_allowed) {
-      meta.textContent = "禁止公网 · " + (tool.reason || "未开放");
-    } else if (locked) {
-      meta.textContent = "本次由所选模板决定，要改请切到自定义模式";
+    if (!selectable) {
+      // 未接入的（如 nuclei）如实说明原因，不让用户以为是界面漏了。
+      meta.textContent = "未接入 · " + (tool.reason || "本阶段不可用");
+    } else if (tool.default_enabled) {
+      meta.textContent = "默认勾选 · 可自由增删";
     } else {
-      meta.textContent = "允许公网 · 可勾选";
+      meta.textContent = "可勾选";
     }
     body.appendChild(meta);
     row.appendChild(body);
@@ -554,57 +445,37 @@
   }
 
   /**
-   * 渲染工具清单（方案第 8 节「工具选择中心」+ 第 9 节 Tool Registry）。
+   * 渲染工具清单（能力分组 + 每个工具一行）。
    *
    * 关键约定：**工具清单与能力分组都来自服务端**（``GET /api/scan-center`` 的
    * ``tool_groups``；每一栏的说明、每个工具的用途都出自同一份
    * ``ToolPolicy.to_dict()``）。前端一个工具名、一个栏位名都不写死 ——
-   * 新增工具或调整分组时改后端即可，页面自动出现。这正是方案第 9 节
-   * 「不要把工具写死在前端」的落地。
+   * 新增工具或调整分组时改后端即可，页面自动出现。
    *
-   * 分组为空时**照样渲染栏位**并写明「本阶段暂无可用工具」：方案点名的
-   * 「技术识别」「漏洞检测」本阶段确实没有可跑的工具，如实呈现比悄悄藏掉
+   * 分组为空时**照样渲染栏位**并写明「本阶段暂无可用工具」：如实呈现比悄悄藏掉
    * 更诚实 —— 藏掉会让使用者以为是自己没找到。
    *
-   * 两种勾选状态：
+   * ``nuclei`` 这类未接入的工具由服务端放在 ``restricted_tools`` 里，归到它
+   * **自己声明的**分组（``tool_group``）下并置灰，不写死任何映射。
    *
-   * * 选了**模板**（资产发现 / Web 基础检查）：清单仍然列出来，勾选状态是
-   *   模板决定的，因此**置灰不可改** —— 用户能看清「这一次会用哪些工具」，
-   *   但改不了；要改就切到自定义模式。把模板的工具藏起来是更差的做法：
-   *   用户点完卡片反而不知道要跑什么。
-   * * 选了**自定义模式**：可勾选；公网白名单之外的一律置灰并给出原因
-   *   （``internet_allowed=false``）—— 这是**可用性**提示，真正的闸门在服务端。
-   *
-   * @param {Array} tools 服务端下发的工具权限表（含 ``tool_name`` / ``internet_allowed`` …）。
-   * @param {Array} restrictedTools 未接入 / 未开放的工具（如 nuclei），只展示。
-   * @param {Object|null} strategy 当前选中的模板；``custom`` 或空表示用户自选。
+   * @param {Array} tools 服务端下发的工具表（含 ``tools`` / ``selectable`` …）。
+   * @param {Array} restrictedTools 未接入的工具（如 nuclei），只展示、不可勾。
    * @param {Array} groups 服务端下发的能力分组（``key`` / ``name`` / ``description`` / ``tools``）。
    *   缺失时退回扁平清单，行为与引入分组之前一致。
+   * @param {Object|null} preset 模板预设集合；``null`` 表示按各自 ``default_enabled`` 勾选。
    */
-  function renderToolList(tools, restrictedTools, strategy, groups) {
+  function renderToolList(tools, restrictedTools, groups, preset) {
     var box = $("tool-list");
     if (!box) return;
     box.textContent = "";
-
-    var isCustom = !strategy || strategy.key === "custom";
-    // 模板模式下「本次会用到的工具」由模板决定；自定义模式下由用户勾。
-    var preset = {};
-    if (!isCustom) {
-      (strategy.tools || []).forEach(function (name) {
-        preset[name] = true;
-      });
-    }
 
     if (groups && groups.length) {
       var placed = {};
       var restricted = restrictedTools || [];
 
       groups.forEach(function (group) {
-        // 未接入 / 未开放的工具（如 nuclei）也归到它**自己声明的**分组里：
-        // 服务端给每条 restricted tool 也带上 ``tool_group``，因此这里不需要
-        // 写死任何「nuclei 属于漏洞检测」这类映射 —— 方案第 8 节那张表里
-        // nuclei 归在「漏洞检测」栏，靠的就是这个字段。
-        // 空栏位照样渲染：如实说明「本阶段暂无可用工具」比悄悄藏掉更诚实。
+        // 未接入的工具也归到它**自己声明的**分组里：服务端给每条 restricted tool
+        // 也带上 ``tool_group``，因此这里不需要写死任何「nuclei 属于漏洞检测」映射。
         var unopened = restricted.filter(function (tool) {
           return tool.tool_group === group.key;
         });
@@ -625,7 +496,7 @@
         if (available.length) {
           count.textContent = available.length + " 个";
         } else if (unopened.length) {
-          count.textContent = "本阶段暂无可用工具（仅列出未开放项）";
+          count.textContent = "本阶段暂无可用工具（仅列出未接入项）";
         } else {
           count.textContent = "本阶段暂无可用工具";
         }
@@ -643,11 +514,11 @@
         grid.className = "sc-tools";
         available.forEach(function (tool) {
           placed[tool.tool_name] = true;
-          grid.appendChild(renderToolRow(tool, isCustom, preset));
+          grid.appendChild(renderToolRow(tool, preset));
         });
         unopened.forEach(function (tool) {
           placed[tool.tool_name] = true;
-          grid.appendChild(renderToolRow(tool, isCustom, preset));
+          grid.appendChild(renderToolRow(tool, preset));
         });
         section.appendChild(grid);
         box.appendChild(section);
@@ -663,7 +534,7 @@
         var restGrid = document.createElement("div");
         restGrid.className = "sc-tools";
         leftovers.forEach(function (tool) {
-          restGrid.appendChild(renderToolRow(tool, isCustom, preset));
+          restGrid.appendChild(renderToolRow(tool, preset));
         });
         box.appendChild(restGrid);
       }
@@ -674,241 +545,40 @@
     var flat = document.createElement("div");
     flat.className = "sc-tools";
     tools.concat(restrictedTools || []).forEach(function (tool) {
-      flat.appendChild(renderToolRow(tool, isCustom, preset));
+      flat.appendChild(renderToolRow(tool, preset));
     });
     box.appendChild(flat);
   }
 
-  function renderProjects(projects) {
-    var box = $("project-list");
-    if (!box) return;
-    box.textContent = "";
-
-    if (!projects.length) {
-      box.appendChild(hint("还没有授权项目。在步骤 2 里创建一个。"));
-      return;
-    }
-
-    projects.forEach(function (project) {
-      var row = document.createElement("div");
-      row.className = "sc-project-row";
-
-      var head = document.createElement("div");
-      head.className = "sc-project-head";
-      var name = document.createElement("strong");
-      name.textContent = project.name;
-      head.appendChild(name);
-
-      var count = document.createElement("span");
-      count.className = "sc-project-meta";
-      count.textContent = "授权范围 " + project.scope_count + " 个";
-      head.appendChild(count);
-
-      if (project.owner) {
-        var owner = document.createElement("span");
-        owner.className = "sc-project-meta";
-        owner.textContent = "负责人 " + project.owner;
-        head.appendChild(owner);
-      }
-      row.appendChild(head);
-
-      // 授权说明是这一页最该被看见的东西，给它一整行，而不是塞进 title 属性。
-      if (project.authorization_note) {
-        var note = document.createElement("p");
-        note.className = "sc-project-note";
-        note.textContent = "授权说明：" + project.authorization_note;
-        row.appendChild(note);
-      }
-
-      // 每个项目下挂的范围，直接列出来（名称 + 目标 + 状态），不显示 scope_…。
-      (project.scope_ids || []).forEach(function (scopeId) {
-        var scope = scopeById(scopeId);
-        var line = document.createElement("div");
-        line.className = "sc-scope-row" + (scope && scope.active_scan ? " is-active" : "");
-
-        var sName = document.createElement("strong");
-        sName.textContent = scope ? scope.name : "授权范围";
-        line.appendChild(sName);
-
-        var targets = document.createElement("span");
-        targets.className = "sc-scope-targets";
-        targets.textContent = describeScopeTargets(scope);
-        line.appendChild(targets);
-
-        var state = document.createElement("span");
-        state.className = "badge " + (scope && scope.active_scan ? "badge-ok" : "badge-warn");
-        state.textContent = scopeStateLabel(scope);
-        line.appendChild(state);
-
-        row.appendChild(line);
+  /** 当前勾选（且可勾）的工具名。 */
+  function selectedCustomTools() {
+    var box = $("tool-list");
+    if (!box) return [];
+    return Array.prototype.filter
+      .call(box.querySelectorAll('input[name="custom_tool"]'), function (input) {
+        return input.checked && !input.disabled;
+      })
+      .map(function (input) {
+        return input.value;
       });
-
-      box.appendChild(row);
-    });
   }
 
-  function fillProjectSelects(projects) {
-    var select = $("job-project");
-    if (!select) return;
-    var current = select.value;
-    select.textContent = "";
-    if (!projects.length) {
-      var empty = document.createElement("option");
-      empty.value = "";
-      empty.textContent = "还没有授权项目";
-      select.appendChild(empty);
-      return;
-    }
-    projects.forEach(function (project) {
-      var option = document.createElement("option");
-      option.value = project.id;
-      // 可见文案里只有名称与负责人，不带 `proj_…`。
-      option.textContent = projectLabel(project);
-      select.appendChild(option);
-    });
-    // 列表按创建时间倒序，默认选最近创建的那个。
-    select.value = current || projects[0].id;
-    syncJobScopes();
-  }
+  // ── 步骤 1：确认目标（只读格式预检） ─────────────────────
 
-  // 项目 → 已关联范围的联动：只列出该项目下的范围，
-  // 从界面上就杜绝「选了别的项目的范围」这种提交。
-  function syncJobScopes() {
-    var select = $("job-scope");
-    var projectSelect = $("job-project");
-    if (!select || !projectSelect) return;
-    var project = projectById(projectSelect.value);
-    select.textContent = "";
-
-    var scopeIds = project ? project.scope_ids : [];
-    if (!scopeIds.length) {
-      var empty = document.createElement("option");
-      empty.value = "";
-      empty.textContent = "这个项目还没有授权范围";
-      select.appendChild(empty);
-      return;
-    }
-    scopeIds.forEach(function (scopeId) {
-      var option = document.createElement("option");
-      // value 是实体 ID（不可见），文案是人话 —— 这是「隐藏 Scope ID」的落点。
-      option.value = scopeId;
-      option.textContent = scopeLabel(scopeId);
-      select.appendChild(option);
-    });
-  }
-
-  // ── 步骤 1：检查授权（只读试算） ─────────────────────────
-
-  /** 一个目标**被服务端放行**的授权资产 ID。
-   *
-   *  直接读试算响应里的 ``eligible_scope_ids`` —— 那是服务端按
-   *  ``Scope.match_target`` 算完的结论（``verdict=allowed``），前端不再自己
-   *  从 ``matches[]`` 里重算一遍：重算就是第二条授权判定，改一处漏一处。
-   */
-  function eligibleScopeIds(check) {
-    return (check.eligible_scope_ids || []).slice();
-  }
-
-  /** 这条 ``matches[]`` 条目是否属于**放行**结论（按服务端的 ID 集合判，不重算 verdict）。 */
-  function isEligibleMatch(check, match) {
-    return eligibleScopeIds(check).indexOf(match.scope_id) !== -1;
-  }
-
-  /**
-   * 所有有效目标**共同**命中的那一个授权资产；没有唯一答案时返回 ``null``。
-   *
-   * 取交集而不是取第一个：三个目标分别落在两个资产上时，随便挑一个会让用户
-   * 提交时撞 403（服务端按项目校验范围），却在页面上看不出原因。
-   */
-  function commonEligibleScope(payload) {
-    var checks = (payload.checks || []).filter(function (check) {
-      return check.valid;
-    });
-    if (!checks.length) return null;
-    var common = eligibleScopeIds(checks[0]);
-    checks.slice(1).forEach(function (check) {
-      var ids = eligibleScopeIds(check);
-      common = common.filter(function (id) {
-        return ids.indexOf(id) !== -1;
-      });
-    });
-    return common.length === 1 ? common[0] : null;
-  }
-
-  /**
-   * 方案第 6 节：系统后台自动判断目标属于哪份授权资产（``resolve_scope(target)``）。
-   *
-   * 四条口径，改之前先读：
-   *
-   * * **不是扩大授权范围**（方案第 11 节⛔列表）。目标集合一字未改，只是把
-   *   **用户自己已经建好的**、且服务端已经判定覆盖该目标的那个授权资产**选中**，
-   *   省掉「再选一次」的动作。真正的判定仍是服务端的 Scope / Policy，
-   *   方案第 6 节「**禁止**为了体验删除 Scope 校验」一字未动。
-   * * **只认服务端结论**。候选直接取试算响应的 ``eligible_scope_ids`` ——
-   *   那是服务端按 ``Scope.match_target`` 算完的 ``verdict=allowed`` 集合；
-   *   前端绝不自己比较 ``allowed_domains`` / ``active_scan`` 之类的字段，
-   *   那就成了第二条授权判定。
-   * * **有歧义就不选**。多个目标命中不同资产、或一个目标命中多个资产时保持用户
-   *   当前选择并如实说明，不替他猜一个。
-   * * **不覆盖用户的显式选择**。当前选中的资产本身就是那个答案时原样保留 ——
-   *   自动匹配是省一步，不是把用户刚改的选择顶回去。
-   *
-   * @returns {string} ``selected`` / ``kept`` / ``ambiguous`` / ``none``（用于给出一句说明）。
-   */
-  function applyMatchedScope(payload) {
-    var scopeId = commonEligibleScope(payload);
-    if (!scopeId) {
-      // 有放行结论但不是唯一答案 → 说清楚「请你来选」；一个都没放行 →
-      // 卡片上已经写明缺哪一道闸门，这里不再重复。
-      var anyEligible = (payload.checks || []).some(function (check) {
-        return check.valid && eligibleScopeIds(check).length > 0;
-      });
-      return anyEligible ? "ambiguous" : "none";
-    }
-
-    var scopeSelect = $("job-scope");
-    if (!scopeSelect) return "none";
-    if (scopeSelect.value === scopeId) return "kept"; // 用户已经选的就是它
-
-    // 授权资产必须挂在某个授权项目下（服务端要求 scope ∈ project.scope_ids），
-    // 因此先把项目切过去、重建范围下拉框，再选中那一个范围。
-    var owner = null;
-    ((metadata && metadata.projects) || []).forEach(function (project) {
-      if (!owner && (project.scope_ids || []).indexOf(scopeId) !== -1) owner = project;
-    });
-    if (!owner) return "none"; // 命中但没挂到任何项目：服务端会拒，页面已如实说明
-
-    var projectSelect = $("job-project");
-    if (projectSelect) {
-      projectSelect.value = owner.id;
-      syncJobScopes();
-    }
-    scopeSelect.value = scopeId;
-    refreshConsentScopeLine();
-    return "selected";
-  }
-
-  /** 自动匹配结果 → 一句给用户看的话（空字符串表示不需要额外说明）。 */
-  function autoScopeNote(outcome) {
-    if (outcome === "selected") {
-      return "已自动选中覆盖该目标的授权资产 —— 可在步骤 2 改选。";
-    }
-    if (outcome === "ambiguous") {
-      return "多个目标命中的授权资产不一致，请在步骤 2 自行选择。";
-    }
-    return "";
-  }
+  var CHECK_LABELS = {
+    allowed: "格式合法，可以提交",
+    excluded: "命中排除列表，不会被执行",
+    invalid: "格式不合法",
+  };
 
   function renderCheckResults(payload) {
     var box = $("check-result");
     if (!box) return;
     box.textContent = "";
 
-    var needsScope = false;
-
     (payload.checks || []).forEach(function (check) {
       var card = document.createElement("div");
-      card.className = "sc-check" + (check.ready ? " is-ready" : " is-blocked");
+      card.className = "sc-check" + (check.valid && !check.excluded ? " is-ready" : " is-blocked");
 
       var head = document.createElement("div");
       head.className = "sc-check-head";
@@ -917,185 +587,46 @@
       head.appendChild(target);
 
       var badge = document.createElement("span");
-      badge.className = "badge " + (check.ready ? "badge-ok" : "badge-warn");
-      badge.textContent = check.ready ? "可以扫" : "还不能扫";
+      badge.className = "badge " + (check.valid && !check.excluded ? "badge-ok" : "badge-warn");
+      badge.textContent = check.valid ? (check.excluded ? "已排除" : "可以提交") : "格式不合法";
       head.appendChild(badge);
       card.appendChild(head);
 
-      if (!check.valid) {
-        card.appendChild(hint("目标格式不合法：" + check.error_message, "sc-check-note"));
-      } else {
-        // 命中哪些范围 —— 只显示放行的；被排除的单独说明（它有诊断价值）。
-        // 「放行」的判断同样读服务端的 ``eligible_scope_ids``（见 eligibleScopeIds），
-        // 不在这里重算一遍 verdict —— 第二条授权判定就是「改一处漏一处」的来源。
-        var eligible = (check.matches || []).filter(function (item) {
-          return isEligibleMatch(check, item);
-        });
-        if (eligible.length) {
-          eligible.forEach(function (match) {
-            var line = document.createElement("div");
-            line.className = "sc-check-match";
-            var scopeName = document.createElement("strong");
-            scopeName.textContent = match.scope_name;
-            line.appendChild(scopeName);
-
-            var where = document.createElement("span");
-            where.className = "sc-scope-targets";
-            where.textContent = match.project_name
-              ? "项目 " + match.project_name
-              : "未挂到任何项目";
-            line.appendChild(where);
-
-            var state = document.createElement("span");
-            state.className = "badge " + (match.status === "ready" ? "badge-ok" : "badge-warn");
-            state.textContent = STATUS_LABELS[match.status] || match.status;
-            line.appendChild(state);
-            card.appendChild(line);
-          });
-        } else {
-          card.appendChild(
-            hint(
-              check.blocker === "no_scope"
-                ? "还没有任何授权范围 —— 先在下面建一个项目，再把目标加进去。"
-                : "这个目标不在任何已授权范围内。",
-              "sc-check-note"
-            )
-          );
-        }
-
-        (check.matches || [])
-          .filter(function (item) {
-            return item.status === "excluded";
-          })
-          .forEach(function (match) {
-            card.appendChild(
-              hint("注意：" + match.scope_name + " 把它列在排除列表里 —— 排除优先。", "sc-check-note")
-            );
-          });
-
-        if (!check.ready) {
-          card.appendChild(
-            hint(
-              "还差一步：" + (BLOCKER_LABELS[check.blocker] || check.blocker),
-              "sc-check-note sc-check-blocker"
-            )
-          );
-        }
-        if (check.resolved_check_deferred) {
-          card.appendChild(
-            hint(
-              "说明：这里只按授权范围的字面匹配判断，执行前还会做一次真实 DNS 解析校验。",
-              "sc-check-note"
-            )
-          );
-        }
+      if (check.valid) {
+        var kind = document.createElement("span");
+        kind.className = "sc-target-meta";
+        kind.textContent =
+          (check.kind ? "识别为 " + check.kind : "") +
+          (check.normalized && check.normalized !== check.raw ? " · 原始输入 " + check.raw : "");
+        card.appendChild(kind);
       }
 
-      if (!check.ready) needsScope = true;
+      // 说明文案来自服务端（``message``）；前端只做兜底，不自己拼判定。
+      card.appendChild(
+        hint(check.message || CHECK_LABELS[check.verdict] || "", "sc-check-note")
+      );
       box.appendChild(card);
     });
 
-    // 建议模式：能扫就默认真实，不能扫就别让用户对着红灯发愣。
+    var summary = payload.summary || {};
+    var ready = summary.ready || 0;
+    var total = summary.total || 0;
+    var parts = [ready + " / " + total + " 个目标格式合法、可以提交"];
+    if (summary.invalid) {
+      parts.push("其中 " + summary.invalid + " 个格式不合法，请先修正再提交。");
+    }
+    if (summary.excluded) {
+      parts.push("另有 " + summary.excluded + " 个命中排除列表，提交后不会被执行。");
+    }
+    setText("check-summary", parts.join(" "), false);
+
+    // 建议模式：全部合法就默认真实扫描；有不合法的目标时不要让人对着红灯发愣。
     var mock = $("job-mock");
     if (mock && payload.suggested_mode) {
       mock.checked = payload.suggested_mode !== "real";
     }
 
-    var createBox = $("scope-create");
-    if (createBox) createBox.hidden = !needsScope;
-
     lastCheckPayload = payload;
-    // 方案第 6 节：试算完就把「目标属于哪份授权资产」自动选好（见 applyMatchedScope）。
-    // 顺序很重要：先自动匹配，再渲染摘要 —— 否则摘要显示的还是上一个选中项。
-    var autoOutcome = applyMatchedScope(payload);
-    renderConsentSummary();
-
-    setText(
-      "check-summary",
-      payload.summary.ready + " / " + payload.summary.total + " 个目标现在可以真实扫描。" +
-        (payload.summary.blocked ? "其余 " + payload.summary.blocked + " 个还缺条件，见下方说明。" : "") +
-        (autoScopeNote(autoOutcome) ? " " + autoScopeNote(autoOutcome) : ""),
-      false
-    );
-  }
-
-  // ── 步骤 2：授权状态摘要（方案第 7 节） ─────────────────
-
-  /**
-   * 把「目标 / 授权状态 / 授权资产」三行摘要写进步骤 2。
-   *
-   * 口径：**只回显，不判定**。授权状态文案来自服务端试算结果的 ``blocker`` 与
-   * ``ready``（见 :data:`BLOCKER_LABELS`），本函数不做任何比较；没有试算结果时
-   * 退回「还没填」，而不是自己猜一个状态。
-   *
-   * 授权资产这一行只显示名称与目标，**不显示 scope_id**
-   * —— 与页面其它位置同一口径（Phase 1「隐藏 Scope ID」）。
-   */
-  function renderConsentSummary() {
-    var targetBox = $("consent-target");
-    var statusBox = $("consent-status");
-    var scopeBox = $("consent-scope");
-
-    if (targetBox) {
-      // 显示**当前输入框里的内容**，而不是上一次试算的那份快照 ——
-      // 摘要回答的是「我这次要提交什么」，输入框就是唯一事实来源。
-      var shown = currentTargets();
-      targetBox.textContent = shown.length ? shown.join("、") : "（还没填）";
-    }
-
-    var check = lastCheckPayload && (lastCheckPayload.checks || [])[0];
-    if (statusBox) {
-      if (!check) {
-        statusBox.textContent = "（还没检查）";
-      } else if (check.ready) {
-        statusBox.textContent = "已授权，可以真实扫描";
-      } else {
-        statusBox.textContent =
-          "还不能扫 —— " + (BLOCKER_LABELS[check.blocker] || check.blocker || "未知原因");
-      }
-    }
-
-    if (scopeBox) {
-      var matched = check
-        ? (check.matches || []).filter(function (item) {
-            return isEligibleMatch(check, item);
-          })
-        : [];
-      if (matched.length) {
-        scopeBox.textContent = matched
-          .map(function (item) {
-            return item.scope_name + " · " + describeScopeTargets(item);
-          })
-          .join("；");
-      } else {
-        // 试算没命中时，退回到「当前下拉框里选中的那一个」——
-        // 它是用户自己选的授权依据，同样要能看见。
-        var select = $("job-scope");
-        var selected = select && select.value ? scopeById(select.value) : null;
-        scopeBox.textContent = selected
-          ? selected.name + " · " + describeScopeTargets(selected)
-          : "（还没选）";
-      }
-    }
-  }
-
-  /** 下拉框换选后，摘要里的「授权资产」也要跟着变。 */
-  function refreshConsentScopeLine() {
-    if (!lastCheckPayload) return;
-    var check = (lastCheckPayload.checks || [])[0];
-    var matched = check
-      ? (check.matches || []).filter(function (item) {
-          return isEligibleMatch(check, item);
-        })
-      : [];
-    if (matched.length) return; // 试算已经给了答案，不用下拉框覆盖它
-    var scopeBox = $("consent-scope");
-    if (!scopeBox) return;
-    var select = $("job-scope");
-    var selected = select && select.value ? scopeById(select.value) : null;
-    scopeBox.textContent = selected
-      ? selected.name + " · " + describeScopeTargets(selected)
-      : "（还没选）";
   }
 
   function bindCheckForm() {
@@ -1111,10 +642,8 @@
       lastTargets = targets;
       setText("check-summary", "正在检查…", false);
 
-      postJSON("/api/public-jobs/check", {
-        targets: targets,
-        project_id: ($("job-project") && $("job-project").value) || null,
-      }).then(function (result) {
+      // 只传 targets：这一版不再有项目 / 范围，服务端也只做格式与排除列表预检。
+      postJSON("/api/public-jobs/check", { targets: targets }).then(function (result) {
         if (!result.ok) {
           setText("check-summary", "检查失败: " + describeError(result), true);
           return;
@@ -1124,8 +653,8 @@
     });
 
     // 改了目标就让上一次的结论失效（见 checkIsFresh / invalidateCheckResult）。
-    // 没有这个监听器时，「检查授权 → 改输入框 → 直接创建任务」提交的是
-    // 改前的目标，而页面上的绿灯说的是改后的那个站 —— 服务端按改前的判。
+    // 没有这个监听器时，「确认目标 → 改输入框 → 直接创建任务」提交的是改前的目标，
+    // 而页面上的结论说的是改后的那个 —— 服务端按改前的判。
     var input = $("job-target");
     if (input) {
       input.addEventListener("input", function () {
@@ -1134,213 +663,69 @@
     }
   }
 
-  // ── 步骤 2：创建项目 / 添加范围 ──────────────────────────
+  // ── 步骤 2 联动：自定义卡片下的清单也要能勾 ──────────────
 
-  function bindProjectForm() {
-    var form = $("project-form");
-    if (!form) return;
-    form.addEventListener("submit", function (event) {
-      event.preventDefault();
-      postJSON("/api/projects", {
-        name: form.name.value.trim(),
-        authorization_note: form.authorization_note.value.trim(),
-        owner: form.owner.value.trim(),
-      }).then(function (result) {
-        if (!result.ok) {
-          setText("check-summary", "创建项目失败: " + describeError(result), true);
-          return;
-        }
-        var project = result.data.project;
-        form.reset();
-        loadMetadata().then(function () {
-          var select = $("job-project");
-          if (select) select.value = project.id;
-          syncJobScopes();
-          // 建完项目接着就要加范围：把试算过的目标预填进去，并展开这一段。
-          prefillScopeTargets();
-          var add = $("scope-add");
-          if (add) add.open = true;
-          setText(
-            "check-summary",
-            "已创建授权项目「" + project.name + "」。接着在下面填授权域名或网段。",
-            false
-          );
-        });
-      });
-    });
-  }
-
-  /** 把试算过的目标预填进「新增范围」表单 —— 用户不必再抄一遍。 */
-  function prefillScopeTargets() {
-    var domains = [];
-    var cidrs = [];
-    lastTargets.forEach(function (raw) {
-      var text = String(raw).trim();
-      if (!text) return;
-      if (text.indexOf("/") !== -1) cidrs.push(text);
-      else domains.push(text);
-    });
-    var domainBox = $("scope-domains");
-    var cidrBox = $("scope-cidrs");
-    if (domainBox && domains.length && !domainBox.value) domainBox.value = domains.join(", ");
-    if (cidrBox && cidrs.length && !cidrBox.value) cidrBox.value = cidrs.join(", ");
-  }
-
-  /** 范围名称不再让用户填 —— 它只是内部标签，用「项目名 · 首个目标」派生即可。 */
-  function deriveScopeName(project, domains, cidrs) {
-    var target = domains[0] || cidrs[0] || "";
-    if (project && project.name) {
-      return target ? project.name + " · " + target : project.name;
-    }
-    return target || "授权范围";
-  }
-
-  function bindScopeForm() {
-    var form = $("scope-form");
-    if (!form) return;
-    form.addEventListener("submit", function (event) {
-      event.preventDefault();
-      var projectId = (form.project_id && form.project_id.value) || "";
-      var domains = splitList(form.allowed_domains.value);
-      var cidrs = splitList(form.allowed_cidrs.value);
-
-      if (!projectId) {
-        setText("scope-feedback", "还没有授权项目，请先在上面的表单里创建一个。", true);
-        return;
-      }
-      if (!domains.length && !cidrs.length) {
-        setText("scope-feedback", "至少填一个授权域名或授权网段。", true);
-        return;
-      }
-
-      var project = projectById(projectId);
-      var scopePayload = {
-        name: deriveScopeName(project, domains, cidrs),
-        allowed_domains: domains,
-        allowed_cidrs: cidrs,
-        active_scan: form.active_scan.checked,
-      };
-
-      // 先建范围（它有自己的校验：拒绝 * 全放行、拒绝非法 CIDR），
-      // 成功了再关联到项目 —— 顺序不能反，否则会剩下一堆孤儿范围。
-      postJSON("/api/scopes", scopePayload).then(function (scopeResult) {
-        if (!scopeResult.ok) {
-          setText("scope-feedback", "添加失败: " + describeError(scopeResult), true);
-          return null;
-        }
-        var scopeId = scopeResult.data.scope.id;
-        return postJSON("/api/projects/" + encodeURIComponent(projectId) + "/scopes", {
-          scope_id: scopeId,
-        }).then(function (linkResult) {
-          if (!linkResult.ok) {
-            setText(
-              "scope-feedback",
-              "范围已创建，但关联到项目失败: " + describeError(linkResult),
-              true
-            );
-            return;
-          }
-          setText(
-            "scope-feedback",
-            "已添加授权范围「" + scopePayload.name + "」（" +
-              (scopePayload.active_scan ? "已授权真实扫描" : "仅被动，未开真实扫描") + "）。",
-            false
-          );
-          form.reset();
-          form.active_scan.checked = true;
-          // 范围变了，之前那次试算的结论就过期了 —— 自动重算一遍，
-          // 让用户立刻看到「现在能不能扫」。
-          // 判据用**当前输入**而不是 lastTargets：输入框改过之后旧快照已被
-          // invalidateCheckResult() 清空，用快照判会在这时静默跳过重算。
-          loadMetadata().then(function () {
-            var checkForm = $("check-form");
-            if (checkForm && currentTargets().length) {
-              checkForm.dispatchEvent(new Event("submit", { cancelable: true }));
-            }
-          });
-        });
-      });
-    });
-  }
-
-  function bindProjectSelectSync() {
-    var select = $("job-project");
-    if (select) {
-      select.addEventListener("change", function () {
-        syncJobScopes();
-        refreshConsentScopeLine();
-      });
-    }
-    var scopeSelect = $("job-scope");
-    if (scopeSelect) {
-      scopeSelect.addEventListener("change", refreshConsentScopeLine);
-    }
-  }
-
-  // ── 步骤 4：创建任务 ────────────────────────────────────
-
-  function selectedCustomTools() {
+  function bindToolList() {
+    // 事件委托：勾选框是动态生成的，绑定在容器上即可。
+    // 这里**不做**任何校验 —— 只把「勾选结果与模板是否一致」这件事留给提交时判断。
     var box = $("tool-list");
-    if (!box) return [];
-    return Array.prototype.filter
-      .call(box.querySelectorAll('input[name="custom_tool"]'), function (input) {
-        return input.checked && !input.disabled;
-      })
-      .map(function (input) {
-        return input.value;
-      });
+    if (!box) return;
+    box.addEventListener("change", function () {
+      var chosen = selectedCustomTools();
+      var active = activeStrategyOf((metadata && metadata.strategies) || []);
+      var preset = active && active.key !== "custom" ? active.tools || [] : null;
+      if (preset && !sameSet(chosen, preset)) {
+        setText("tool-list-note", "已修改模板的工具组合，提交时将按「自定义」记录。", false);
+      } else if (!preset) {
+        setText("tool-list-note", "自定义模式：勾选要用的工具（未接入的工具无法勾选）。", false);
+      } else {
+        setText("tool-list-note", "本次会用到的工具（与所选模板一致）。", false);
+      }
+    });
   }
+
+  // ── 步骤 3：创建任务 ───────────────────────────────────
 
   function bindJobForm() {
     var form = $("job-form");
     if (!form) return;
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      // 提交的永远是**输入框此刻的内容**，不是上一次试算的快照。
-      // 之前这里优先用 lastTargets，导致「检查授权 → 改输入框 → 创建任务」
-      // 提交的是改前的目标，而页面上的授权状态说的是改后的那个站。
+      // 提交的永远是**输入框此刻的内容**，不是上一次预检的快照。
       var targets = currentTargets();
       if (!targets.length) {
         setText("job-feedback", "请先在步骤 1 填写目标。", true);
         return;
       }
-      // 有一份对不上当前输入的试算结论 → 让用户先重新检查（正常情况下
+      // 有一份对不上当前输入的预检结论 → 让用户先重新确认（正常情况下
       // input 监听器已经把旧结论作废，这里是兜底）。
       if (lastCheckPayload && !checkIsFresh()) {
-        setText("job-feedback", "目标已改动，请先重新点「检查授权」再创建任务。", true);
+        setText("job-feedback", "目标已改动，请先重新点「确认目标」再创建任务。", true);
         return;
       }
 
-      // 步骤 2 的授权确认（方案第 7 节）：**使用者确认，不是安全边界**。
-      // 它只在这里挡住「手滑直接提交」，不改变服务端的任何判定 ——
-      // 勾上它不会让越界目标通过，因为它根本参与不了那几条闸门。
-      var consent = $("job-consent");
-      if (consent && !consent.checked) {
-        setText(
-          "job-feedback",
-          "请先在步骤 2 勾选「我确认该目标属于授权范围」，再创建任务。",
-          true
-        );
-        return;
+      var chosen = selectedCustomTools();
+      var strategy = ACTIVE_STRATEGY;
+      var active = activeStrategyOf((metadata && metadata.strategies) || []);
+      var preset = active && active.key !== "custom" ? active.tools || [] : null;
+
+      // 勾选结果被改过（或本来选的就是自定义）→ 按自定义提交，并把工具名列出来。
+      // 这样审计里记的策略名与「用户实际会跑哪些工具」永远对得上。
+      if (!preset || !sameSet(chosen, preset)) {
+        strategy = "custom";
       }
 
-      var projectSelect = $("job-project");
-      var scopeSelect = $("job-scope");
       var operator = $("job-operator");
       var payload = {
-        project_id: (projectSelect && projectSelect.value) || "",
-        scope_id: (scopeSelect && scopeSelect.value) || "",
         targets: targets,
-        strategy: ACTIVE_STRATEGY,
+        strategy: strategy,
         // 节奏随请求带上：服务端仍会按「模板档位 + 请求档位」取更保守的一档，
         // 前端给错也放松不了任何东西；带上只是让请求与页面显示同一个值。
         pace: ACTIVE_PACE,
-        // 使用者确认的原始事实（服务端只用于审计记录，不参与任何判定）。
-        authorization_confirmed: Boolean(consent && consent.checked),
       };
-      // 操作者标识（Phase 3「操作者记录」）：留空就不加这个键，由服务端
-      // 退化成缺省标识 —— 传空串只是绕一圈回到同一个结论，还会让「用户没填」
-      // 与「用户填了空」在审计里长得一模一样。
+      if (strategy === "custom") payload.tools = chosen;
+      // 操作者标识：留空就不加这个键，由服务端退化成缺省标识 —— 传空串只是绕一圈
+      // 回到同一个结论，还会让「用户没填」与「用户填了空」在审计里长得一模一样。
       var operatorName = operator && String(operator.value || "").trim();
       if (operatorName) payload.operator = operatorName;
       // 限速 / 超时：只在真的填了数字时才带上（见 collectLimits 的说明）。
@@ -1348,7 +733,6 @@
       Object.keys(limits).forEach(function (key) {
         payload[key] = limits[key];
       });
-      if (ACTIVE_STRATEGY === "custom") payload.tools = selectedCustomTools();
       if ($("job-mock") && $("job-mock").checked) payload.mode = "mock";
 
       postJSON("/api/public-jobs", payload).then(function (result) {
@@ -1373,10 +757,8 @@
   document.addEventListener("DOMContentLoaded", function () {
     if (!$("strategy-list")) return; // 不是扫描中心页
     bindCheckForm();
-    bindProjectForm();
-    bindScopeForm();
+    bindToolList();
     bindJobForm();
-    bindProjectSelectSync();
     loadMetadata();
   });
 })();

@@ -1,46 +1,79 @@
-"""``#scope-form`` 的 ``novalidate`` 收口：四条验收（用户指定，2026-10-04）。
+"""扫描中心「授权范围表单」的守卫（原 ``#scope-form`` novalidate 验收，2026-10-04）。
 
-背景：``#scope-form`` 里**同时**装着两个 ``required`` 下拉（``#job-project`` /
+本文件的前身钉的是 ``#scope-form`` 的 ``novalidate`` 与 JS 错误路径。本轮测试阶段
+改造把它整份搬到了新口径上：``#scope-form`` 已经**从页面上删掉**，但那些坑与实测
+证据作为历史记录留在下面 —— 它们是「为什么这些元素不许复活」的理由。
+
+## 一、历史缺陷：两个 required 下拉把第一个授权范围挡在门外
+
+``#scope-form`` 里**同时**装着两个 ``required`` 下拉（``#job-project`` /
 ``#job-scope``）与「添加授权范围」的 ``type=submit`` 按钮。原生约束校验跑在
 ``submit`` 事件**之前**，于是全新用户（两下拉都只有占位项）点按钮时
 ``valueMissing=true``，浏览器直接拦下 —— ``scan_center.js:bindScopeForm()`` 的
-submit 回调**一次都不执行**，**第一个授权范围在界面上根本建不出来**
-（实测三状态：状态 1/2 的 ``submit`` 触发 0 次，状态 3 才 1 次）。
+submit 回调**一次都不执行**，**第一个授权范围在界面上根本建不出来**。
 
-修法是给表单加 ``novalidate``，只关掉**浏览器原生**校验，不动服务端。
-但「关掉校验」这四个字本身需要一个验收来兜底：**怎么证明它没有把校验一起关掉？**
+实测（headless Chrome，三状态，从**真实渲染**的 ``/scan-center`` 里原样截取该表单）：
 
-按用户指定的四条逐一钉住 —— 每条都用**能真正观察到该行为的那一层**：
+==========  ============  ==============  ==================================
+状态        submit 触发   checkValidity   ``:invalid``
+==========  ============  ==============  ==================================
+1（全空）   0 次          False           ``#job-project``、``#job-scope``
+2（有项目） 0 次          False           ``#job-scope``
+3（有范围） 1 次          True            （无）
+==========  ============  ==============  ==================================
+
+状态 1 正是「全新用户第一次进来」—— 也就是最需要这个按钮的那一次。当时的修法是给
+表单加 ``novalidate``：只关掉**浏览器原生**校验，不动服务端。
+
+**表单整体删除之后，这个坑也就随之不存在了** —— 没有表单，就没有「原生校验先于
+submit 事件」这个先后顺序。但守卫**不能因此消失**：将来若有人把授权范围表单加回来，
+同一个坑会立刻原样重现（``required`` 下拉 + ``type=submit`` 按钮这个组合本身就带着
+这个陷阱）。所以口径从「这个表单带了 ``novalidate`` 吗」改成**正向断言它不复活**：
+元素与绑定函数一个都不许回来。见 ``test_scope_form_does_not_exist_anymore``。
+
+## 二、随表单一起退役的验收 ① ②，以及仍然有效的服务端 ③ ④
+
+四条原验收里，前两条的被测对象**整体或部分**是那个表单：
+
+* **① 空表单点击 → JS 给出明确错误**：对象是 ``#scope-form`` 的 submit 回调与
+  ``#scope-feedback``，随表单一起消失；
+* **② 非法目标 → JS 转发 / 服务端拒绝**：它当时刻意分成两层测 ——
+  「JS 不吞掉拒绝理由」那一半消失，「服务端真的拒绝」那一半保留在 ④ 里。
+
+授权范围的**界面入口**删了，``/api/scopes`` 与 ``/api/projects`` 这两组接口本身
+**一条都没删**（显式传 ``scope_id`` 时白名单校验照旧生效），因此后两条原封不动：
 
 =====  ==========================================  ============================
 条     验的是什么                                  在哪一层测（为什么）
 =====  ==========================================  ============================
-①      空表单点击 → JS 给出明确错误                  真实浏览器跑真实 scan_center.js
-②      非法目标 → JS 转发 / 服务端拒绝                 两层各一条（见下）
 ③      合法目标 → 正常提交（建库 + 关联到项目）         服务端两步调用链
 ④      绕过 JS 直接调 API → 服务端仍然拒绝             Flask（含「一个 Scope 都没建」）
 =====  ==========================================  ============================
 
-**②为什么分两条**：JS 那层只能证明「把服务端的拒绝理由显示出来」（它不判定
-合法性 —— 前端不是安全边界，见 ``scan_center.js`` 顶部约定）；合法性只由服务端
-判。两条合起来才是完整的「非法目标被拒绝」：JS 不吞掉拒绝理由 + 服务端真的拒绝。
-
-**①为什么必须真跑浏览器**：被测的就是「浏览器原生校验与 JS 回调的先后顺序」，
-这一条在源代码里读不出来。CI（ubuntu + windows，无 Chrome）上它**跳过**，
-本机 Windows 上真跑；同时另有一条不依赖浏览器的**源代码契约**兜底
-（``test_scope_form_js_error_paths_are_wired``），保证 CI 也不会完全失去这条守卫。
+**「前端不是安全边界」这条约定没有随表单一起退役**：界面上的创建入口没了，接口仍在，
+所以 ④ 那条守卫反而更值得留着 —— 现在它是这组接口**唯一**的验收人
+（原来还有 ② 的 JS 那一半在侧面看着，现在没有前端代码能分担任何东西了）。
 
 **本文件不发起任何真实外部扫描**，不发网络请求，不用仓库里的任何数据库
 （``admin_client`` 夹具已把两个库与三处运行期目录钉到 ``tmp_path``）。
+
+## 三、关于本文件里的浏览器用例（已移除，理由在此）
+
+前身还有一条 ``@pytest.mark.skipif(_find_chrome() is None, ...)`` 的真实浏览器用例，
+在无 Chrome 的 CI 上**恒为 skipped**。它的被测对象（``#scope-form`` 的
+``novalidate`` 与 submit 触发次数）已随表单消失，本机有 Chrome 时它会**执行并失败**
+（不是跳过），所以它不能以原样保留。这里把它改写成**不依赖 Chrome 的源码级守卫**
+（``test_scan_center_js_wires_the_three_steps``），于是：
+
+* 本机（有 Chrome）skipped 计数不变（0 → 0），因为原来它就是真跑的；
+* 无 Chrome 的环境上本文件少 1 条 skipped —— 这不是偷偷塞一条 skip 凑数，而是
+  **把一条恒跳过的用例换成恒执行的用例**；这正是 ``AGENTS.md`` 说的
+  「``passed`` 与 ``collected`` 必须一起看」那个信号在往好的方向动。
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -49,7 +82,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCAN_CENTER_JS = PROJECT_ROOT / "web" / "static" / "scan_center.js"
 SCAN_CENTER_HTML = PROJECT_ROOT / "web" / "templates" / "scan_center.html"
 
-#: ①/②/③ 用到的两个 JS 文案（``scan_center.js:bindScopeForm``）。
+#: 前身那两条 JS 文案（``scan_center.js:bindScopeForm``）。表单删了，文案也不会
+#: 再出现 —— 保留在这里是为了让上面的历史章节与代码里的字符串一一对得上，
+#: 后来者读到时不必去翻 Git 历史。
 MSG_NO_PROJECT = "还没有授权项目，请先在上面的表单里创建一个。"
 MSG_NO_TARGETS = "至少填一个授权域名或授权网段。"
 
@@ -74,23 +109,27 @@ ILLEGAL_SCOPE_CASES = [
 ILLEGAL_SCOPE_PAYLOADS = [pytest.param(payload, code, id=case_id) for payload, code, case_id in ILLEGAL_SCOPE_CASES]
 
 
-# ── ②-服务端 / ③ / ④：Flask 层（CI 上照常跑） ──────────────────
+# ── ③ / ④：Flask 层（接口仍在，照常跑） ────────────────────────
 
 
 def test_legitimate_scope_submits_and_attaches_to_project(admin_client):
     """③ 合法目标 → 正常提交：Scope 建出来、**并真的挂到了项目下**。
 
-    这条走的是 ``scan_center.js:bindScopeForm`` 提交时的**同一串两步调用**：
+    这条走的是 ``scan_center.js:bindScopeForm`` 当初提交时的**同一串两步调用**：
 
     ```text
     POST /api/scopes                       → 201，拿到 scope_id
     POST /api/projects/<id>/scopes         → 201，把 scope_id 关联到项目
     ```
 
-    只断言第一步 201 是不够的 —— 那证明不了「用户在步骤 2 的下拉里能选到它」。
-    第二步失败时前端会显示「范围已创建，但关联到项目失败」，也就是**孤儿范围**：
-    范围存在、却不出现在任何项目的选择里，正是 §3.17.1 那个死胡同的另一种形态。
-    所以这里三处都断言：创建 201、关联 201、以及列表里真的看得见。
+    只断言第一步 201 是不够的 —— 那证明不了「范围真的进了某个项目」。
+    第二步失败时范围就成了**孤儿范围**：范围存在、却不出现在任何项目里，
+    正是 §3.17.1 那个死胡同的另一种形态（界面上有过提示「范围已创建，但关联到
+    项目失败」）。所以这里三处都断言：创建 201、关联 201、以及列表里真的看得见。
+
+    ★ 界面入口本轮删掉了（扫描中心不再有范围表单），但这两个接口仍然对外可用：
+    显式传 ``scope_id`` 的白名单校验照旧生效。这条用例现在守的是「接口本身没有
+    被误删、关联语义没有退化」，与界面上有没有那个表单无关。
     """
     project = admin_client.post(
         "/api/projects",
@@ -122,7 +161,7 @@ def test_legitimate_scope_submits_and_attaches_to_project(admin_client):
     assert attached.status_code == 201, attached.get_json()
     assert attached.get_json()["project"]["scope_ids"] == [scope["id"]]
 
-    # 步骤 2 的下拉读的就是这两条接口：项目里必须能查到它，范围必须还在列表里。
+    # 项目里必须能查到它，范围必须还在列表里：关联不是单方面的写入。
     detail = admin_client.get(f"/api/projects/{project_id}").get_json()["project"]
     assert detail["scope_ids"] == [scope["id"]]
     listing = admin_client.get("/api/scopes").get_json()["scopes"]
@@ -132,10 +171,12 @@ def test_legitimate_scope_submits_and_attaches_to_project(admin_client):
 
 @pytest.mark.parametrize("payload,expected_code", ILLEGAL_SCOPE_PAYLOADS)
 def test_direct_api_bypass_is_still_rejected_by_the_server(admin_client, payload, expected_code):
-    """④ 绕过 JS 直接打 ``POST /api/scopes`` → 服务端仍然拒绝，且**一个 Scope 都没建**。
+    """④ 绕过前端直接打 ``POST /api/scopes`` → 服务端仍然拒绝，且**一个 Scope 都没建**。
 
-    ``novalidate`` 关掉的只是浏览器原生校验。这条把「前端不是安全边界」变成
-    可执行的：不经过 ``bindScopeForm``、不经过任何前端代码，直接发请求。
+    前身这条守的是「``novalidate`` 关掉的只是浏览器原生校验」，所以故意不经过
+    ``bindScopeForm``、不经过任何前端代码，直接发请求。界面上的创建入口本轮删掉
+    之后，这条守卫**更重要了**：它现在是这组接口唯一还在的验收人 ——
+    没有前端表单能替它挡下任何东西，能不能拒绝完全取决于服务端。
 
     ★ 关键断言是**最后那句「库里的 Scope 数没变」**，不是状态码。
     只看 400 的话，「先建了再报错」也能通过；数一遍才排得掉「先写入、后报错」
@@ -160,7 +201,7 @@ def test_direct_api_bypass_is_still_rejected_by_the_server(admin_client, payload
     body = resp.get_json()
     assert body["ok"] is False
     assert body["error_code"] == expected_code, body
-    assert body.get("error_message"), "拒绝理由不能是空的 —— 前端要把这句显示给用户"
+    assert body.get("error_message"), "拒绝理由不能是空的 —— 界面要把这句显示给用户"
     assert after == before, f"被拒绝的输入竟然建出了 {after - before} 个 Scope：{payload}"
 
 
@@ -197,11 +238,11 @@ def test_illegal_scope_payloads_are_rejected_for_four_distinct_reasons(admin_cli
 
 
 def test_direct_api_bypass_is_still_rejected_for_anonymous(client, admin_client):
-    """④（续）绕过 JS **并且**绕过登录：匿名直接打 ``POST /api/scopes`` → 401。
+    """④（续）绕过前端**并且**绕过登录：匿名直接打 ``POST /api/scopes`` → 401。
 
-    「绕过前端」有两种绕法：绕过 JS 的校验，和绕过 JS 的登录态。前者靠服务端
+    「绕过前端」有两种绕法：绕过前端的校验，和绕过前端的登录态。前者靠服务端
     校验兜住（上一条），后者靠 ``require_admin()`` 兜住 —— ``api/scopes.py:70``
-    就在函数体第一行。这里两条都验，否则「绕过 JS」这个说法只被验了一半。
+    就在函数体第一行。这里两条都验，否则「绕过前端」这个说法只被验了一半。
 
     ★ 匿名那条请求的 payload 是**完全合法**的：它证明拦住它的是登录态，
     而不是目标非法 —— 一个非法 payload 拿到 401 说明不了任何事。
@@ -228,284 +269,110 @@ def test_direct_api_bypass_is_still_rejected_for_anonymous(client, admin_client)
     assert ok.status_code == 201, ok.get_json()
 
 
-# ── 不依赖浏览器时的源代码契约 ────────────────────────────────
+# ── 表单整体退役：正向断言它不复活 ──────────────────────────────
 
 
-def test_scope_form_js_error_paths_are_wired():
-    """①/② 的无浏览器兜底：两条 JS 文案与它们要写入的元素都还在、且可达。
+def test_scope_form_does_not_exist_anymore():
+    """``#scope-form`` 一族元素与它们的 JS 绑定整体消失，且**不许复活**。
 
-    浏览器用例（下面那条）在 CI 上必然跳过，所以这里留一条**不依赖 Chrome** 的
-    契约，保证 CI 也不会完全失去这条守卫。它刻意**只锚在「接线是否完整」**上，
-    不重复 ``test_public_scan_mode.py`` 里那条 ``novalidate`` 正则守卫：
+    这条替换了前身的 ``test_scope_form_js_error_paths_are_wired``（它断言两条
+    JS 错误文案仍写在 ``setText("scope-feedback", …)`` 上、且 ``#scope-form`` 带
+    ``novalidate``）。被测对象随表单一起删除了，但守卫强度不能降级 —— 口径改成
+    「这些元素与函数一个都不许回来」。
 
-    * 两个 ``select`` 仍带 ``required``（缺陷不是它们造成的，缺的是 ``novalidate``）；
-    * ``scan_center.js`` 里两条错误文案仍在，且都写在 ``setText("scope-feedback"...)``
-      上 —— 文案换了元素、或者函数改名，这里立刻红；
-    * ``#scope-feedback`` 在模板里真的存在（否则 ``setText`` 会静默什么都不做，
-      用户点了按钮还是「没有任何反应」—— 与缺陷本身同一个症状）。
+    **为什么必须留着这条**：那个坑不在「某个属性写错了」，而在**元素组合**本身 ——
+    ``#scope-form`` 一旦同时挂着 ``required`` 下拉（``#job-project`` / ``#job-scope``）
+    与 ``type=submit`` 按钮，原生约束校验就会跑在 ``submit`` 事件之前，全新用户点
+    按钮时 ``valueMissing=true``，回调一次都不执行（模块 docstring 里有三状态实测表：
+    状态 1 / 2 的 submit 触发次数都是 **0**）。谁把表单加回来，谁就**原样**继承这个坑；
+    那一刻红的应当是这条测试，而不是某个用户「点了按钮没有任何反应」。
 
-    ★ 这条**不能**证明「回调真的会执行」—— 那正是浏览器那条的职责。
-    两条一起看才有意义：这条保证代码在，那条保证代码跑得到。
+    两头都钉：模板里没有那些 ``id``，脚本里没有那些绑定函数 —— 只删 HTML 而留着
+    ``bindScopeForm()``（或反过来）都只是半成品，所以两边都要断言。
     """
-    script = SCAN_CENTER_JS.read_text(encoding="utf-8")
     template = SCAN_CENTER_HTML.read_text(encoding="utf-8")
+    script = SCAN_CENTER_JS.read_text(encoding="utf-8")
 
-    for message in (MSG_NO_PROJECT, MSG_NO_TARGETS):
-        assert message in script, f"scan_center.js 里少了错误文案：{message}"
-        assert f'setText("scope-feedback", "{message}"' in script, (
-            f"{message!r} 不再写进 #scope-feedback —— 用户就看不到任何反馈了"
+    # 模板侧：表单、它的两个 required 下拉、反馈元素、项目清单都不在。
+    for element_id in (
+        "scope-form",
+        "project-form",
+        "scope-add",
+        "scope-domains",
+        "scope-cidrs",
+        "scope-active",
+        "job-project",
+        "job-scope",
+        "job-consent",
+        "scope-feedback",
+        "project-list",
+    ):
+        assert f'id="{element_id}"' not in template, (
+            f"扫描中心模板里又出现了 #{element_id} —— 授权范围表单/项目面板复活了；"
+            "若确实要加回来，必须同时补上 novalidate 与 §3.17.1 那三状态实测（模块 docstring）"
         )
 
-    assert 'id="scope-feedback"' in template, "模板里没有 #scope-feedback，setText 会静默失败"
+    # 连带 ``consent-*`` 这类前缀命名的元素（勾选框在旧版是按前缀取的）。
+    assert not re.search(r'id="consent-', template), "同意勾选框（consent-*）又回到了模板里"
 
-    tag = re.search(r'<form[^>]*id="scope-form"[^>]*>', template)
-    assert tag, "模板里找不到 #scope-form"
-    assert "novalidate" in tag.group(0), "novalidate 没了 → 回调一次都不会执行（§3.17.1 复发）"
+    # 前身那条 JS 文案连同它们要写入的元素一起消失：表单没了，文案留着只会是死代码。
+    for message in (MSG_NO_PROJECT, MSG_NO_TARGETS):
+        assert message not in script, f"授权范围表单的错误文案又回到了 scan_center.js：{message}"
 
-
-# ── ①/②-JS：真实浏览器真跑 scan_center.js ─────────────────────
-
-_CHROME_CANDIDATES = (
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-)
-
-
-def _find_chrome() -> str | None:
-    """找一个可用的 Chrome/Chromium；找不到返回 ``None``（用例据此跳过）。"""
-    for candidate in _CHROME_CANDIDATES:
-        if os.path.isfile(candidate):
-            return candidate
-    for name in ("google-chrome", "chromium", "chromium-browser", "chrome"):
-        found = shutil.which(name)
-        if found:
-            return found
-    return None
+    # 脚本侧：绑定函数与它们的辅助函数一个都不许回来。
+    # 用**词边界**匹配（而不是 `in`），这样连注释里提到这些名字都会被抓到 ——
+    # 注释里出现它们，说明有人正在把这条流程往回搬。
+    for name in (
+        "bindScopeForm",
+        "bindProjectForm",
+        "bindProjectSelectSync",
+        "prefillScopeTargets",
+        "deriveScopeName",
+        "syncJobScopes",
+        "fillProjectSelects",
+        "renderProjects",
+    ):
+        assert not re.search(rf"\b{name}\b", script), (
+            f"scan_center.js 里又出现了 {name} —— 授权范围表单的绑定复活了"
+        )
 
 
-#: 在真实浏览器里驱动**真实** ``#scope-form`` + **真实** ``scan_center.js`` 的页面。
-#:
-#: 三个要点（都是上一版探针踩过或差点踩到的）：
-#:
-#: 1. **表单是页面里那一份，不是每状态重建的**。上一版探针用
-#:    ``stage.innerHTML = REAL_FORM`` 逐状态重建表单，那样测到的是浏览器原生校验，
-#:    ``bindScopeForm`` 的监听器根本不在新元素上 —— 这正是「测了个假对象」。
-#:    这里表单直接写在 body 里，真实脚本绑的就是它，之后的改动都是**改活 DOM**。
-#: 2. **脚本内容内联**，不写 ``<script src="file://...">``：file:// 之间有
-#:    opaque origin，Chrome 对 file→file 的资源加载有额外策略；内联等于绕过它，
-#:    且内联的仍是**从磁盘读出来的那一份原文**（测试里直接 ``read_text``）。
-#: 3. **``fetch`` 被替换成受控桩**：GET 一律 401（让 ``loadMetadata()`` 走它自己
-#:    那条「未登录就安静跳过」的分支，不产生未处理的 rejection），POST 记录请求
-#:    并返回服务端**真实形状**的 400 体。于是 ③ 那条能断言「JS 把服务端的拒绝理由
-#:    显示出来了」，而「这个 payload 合法不合法」仍由 Flask 用例判定。
-_HARNESS = """<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><title>scope-form acceptance</title></head>
-<body>
-<div id="strategy-list"></div>
-__REAL_FORM__
-<pre id="log"></pre>
-<script>
-// 受控 fetch：GET → 401（loadMetadata 会安静跳过），POST → 记录 + 400。
-window.__requests = [];
-window.fetch = function (url, opts) {
-  var method = (opts && opts.method) || "GET";
-  if (method === "POST") {
-    window.__requests.push({ url: String(url), body: (opts && opts.body) || null });
-    return Promise.resolve({
-      ok: false, status: 400,
-      json: function () {
-        return Promise.resolve({
-          ok: false, error_code: "invalid_target",
-          error_message: "不允许使用全放行通配符，请显式列出允许的域名"
-        });
-      }
-    });
-  }
-  return Promise.resolve({
-    ok: false, status: 401,
-    json: function () { return Promise.resolve({ ok: false, error_code: "unauthenticated" }); }
-  });
-};
-</script>
-<script>
-__REAL_JS__
-</script>
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-  var form = document.getElementById("scope-form");
-  var feedback = document.getElementById("scope-feedback");
-  var button = document.querySelector('#scope-add button[type="submit"]');
-  var project = document.getElementById("job-project");
-  var scope = document.getElementById("job-scope");
-  var domains = document.getElementById("scope-domains");
+def test_scan_center_js_wires_the_three_steps():
+    """扫描中心三步各自的绑定必须**都在** —— 缺一个，那一步就是死的。
 
-  // 注册顺序在真实脚本之后（DOMContentLoaded 按注册顺序触发）：
-  // 真实 handler 先跑（它会 preventDefault），这里再记录「submit 真的触发了」。
-  var submitEvents = 0;
-  form.addEventListener("submit", function () { submitEvents++; });
+    这条替换了前身那条真实浏览器用例（``test_scope_form_novalidate_acceptance_in_real_browser``）。
+    原来它靠 headless Chrome 观察「submit 触发次数」，用来证明 ``novalidate`` 真的
+    让回调跑起来了；现在被测对象（``#scope-form``）不存在了，那条用例在本机有 Chrome 时
+    会**执行并失败**，所以改写成不依赖浏览器的源码级契约（见模块 docstring 第三节）。
 
-  function snapshot(label) {
-    return {
-      label: label,
-      submit_events: submitEvents,
-      feedback: feedback ? feedback.textContent : null,
-      feedback_is_error: feedback ? feedback.className.indexOf("alert-error") !== -1 : null,
-      requests: window.__requests.slice(),
-      form_novalidate: form.hasAttribute("novalidate"),
-      checkValidity: form.checkValidity(),
-      invalid: Array.prototype.map.call(form.querySelectorAll(":invalid"), function (el) {
-        return el.tagName.toLowerCase() + (el.id ? "#" + el.id : "");
-      })
-    };
-  }
+    **为什么不能只删不补**：那条浏览器用例是当时唯一能证明「回调真的会被执行」的
+    守卫。删掉它之后，必须留一条能证明「绑定确实接上了」的替代品，否则三步表单可以
+    整体退化成一堆没接线的元素，而所有测试照绿 —— 用户看到的是「点了没反应」。
 
-  function option(select, value, text) {
-    var o = document.createElement("option");
-    o.value = value; o.textContent = text;
-    select.appendChild(o);
-    return o;
-  }
+    它是什么、不是什么：
 
-  var out = [];
-
-  // 状态 1：全新用户 —— 两下拉只有占位项、没填任何范围。正是缺陷现场。
-  button.click();
-  out.push(snapshot("1-empty-form"));
-
-  // 状态 2：建过项目、还没建范围，也没填域名。
-  option(project, "proj_real", "培正学院授权测试");
-  project.value = "proj_real";
-  button.click();
-  out.push(snapshot("2-project-but-no-targets"));
-
-  // 状态 3：填了非法的全放行通配符 → 必须被**转发出去**，并把服务端的理由显示出来。
-  domains.value = "*";
-  button.click();
-  setTimeout(function () {
-    out.push(snapshot("3-illegal-wildcard-forwarded"));
-    document.getElementById("log").textContent = "RESULT=" + JSON.stringify(out);
-  }, 120);
-});
-</script>
-</body></html>
-"""
-
-
-def _render_scope_form(admin_client) -> str:
-    """从**真实渲染**的 ``/scan-center`` 里原样截取 ``#scope-form`` 那一段。"""
-    resp = admin_client.get("/scan-center")
-    assert resp.status_code == 200
-    page = resp.get_data(as_text=True)
-    assert "步骤 1 · 输入目标" in page, "这不是管理员渲染的扫描中心页，结论作废"
-    match = re.search(r'<form class="form" id="scope-form".*?</form>', page, re.S)
-    assert match, "渲染结果里找不到 #scope-form"
-    form_html = match.group(0)
-    assert "添加授权范围" in form_html, "截到的不是那个带提交按钮的表单"
-    return form_html
-
-
-@pytest.mark.slow
-@pytest.mark.skipif(_find_chrome() is None, reason="本机没有 Chrome/Chromium，浏览器层验收无法执行")
-def test_scope_form_novalidate_acceptance_in_real_browser(admin_client, tmp_path):
-    """①/②-js/③-js 在**真实浏览器**里跑**真实** ``scan_center.js``。
-
-    三个状态逐条对应验收：
-
-    ======  ================================================================
-    状态    断言
-    ======  ================================================================
-    1       空表单点「添加授权范围」→ ``submit`` **真的触发**（``novalidate`` 生效）、
-            且 ``#scope-feedback`` 出现「还没有授权项目，请先在上面的表单里创建一个。」
-    2       有项目、没填域名 → 文案换成「至少填一个授权域名或授权网段。」
-    3       填了 ``*`` → 请求**真的发出去了**（``allowed_domains:["*"]`` 原样在 body 里），
-            且服务端的拒绝理由被显示到 ``#scope-feedback`` 上（不吞错）
-    ======  ================================================================
-
-    ★ 状态 1 的 ``submit_events`` 是这条用例的**核心判据**：加 ``novalidate`` 之前它
-    恒为 0（§3.17.1 的实测表），也就是「回调根本没被调用」的全部证据。只断言
-    「错误文案出现在页面上」是不够的 —— 文案可能来自别处；断言「submit 触发次数」
-    才直接对准「原生校验有没有把事件拦掉」这个机制。
-
-    ★ 状态 1 同时断言 ``checkValidity() is False`` 与 ``:invalid`` 里含 ``#job-project``：
-    这说明**原生校验仍然认为这个表单是无效的**，我们只是让事件绕过了它 ——
-    与「把 ``required`` 删掉」是两件不同的事（那种修法会让浏览器什么都不拦，
-    这条断言会红）。
-
-    ★ 状态 3 断言的是**转发与显示**，不是合法性判定：``fetch`` 是受控桩，
-    它的 400 是桩给的。合法性由 ``test_direct_api_bypass_is_still_rejected_by_the_server``
-    用真服务端判定。两条分工写在这里，避免后来者误以为这条在测服务端。
+    * **是**：``DOMContentLoaded`` 回调里确实调用了四个绑定函数，且四个都在文件里
+      有定义（只调未定义、或只定义未调用，都会红）；
+    * **不是**：行为级验证。真实浏览器里跑一遍（原生校验与事件顺序、``fetch`` 真的
+      发出去）属于浏览器层，本仓库目前没有常驻的浏览器用例 —— 这里明确说明，
+      避免后来者把它当成「前端行为已经被端到端验证过了」。
     """
-    chrome = _find_chrome()
-    assert chrome, "跳过判据与执行判据不一致"
+    script = SCAN_CENTER_JS.read_text(encoding="utf-8")
 
-    harness = _HARNESS.replace("__REAL_FORM__", _render_scope_form(admin_client))
-    harness = harness.replace("__REAL_JS__", SCAN_CENTER_JS.read_text(encoding="utf-8"))
-    page = tmp_path / "scope_form_acceptance.html"
-    page.write_text(harness, encoding="utf-8")
+    match = re.search(r'document\.addEventListener\("DOMContentLoaded",\s*function\s*\(\)\s*\{(.*?)\n  \}\);', script, re.S)
+    assert match, "scan_center.js 里找不到 DOMContentLoaded 的初始化回调"
+    block = match.group(1)
 
-    proc = subprocess.run(
-        [
-            chrome,
-            "--headless=new",
-            "--disable-gpu",
-            "--no-sandbox",
-            "--dump-dom",
-            "--virtual-time-budget=4000",
-            page.resolve().as_uri(),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=120,
+    wired = re.findall(r"\b(bindCheckForm|bindToolList|bindJobForm|loadMetadata)\s*\(", block)
+    assert wired == ["bindCheckForm", "bindToolList", "bindJobForm", "loadMetadata"], (
+        f"三步的初始化接线不完整：实际调用了 {wired}（期望依次为 "
+        "bindCheckForm / bindToolList / bindJobForm / loadMetadata）"
     )
-    dom = proc.stdout or ""
-    match = re.search(r"RESULT=(\[.*?\])</pre>", dom, re.S)
-    assert match, (
-        f"Chrome 没吐回 RESULT —— 页面里的 JS 可能在真实脚本之后就没跑起来。\nstderr 尾部: {(proc.stderr or '')[-800:]}"
-    )
-    rows = json.loads(match.group(1))
-    assert [row["label"] for row in rows] == [
-        "1-empty-form",
-        "2-project-but-no-targets",
-        "3-illegal-wildcard-forwarded",
-    ], rows
 
-    first, second, third = rows
+    # 四个函数必须真的有定义，否则调用只是 ReferenceError。
+    for name in ("bindCheckForm", "bindToolList", "bindJobForm", "loadMetadata"):
+        assert re.search(rf"function {name}\s*\(", script), f"{name}() 被调用了却没有定义"
 
-    # ── ① 空表单：事件真的触发 + JS 给出明确错误 ──
-    # 先断言「事件触发次数」，再断言 novalidate 属性在不在：这两条的顺序是刻意的。
-    # 反了的话，一旦有人删掉 novalidate，用例会先报「属性不见了」——那只是**症状**；
-    # 这条判据真正要抓的是它的**后果**（回调一次都不执行、按钮点了没反应），
-    # 报出来的失败信息应当直接是后果。
-    assert first["submit_events"] == 1, (
-        f"状态 1 的 submit 触发 {first['submit_events']} 次 —— novalidate 失效，"
-        "全新用户点「添加授权范围」不会有任何反应（§3.17.1 复发）"
-    )
-    assert first["form_novalidate"] is True, "表单没有 novalidate，状态 1 的事件会被原生校验拦掉"
-    assert first["feedback"] == MSG_NO_PROJECT, first
-    assert first["feedback_is_error"] is True, "错误文案必须带 alert-error 样式"
-    # 原生校验仍然认为它无效：证明我们绕的是「事件」，不是「校验本身」。
-    assert first["checkValidity"] is False, "状态 1 竟然通过了原生校验，与 required 下拉的存在矛盾"
-    assert any("job-project" in name for name in first["invalid"]), first["invalid"]
-
-    # ── ②-js 有项目、没填域名：文案换成「至少填一个…」，且不发请求 ──
-    assert second["submit_events"] == 2, second["submit_events"]
-    assert second["feedback"] == MSG_NO_TARGETS, second
-    assert second["requests"] == [], "还没填任何范围就把请求发出去了"
-
-    # ── ③-js 非法目标被**原样转发**，服务端理由被显示出来（不吞错）──
-    assert third["submit_events"] == 3, third["submit_events"]
-    assert len(third["requests"]) == 1, third["requests"]
-    sent = json.loads(third["requests"][0]["body"])
-    assert sent["allowed_domains"] == ["*"], f"JS 没有原样转发用户输入：{sent}"
-    assert third["requests"][0]["url"] == "/api/scopes", third["requests"]
-    assert third["feedback"] is not None and "添加失败" in third["feedback"], third["feedback"]
-    assert "不允许使用全放行通配符，请显式列出允许的域名" in third["feedback"], (
-        "服务端的拒绝理由被吞掉了 —— 用户只会看到「添加失败」四个字"
-    )
-    assert third["feedback_is_error"] is True
+    # 初始化里**不许**出现已删除的那一批绑定（与上一条互为反向）。
+    for name in ("bindScopeForm", "bindProjectForm", "syncJobScopes", "fillProjectSelects", "renderProjects"):
+        assert not re.search(rf"\b{name}\b", block), f"初始化回调里又调用了已删除的 {name}"

@@ -85,99 +85,179 @@ def test_results_payload_has_no_server_path(client):
     assert "scan_results.db" not in raw
 
 
-def test_page_scan_still_requires_login(client):
-    """首页表单扫描也必须登录（P0 验收：无匿名扫描）。"""
-    resp = client.post("/", data={"action": "scan", "domain": "example.test"})
-    assert resp.status_code == 401
+def test_retired_home_page_has_no_post_actions_anymore(client, app_module):
+    """``POST /`` 的**全部**动作已随首页模板一起退役：任意 action 一律 **405**。
 
+    本用例合并了原来的四条（它们全部钉在旧首页的 ``POST /`` 动作上）：
 
-def test_page_chat_action_requires_login(client):
-    """``action=chat`` 也必须登录 —— 它**不是**只读浏览。
+    * ``test_page_scan_still_requires_login`` —— 首页表单扫描必须登录（原断言 401）；
+    * ``test_page_chat_action_requires_login`` —— ``action=chat`` 也必须登录（原断言 401）；
+    * ``test_page_chat_action_still_works_when_logged_in`` —— 管理员走 chat 仍须能用（原断言 200）；
+    * ``test_any_page_post_action_requires_login``（5 条参数化）—— 任意 action 都必须先登录。
 
-    ``app.py`` 的 docstring 一直把 ``action=chat`` 归为「只读浏览」，
-    ``docs/API.md`` 也写着「``action=chat`` 可匿名」。但这与事实不符：
+    ----
 
-    * chat 分支（``app.py`` 的 ``elif action == "chat"``）**没有**任何认证调用；
-    * 它把消息交给 ``agent/service.handle_agent_message()``；
-    * 而 Agent 的 ``_tool_subdomain`` / ``_tool_httpx`` 直接调
-      ``tool_runner.run_tools()`` 与 ``HttpxRunner().run_scan()``，
+    **历史说明（保留原文，因为它解释了为什么曾经要写四条用例）**
+
+    守卫曾按**动作名白名单**来护：``app.py:index()`` 里
+    ``_require_admin_for_page()`` 嵌在 ``if action in _SCAN_ACTIONS:``（只有
+    ``{"scan"}``）内部，于是
+
+    * ``action=scan`` 拦得住；
+    * ``action=chat`` **裸奔** —— 它把消息交给
+      ``agent/service.handle_agent_message()``，而 Agent 的 ``_tool_subdomain`` /
+      ``_tool_httpx`` 直调 ``tool_runner.run_tools()`` 与 ``HttpxRunner().run_scan()``，
       **两者都不查 ``GEF_ALLOW_REAL_SCAN``，也不查 Scope**
-      （``docs/AGENT_ASYNC_IMPACT.md`` I-5 的实测证据）。
+      （``docs/AGENT_ASYNC_IMPACT.md`` I-5 的实测证据）。也就是说：一个未登录的
+      HTTP 请求可以走通「意图 → 确认执行 → 真实扫描」，且不产生任何
+      ``job.created`` 审计；
+    * 未知 action 落到 ``else: job_error = "未知操作"`` 并返回 **200** —— 这正是
+      「漏一个动作就漏一个洞」的形状，也是当时必须拿 ``unknown`` /
+      ``definitely-not-an-action`` 当回归探针的原因：守卫只要被塞回白名单里，
+      这两条取值立刻变红。
 
-    也就是说：**一个未登录的 HTTP 请求可以走通「意图 → 确认执行 → 真实扫描」**，
-    且不产生任何 ``job.created`` 审计。这与 ``core/auth.py`` 自己写下的
-    「不能匿名扫描」直接冲突，因此这里钉住它。
+    当时的修法是把守卫**前置到 action 分发之前**，并用 5 条行为级参数化（其中 3 个
+    是未知动作）钉住「动作名不是安全边界」。那种守卫是对的，但它守的仍是一个
+    **存在的**页面接口。
 
-    这不是新增边界，而是把既有边界补上 —— 与 ``action=scan`` 同级。
+    ----
+
+    **现在这个洞整体不存在了，因为路由没了**
+
+    测试阶段改造把 ``web/templates/index.html`` 删除、``index()`` 改成只有
+    ``GET`` + ``redirect(url_for("scan_center"))``。于是 ``POST /`` 由 Flask 在
+    **路由层**拒绝：该 URL 上没有 POST 处理器 → **405 Method Not Allowed**。
+
+    * 既不是 200（未知动作再也回不出「未知操作」页面），
+    * 也不是 401（不再有一条「先查登录态」的幽灵页面接口），
+    * 而是「这条路根本不通」。
+
+    这比前置守卫更彻底：守卫是**行为**正确（有人写漏就错），405 是**形状**不存在
+    （没有分支可漏）。**但这条用例仍然必要**：它守的是「将来有人把 ``POST /``
+    加回来」。加回来的那一刻，下面 5 个取值全部变红 —— 包括三个未知动作，
+    所以「偷偷加个只认 scan 的分支」也藏不住。
     """
-    resp = client.post("/", data={"action": "chat", "agent_message": "你好"})
-    assert resp.status_code == 401, "action=chat 竟然允许匿名访问（它能经 Agent 发起真实扫描）"
-    assert resp.get_json()["error_code"] == "unauthenticated"
-
-
-def test_page_chat_action_still_works_when_logged_in(admin_client):
-    """反向守卫：加了认证之后，**管理员那条路必须还能走**。
-
-    只测「匿名 401」是不够的 —— 那种断言对「把整个 chat 分支删掉」也会通过。
-    这条用例钉住另一侧：管理员带 Token 提交同样的表单，必须拿到 200
-    （页面级 chat 是「重渲染首页 + 把回复写进 session」，成功即 200）。
-
-    ★ 实测提醒：这条用例会触发 werkzeug 的
-    ``The 'session' cookie is too large ...`` 告警（``agent_history``/``agent_steps``
-    把整段回复塞进签名 Cookie）。那是 `docs/CODEBASE_MAP.md` 第 6 节第 20 条
-    记录的既有坑，**不是本用例引入的失败**；用例只断言状态码，不依赖 Cookie 是否留存。
-    """
-    resp = admin_client.post("/", data={"action": "chat", "agent_message": "你好"})
-    assert resp.status_code == 200, "管理员走 chat 被误伤了：守卫不该连正路一起堵"
-    assert resp.get_json() is None, "页面路由应返回 HTML，不是 JSON"
-
-
-@pytest.mark.parametrize(
-    "action",
-    [
-        "scan",  # 已知扫描动作
-        "chat",  # 已知 Agent 动作
-        "",  # 表单给了 action 但值为空（`request.form.get("action", "scan")` 返回空串）
+    for action in (
+        "scan",  # 旧首页的扫描动作
+        "chat",  # 旧首页的 Agent 动作（历史缺陷主角）
+        "",  # 表单给了 action 但值为空
         "unknown",  # 从未登记的动作
         "definitely-not-an-action",  # 未来可能出现的新动作名
-    ],
-)
-def test_any_page_post_action_requires_login(client, action):
-    """**任意** `action` 值都必须先登录 —— 这条锁的是「守卫在分发之前」这个形状。
+    ):
+        resp = client.post("/", data={"action": action, "domain": "example.test"})
+        assert resp.status_code == 405, (
+            f"action={action!r} 拿到了 {resp.status_code}：POST / 上又有处理器了 —— "
+            "旧首页的页面动作（含未登记动作）正在复活。"
+            "405 才是「路由整体不存在」，200/401 都说明有人把它加了回来。"
+        )
+        assert resp.status_code not in (200, 401), (
+            f"action={action!r} 回到了 {resp.status_code}："
+            "200 = 未知动作又有处理路径，401 = 又成了一条待守卫的幽灵页面接口"
+        )
 
-    ★ 为什么不用「断言 `_require_admin_for_page()` 出现在 `action` 分支之前」的
-    源码字符串守卫：那种守卫锚在**写法**上（谁重排一下代码就红），而这里锚在
-    **行为**上 —— 它不问守卫写在哪一行，只问「换一个 action 值，还拦不拦得住」。
+    # ── 源码侧的守卫：上面钉的是行为，这里钉「后门形状不存在」 ──
+    import ast
+    import inspect
 
-    ★ 为什么必须用**未知** action 值：`"scan"`/`"chat"` 只覆盖今天存在的动作。
-    历史缺陷正是「守卫按动作名白名单护，漏一个动作就漏一个洞」；用 `unknown`
-    与 `definitely-not-an-action` 取值，等于断言 **「未来新增的动作默认也是安全的」**
-    —— 只要有人把守卫塞回 `if action in _SCAN_ACTIONS:` 里面，这两条立刻变红
-    （旧代码里它们会落到 `else: job_error = "未知操作"` 并返回 **200**）。
+    source = inspect.getsource(app_module)
+    for gone in (
+        "_SCAN_ACTIONS",  # 动作白名单本身（历史缺陷的载体）
+        "_require_admin_for_page",  # 按动作名护的页面守卫
+    ):
+        assert gone not in source, f"app.py 里又出现了已删除的首页动作载体: {gone}"
 
-    ★ 反面也在：`else` 分支的存在说明「未知动作」本身是有处理路径的，
-    这正是它能被当成回归探针的原因。
+    # ``handle_agent_message`` 用**可执行引用**判定，而不是纯字符串命中：
+    # ``app.py`` 的模块 docstring 故意留着这个名字，用来记录
+    # 「``agent/`` 模块保留在仓库里、只是本轮不再提供旧首页的 Agent Chat UI」
+    # 这条决策。字面命中会把那条注释也算成后门，属于锚在写法上的守卫；
+    # 下面这行问的是「有没有代码真的在调它」—— 那才是页面级 Agent 入口。
+    referenced = {
+        node.id for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Name)
+    } | {node.attr for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Attribute)}
+    assert "handle_agent_message" not in referenced, (
+        "app.py 里又有代码在调 handle_agent_message：页面级 Agent 入口正在复活"
+    )
+    assert "handle_agent_message" not in inspect.getsource(app_module.index), (
+        "index() 里又接上了 Agent 对话"
+    )
 
-    ★ 与上面两条具名用例的**分工**：那两条钉「scan / chat 这两个**已知**动作的
-    认证口径」（并写下它们各自的缺陷史），本条钉「**动作名不是安全边界**」这个更一般的形状。
-    `scan` / `chat` 两条在这里重复出现是**故意**的 —— 万一有人单独改了其中一个，
-    两条用例都会红，不会出现「只有具名用例红、参数化清单还是绿」的错觉。
-    """
-    resp = client.post("/", data={"action": action, "domain": "example.test"})
-    assert resp.status_code == 401, f"action={action!r} 未登录也能过：守卫又被放回按动作名白名单里了"
-    assert resp.get_json()["error_code"] == "unauthenticated"
+    # ``index()`` 只能有 GET：单独看这个视图函数自己的源码，不许出现 POST 方法
+    # 声明，也不许出现「读表单 action」这一步（那是分发的第一句）。
+    # ★ 刻意**不**把 ``request.form`` 的断言放到整个 ``app.py`` 上：登录页
+    #   （``login_page``）合法地读 ``request.form["token"]``，整文件断言会误伤。
+    # ★ 也**不**在整段函数源码上做字面命中：``index()`` 的 docstring 里**刻意**
+    #   写着「没有 POST 分支」「``action=scan`` / ``action=chat`` 随之消失」这些
+    #   口径说明 —— 字面命中会把注释算成后门（锚在写法上）。所以先用 ast 把
+    #   docstring 摘掉，只对**代码体**做断言。
+    assert 'methods=["POST"]' not in source, "app.py 里又出现了 POST 页面路由"
+
+    index_source = inspect.getsource(app_module.index)
+    index_node = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "index"
+    )
+    # ``ast.get_docstring`` 返回的是**去缩进**后的文本，而 ``inspect.getsource``
+    # 里它是按原样缩进的 —— 直接 ``source.replace(docstring, "")`` 一次都换不掉
+    # （实测：``index()`` 的 docstring 里写着「``action=scan`` 随之消失」这句口径
+    # 说明，于是 ``"action"`` 字面命中，用例把注释当成了后门）。
+    # 正确做法是从 AST 拿**去掉 docstring 之后的那些语句**的源码片段。
+    body_statements = list(index_node.body)
+    if body_statements and isinstance(body_statements[0], ast.Expr) and isinstance(
+        body_statements[0].value, ast.Constant
+    ):
+        body_statements = body_statements[1:]
+    index_body = "\n".join(
+        ast.get_source_segment(source, statement) or "" for statement in body_statements
+    )
+    assert index_body.strip(), "index() 的代码体是空的：拿不到可断言的源码片段"
+    for forbidden in (
+        'methods=["POST"]',
+        "request.form",
+        "request.method",
+        "render_template",
+        "session",
+        # 「action」是旧首页分发的第一句（`request.form.get("action", "scan")`）；
+        # 这里不查裸字符串 "scan"：跳转目标 ``scan_center`` 本身含这个词。
+        "action",
+    ):
+        assert forbidden not in index_body, (
+            f"index() 的代码体里又出现了 {forbidden!r}：根路径重新变成一条有动作的页面路由了"
+        )
+    assert "redirect" in index_body and "scan_center" in index_body, (
+        "index() 的代码体里没有跳转：它应当只有 return redirect(url_for('scan_center'))"
+    )
+    # 正向把「只有 GET」也钉住：将来把装饰器整行删掉（变成默认 GET）也算改口径。
+    assert index_source.lstrip().startswith('@app.route("/", methods=["GET"])'), (
+        f"index() 的路由声明变了：{index_source.splitlines()[0]!r}"
+    )
 
 
 def test_anonymous_homepage_does_not_leak_authorized_assets(admin_client, client):
-    """匿名首页**不得**下发授权资产（名称 / 目标 / 状态）。
+    """根路径**跟随后**不得出现授权资产（名称 / 目标 / 资产卡片载体）。
 
-    首页曾无条件执行 ``context["scopes"] = _load_scope_options()``，而
-    Phase 1 又把 ``allowed_domains`` / ``allowed_cidrs`` 渲染进了资产卡片 ——
-    等于把「这份授权叫什么、覆盖哪些目标」整份摊给匿名访客。
+    原名 ``test_anonymous_homepage_does_not_leak_authorized_assets``，当时钉的是
+    「首页 ``build_page_context()`` 无条件执行 ``context["scopes"] = _load_scope_options()``，
+    把『这份授权叫什么、覆盖哪些目标』整份摊给匿名访客」，并附一条反向断言
+    「管理员首页照常有资产卡片」。
 
-    资产页（``/assets``）一开始就是**按登录态过滤**的（``app.py`` 的
-    ``scopes=_load_scope_options() if is_authenticated else []``），并有
-    ``test_assets_api.py`` 的守卫。首页那条路漏了同一个判断，这里补齐并钉住。
+    ★ 口径变了，这条守的东西**没有作废，反而更强**：修的不再是「谁看得见」，
+    而是**数据载体整体消失** ——
+
+    * 首页模板已删除，``_load_scope_options()`` / ``build_page_context()`` 已删除，
+      ``/scan-center`` 也**没有授权面板**（测试阶段改造删掉了它与步骤 2）；
+    * 于是「资产卡片」``class="scope-asset`` 与下拉框 ``id="scope_id"`` 在**整站**
+      都不再存在 —— 匿名看不到，管理员也看不到，因为没有这条渲染路径了。
+
+    ★ 为什么反向断言从「管理员必须看到」改成「管理员也看不到」：旧写法对
+    「把资产卡片整块删掉」会变红，于是它实际上在**要求**管理员页面上留着这个
+    数据载体。口子已经从「渲染前过滤」退到「根本不渲染」，正确的反向守卫因此
+    变成「全站都没有这个载体」—— 详见 ``test_m2_page_scan.py`` 里对
+    ``index.html`` 不存在与 `app.py` 无 ``_load_scope_options`` 的源码守卫。
+
+    ★ 跟随后端跳转（``follow_redirects=True``）才是有意义的观察面：``GET /``
+    只是 302，它的响应体里当然不会有任何东西；真正会下发给使用者的页面是
+    ``/scan-center``。这也顺带钉住「``GET /`` 不会自己渲染模板」。
     """
     resp = admin_client.post(
         "/api/scopes",
@@ -189,37 +269,42 @@ def test_anonymous_homepage_does_not_leak_authorized_assets(admin_client, client
     )
     assert resp.status_code == 201, resp.get_json()
 
-    anon_home = client.get("/").get_data(as_text=True)
-    for leaked in ("培正学院公网资产", "www.example.test"):
-        assert leaked not in anon_home, f"匿名首页泄露了授权资产信息: {leaked}"
-    # 「授权资产」这四个字本身可以出现在**提示文案**里（告诉用户登录后可见），
-    # 但卡片与下拉框这两个**数据载体**必须一个都不渲染 —— 它们是数据泄漏的形状。
-    assert 'class="scope-asset' not in anon_home, "匿名首页仍渲染授权资产卡片"
-    assert 'id="scope_id"' not in anon_home, "匿名首页仍渲染授权资产下拉框"
+    anon_home = client.get("/", follow_redirects=True).get_data(as_text=True)
+    admin_home = admin_client.get("/", follow_redirects=True).get_data(as_text=True)
 
-    # 已登录时照常下发 —— 这条修的是「谁看得见」，不是「还显不显示」。
-    admin_home = admin_client.get("/").get_data(as_text=True)
-    assert "培正学院公网资产" in admin_home
-    assert "www.example.test" in admin_home
-    assert 'class="scope-asset' in admin_home
+    for who, page in (("匿名", anon_home), ("管理员", admin_home)):
+        for leaked in ("培正学院公网资产", "www.example.test"):
+            assert leaked not in page, f"{who}根路径页面上出现了授权资产信息: {leaked}"
+        # 卡片与下拉框这两个**数据载体**必须一个都不渲染 —— 它们是数据泄漏的形状。
+        assert 'class="scope-asset' not in page, f"{who}根路径页面仍渲染授权资产卡片"
+        assert 'id="scope_id"' not in page, f"{who}根路径页面仍渲染授权资产下拉框"
+        assert 'name="scope_id"' not in page, f"{who}根路径页面仍能提交 scope_id"
+
+    # 反向守卫（新口径）：管理员走的是扫描中心，而扫描中心**没有授权面板** ——
+    # 这不是「管理员被误伤」，是那个面板本身已经退役。
+    assert "已登录" in admin_home, "管理员跟随跳转后没落在扫描中心（应显示已登录）"
+    assert "创建任务" in admin_home, "管理员扫描中心丢了主面板，上面几条「没泄漏」会变成空转"
 
 
 def test_anonymous_homepage_does_not_leak_scan_summary(admin_client, client, store):
-    """匿名首页**不得**下发扫描汇总与目标明细（结果库统计）。
+    """根路径**跟随后**不得下发扫描汇总与目标明细（结果库统计）。
 
-    与上一条是**同一类**漏洞、但**不同来源**：上一条是「谁在授权」，
-    这一条是「扫过什么、扫出多少」。首页的「汇总」面板读的是
-    ``store.get_global_summary()`` / ``get_domain_summary()``，
-    而 ``app.py:build_page_context()`` 当时**没有任何登录态判断** ——
-    与 ``scopes``（``app.py:320``）/ ``recent_jobs``（``app.py:323``）
-    那两处的写法不一致。
+    原名 ``test_anonymous_homepage_does_not_leak_scan_summary``：首页的「汇总」
+    面板读 ``store.get_global_summary()`` / ``get_domain_summary()``，而当时
+    ``app.py:build_page_context()`` 对这两个取数点**没有任何登录态判断**（与
+    ``scopes`` / ``recent_jobs`` 两处的写法不一致），于是匿名访客能读到
+    「跑过几次、覆盖几个目标、命中多少条」，``/?domain=<目标>`` 还会把目标名
+    直接回显。
 
-    匿名访客因此能读到：跑过几次、覆盖几个目标、命中多少条；
-    并且 ``/?domain=<目标>`` 这一条 GET 还会把「该目标扫过几次、用了哪些工具、
-    多少条结果」直接渲染出来 —— 目标名本身也就跟着回显了。
+    ★ 现在修的是**数据载体整体消失**，不是「谁看得见」：
 
-    这条钉住三件事：① 匿名不出现汇总标签；② 匿名不出现目标名；
-    ③ 管理员路径照常（修的是可见性，不是把功能删了）。
+    * ``build_page_context()`` 与首页模板都已删除，``GET /`` 只跳转；
+    * ``/scan-center`` 的骨架与统计一律**只在已登录时下发**，而它下发的任务列表
+      里**不含**结果库汇总，也不认 ``?domain=`` 这个参数（它只认 ``?job_id=``）。
+
+    因此这里断言：匿名与管理员跟随后，都**看不到**那三个汇总标签、``当前目标``
+    区块、以及目标名。管理员侧**不再**断言「必须有汇总面板」—— 那个面板随首页
+    一起退役了，继续要求它存在等于把已删除的渲染路径钉回来。
     """
     store.save_results(
         "leaktarget.test",
@@ -227,27 +312,29 @@ def test_anonymous_homepage_does_not_leak_scan_summary(admin_client, client, sto
         ["a.leaktarget.test", "b.leaktarget.test", "c.leaktarget.test"],
     )
 
-    # ① 汇总面板的三个标签属于**数据载体**，匿名一个都不该出现。
-    anon_home = client.get("/").get_data(as_text=True)
-    for label in ("扫描运行次数", "已有目标数", "结果总数"):
-        assert label not in anon_home, f"匿名首页仍然渲染汇总数字: {label}"
+    for who, test_client in (("匿名", client), ("管理员", admin_client)):
+        # ① 汇总面板的三个标签属于**数据载体**，两边都不该出现。
+        page = test_client.get("/", follow_redirects=True).get_data(as_text=True)
+        for label in ("扫描运行次数", "已有目标数", "结果总数"):
+            assert label not in page, f"{who}根路径页面仍然渲染汇总数字: {label}"
 
-    # ② 带上 domain 也不行：目标名与「当前目标」区块都必须消失。
-    anon_focus = client.get("/?domain=leaktarget.test").get_data(as_text=True)
-    assert "leaktarget.test" not in anon_focus, "匿名首页通过 ?domain= 回显了目标名"
-    assert "当前目标" not in anon_focus, "匿名首页仍然渲染目标明细区块"
+        # ② 带上 domain 也不行：目标名与「当前目标」区块都必须消失。
+        focused = test_client.get("/?domain=leaktarget.test", follow_redirects=True).get_data(
+            as_text=True
+        )
+        assert "leaktarget.test" not in focused, f"{who}根路径通过 ?domain= 回显了目标名"
+        assert "当前目标" not in focused, f"{who}根路径仍然渲染目标明细区块"
 
-    # ③ 已登录时照常下发。
-    admin_home = admin_client.get("/").get_data(as_text=True)
-    for label in ("扫描运行次数", "已有目标数", "结果总数"):
-        assert label in admin_home, f"管理员首页丢了汇总面板: {label}"
-    admin_focus = admin_client.get("/?domain=leaktarget.test").get_data(as_text=True)
-    assert "当前目标" in admin_focus
-    assert "leaktarget.test" in admin_focus
+    # ③ 反向守卫：管理员跟随后确实落在扫描中心（而不是一个看不见内容的空响应）——
+    #    否则上面那几条「没泄漏」可能只是因为整页 500 / 空白，属于假通过。
+    admin_home = admin_client.get("/", follow_redirects=True).get_data(as_text=True)
+    assert "扫描中心" in admin_home, "管理员跟随跳转后没落在扫描中心，上面的断言可能是空转"
+    assert "未登录" not in admin_home, "管理员落在扫描中心却显示未登录"
 
 
-#: ``build_page_context()`` 里按登录态过滤的 5 个 session 键（§3.16.5 第 1 条，
-#: 用户在 §3.16.8 第 2 问上确认「一并过滤」）。
+#: 旧 ``build_page_context()`` 里按登录态过滤的 5 个 session 键（§3.16.5 第 1 条，
+#: 用户在 §3.16.8 第 2 问上确认「一并过滤」）。该函数现已**整体删除**，
+#: 清单保留在这里作为「哪些键曾经是下发对象」的历史记录与黑名单来源。
 AGENT_SESSION_KEYS = [
     "agent_history",
     "agent_steps",
@@ -257,86 +344,63 @@ AGENT_SESSION_KEYS = [
 ]
 
 
-def test_agent_session_keys_are_not_handed_to_anonymous_visitors(app_module, admin_client, client, monkeypatch):
-    """匿名首页**不得**拿到那 5 个 Agent 会话键的**内容**；管理员照常。
+def test_no_page_context_hands_session_content_to_templates(app_module):
+    """``app.py`` 里**不再有**把 Session 内容下发给模板的代码。
 
-    这 5 个键装的是 Agent 对话历史、待确认计划、上传目标与上下文。它们此前
-    **不构成泄漏**：``web/`` 下对这 5 个名字的引用是 0 命中（既没有渲染点、
+    原名 ``test_agent_session_keys_are_not_handed_to_anonymous_visitors``：
+    当时给 ``app.build_page_context`` 装探针，断言匿名拿到空的 5 个键、管理员
+    拿到有内容的 5 个键。``build_page_context()`` 本轮已**整体删除**，探针没有了
+    可挂的对象 —— 于是这条改用**不存在性**守卫。
+
+    ----
+
+    **历史说明（保留，因为它解释了这 5 个键当年为什么值得专门写一条用例）**
+
+    这 5 个键装的是 Agent 对话历史 / 待确认计划 / 上传目标 / 上下文：
+
+    ``agent_history`` · ``agent_steps`` · ``pending_plan`` · ``uploaded_targets`` ·
+    ``agent_context``
+
+    它们此前**不构成泄漏**：``web/`` 下对这 5 个名字的引用是 0 命中（既没有渲染点、
     也没有 JS 读它们）。但「不下发」比「不渲染」可靠 —— 少下发一个键，就少一次
-    「将来加了个渲染点、忘了它没过滤」的机会。所以按 ``is_authenticated`` 过滤。
+    「将来加了个渲染点、忘了它没过滤」的机会。当时的处置是**按
+    ``is_authenticated`` 过滤**：匿名下发空值、管理员下发真值。
 
-    ★ 怎么测才有意义：这 5 个键**没有渲染点**，所以不能断言「页面上看不到」——
-    那种断言在改动前后都通过，等于什么都没锁。能观察到的差别只有一处：
-    **上下文里这个键的值**。于是这里给 ``app.build_page_context`` 装一个**探针**：
-    它照常调用真函数并原样返回，只是顺手把返回的字典记下来。这样被观察的对象
-    就是模板**真正拿到**的那份上下文，而不是另造一个近似场景。
+    ★ 那条用例当时为什么必须自带内容、必须装探针：这 5 个键没有渲染点，所以
+    「页面上看不到」在改动前后都成立，等于什么都没锁；能观察到的差别只有**上下文里
+    这个键的值**。而匿名侧必须先用 ``session_transaction()`` 塞满内容，否则
+    「匿名上下文里没有 agent_history」永远是空转 —— ``core/auth.logout()`` 只
+    ``pop("local_admin")``、**不清**这些键，所以「登录过 → 退出 → 仍带着那份
+    cookie 浏览」的访客会话里真的有内容，而请求本身是匿名的。
 
-    ★ 匿名侧**必须自带内容**，否则这条断言是空转：新建的匿名 ``client`` 会话本来
-    就是空的，「匿名上下文里没有 agent_history」在修复前后都成立。所以先用
-    ``session_transaction()`` 往匿名客户端里塞满这 5 个键 —— 这**不是**人为构造的
-    场景，而是一个真实状态：``core/auth.logout()`` 只 ``pop("local_admin")``，
-    **不清** ``agent_history`` 等键，于是「登录过 → 退出 → 仍带着那份 cookie 浏览」
-    的访客，会话里就有这些内容，而请求本身是匿名的。旧的 ``build_page_context()``
-    在这种请求上会把内容原样下发。
+    ----
 
-    ★ 反向断言（管理员必须拿到）不是可有可无的：只钉「匿名为空」的话，
-    把整个键删掉、或者让 ``build_page_context()`` 永远返回空，都能通过。
+    **现在：连下发通道都没有了，比过滤更彻底**
+
+    过滤是「下发前问一句登录态」——它仍然依赖**每一个取数点都记得问**
+    （这正是历史上 ``scopes`` 问了、``get_global_summary()`` 三处没问的原因）。
+    现在首页模板与 ``build_page_context()`` 一起删除，Session 内容不再有任何
+    通往模板的路径：没有键、没有探针、没有「忘了过滤」的位置。
+
+    ★ 反向守卫的替代：这条用例从「匿名必须空」变成「通道不存在」，因此还需要
+    另一侧的守卫兜住「页面本身别漏」。那一侧由
+    ``test_public_scan_mode.py::test_scan_center_page_renders_for_anonymous``
+    与 ``::test_anonymous_scan_center_does_not_leak_backend_jargon`` 承担 ——
+    匿名 ``/scan-center`` 返回 200 但**不下发任何骨架元素**（``#strategy-list``
+    等一个都不出现），只给一句「未登录时相关接口返回 401 unauthenticated」。
+    两条一起才完整：**没有下发通道** + **唯一主页面默认失败关闭**。
     """
-    probe_history = [{"role": "user", "content": "probe-leak-marker"}]
-    probe_plan = {"plan_id": "plan_probe", "message": "probe-leak-marker"}
-    probe_targets = ["probe-leak-marker.test"]
-    probe_context = {"note": "probe-leak-marker"}
+    import inspect
 
-    def _seed(test_client):
-        """给这个客户端塞满 5 个键（不影响它是否已登录）。"""
-        with test_client.session_transaction() as sess:
-            sess["agent_history"] = list(probe_history)
-            sess["agent_steps"] = [{"step": "probe-leak-marker"}]
-            sess["pending_plan"] = dict(probe_plan)
-            sess["uploaded_targets"] = list(probe_targets)
-            sess["agent_context"] = dict(probe_context)
+    # ① 那台「把上下文喂给模板」的机器已经不存在了。用属性断言而不是源码字符串：
+    #    源码里可能残留注释提到这个名字，属性不存在才是真的不可调用。
+    assert not hasattr(app_module, "build_page_context"), (
+        "app.py 里又有 build_page_context 了：Session 内容重新有了一条通往模板的下发通道"
+    )
 
-    seen = []
-    real = app_module.build_page_context
-
-    def _spy(*args, **kwargs):
-        context = real(*args, **kwargs)
-        # ③ 顺手再问一次「漏传 is_authenticated 会怎样」：默认值是 False（失败关闭），
-        #    所以它必须与匿名侧一样空。同一次调用、同一个会话，差别只在那个参数。
-        without_flag = real(*args, **{key: value for key, value in kwargs.items() if key != "is_authenticated"})
-        seen.append((context, without_flag))
-        return context
-
-    monkeypatch.setattr(app_module, "build_page_context", _spy)
-
-    # ① 匿名首页 —— 会话里有内容，请求本身未登录。
-    _seed(client)
-    assert client.get("/").status_code == 200
-    assert len(seen) == 1, seen
-    anon_context, anon_without_flag = seen[0]
-
-    for key in AGENT_SESSION_KEYS:
-        assert not anon_context[key], f"匿名上下文下发了 {key} 的内容: {anon_context[key]!r}"
-        assert not anon_without_flag[key], f"漏传 is_authenticated 时下发了 {key} —— 默认值不再是失败关闭"
-    # 键**在**（不是被删掉）：模板拿到空列表 / None，而不是 Undefined。
-    assert "agent_history" in anon_context and "pending_plan" in anon_context
-    assert anon_context["agent_history"] == [] and anon_context["agent_steps"] == []
-    assert anon_context["pending_plan"] is None and anon_context["uploaded_targets"] is None
-    # 连内容本身都不能出现在上下文里（防止有人「只把 history 清掉、其余照发」）。
-    assert "probe-leak-marker" not in repr(anon_context), "匿名上下文里还残留着会话内容"
-
-    # ② 管理员首页：同一批键必须有内容 —— 修的是「谁看得见」，不是把功能删了。
-    seen.clear()
-    _seed(admin_client)
-    assert admin_client.get("/").status_code == 200
-    assert len(seen) == 1, seen
-    admin_context, admin_without_flag = seen[0]
-
-    assert admin_context["agent_history"] == probe_history, "管理员丢了 Agent 对话历史"
-    assert admin_context["agent_steps"] == [{"step": "probe-leak-marker"}]
-    assert admin_context["pending_plan"] == probe_plan
-    assert admin_context["uploaded_targets"] == probe_targets
-    assert admin_context["agent_context"] == probe_context
-    # ③ 的另一半：同一个带内容的会话，只要漏传标志，立刻退回空 —— 失败关闭。
-    for key in AGENT_SESSION_KEYS:
-        assert not admin_without_flag[key], f"漏传 is_authenticated 时下发了 {key} —— 默认值不再是失败关闭"
+    source = inspect.getsource(app_module)
+    # ② 它的 5 个键与取 ``session`` 的写法一个都不许出现。
+    for forbidden in ("session.get(", *AGENT_SESSION_KEYS):
+        assert forbidden not in source, (
+            f"app.py 里又出现了 {forbidden!r}：页面上下文下发通道正在重建"
+        )

@@ -4,7 +4,7 @@
  *   1. 调 /api/assets 渲染资产表（类型 / 值 / 状态 / first_seen / last_seen / 置信度）；
  *   2. 点「详情」调 /api/assets/<id> 展开观测时间线 ——
  *      回答「谁发现的（source_tool/job_id）/ 何时发现（observed_at）/ 当时的属性（data）」；
- *   3. 分页与筛选（scope_id / type / status / search）；
+ *   3. 分页与筛选（type / status / search）；
  *   4. 两次任务对比：调 /api/jobs/<a>/diff/<b> 渲染 added / removed / changed / unchanged。
  *
  * 约定：不使用任何前端框架、不打包、不引入 CDN 资源；
@@ -58,39 +58,12 @@
     return node ? node.value.trim() : "";
   }
 
-  /**
-   * 把 ``scope_id`` 翻成「授权资产」的可见文案（方案第 4 节原则 2）。
-   *
-   * 方案写明前端**不显示** ``scope_id`` / UUID / 数据库字段：实体 ID 只作为
-   * 表单 ``value`` 存在，任何人类可读的位置都要用名称 + 目标。
-   *
-   * 翻法就是读本页已经渲染好的两个下拉框 —— 它们是同一份 Scope 列表，
-   * 不再多请求一个接口、也不在前端存第二份数据。
-   * 按 ID 找不到（例如该范围已被删除）时返回 ""，由调用方给出一句人话，
-   * **而不是**把 ID 原样漏出去。
-   */
-  function scopeLabelById(scopeId) {
-    if (!scopeId) return "";
-    var selects = ["filter-scope", "diff-scope"];
-    for (var i = 0; i < selects.length; i += 1) {
-      var select = document.getElementById(selects[i]);
-      if (!select) continue;
-      for (var j = 0; j < select.options.length; j += 1) {
-        var option = select.options[j];
-        if (option.value === scopeId) return (option.textContent || "").trim();
-      }
-    }
-    return "";
-  }
-
   function buildQuery(withPaging) {
     var params = [];
-    var scopeId = filterValue("filter-scope");
     var assetType = filterValue("filter-type");
     var status = filterValue("filter-status");
     var search = filterValue("filter-search");
 
-    if (scopeId) params.push("scope_id=" + encodeURIComponent(scopeId));
     if (assetType) params.push("type=" + encodeURIComponent(assetType));
     if (status) params.push("status=" + encodeURIComponent(status));
     if (search) params.push("search=" + encodeURIComponent(search));
@@ -236,10 +209,9 @@
       ["状态", statusLabel(asset.status) + "（" + asset.status + "）"],
       ["首次发现", asset.first_seen || "—"],
       ["最近发现", asset.last_seen || "—"],
-      // 「所属范围」给的是**授权资产的名称 + 目标**，不是 scope_9f3c… 那一串
-      // （方案第 4 节原则 2：前端不显示 scope_id）。找不到对应文案时宁可说
-      // 「已不在当前授权资产列表里」，也不把内部 ID 兜出来。
-      ["所属范围", scopeLabelById(asset.scope_id) || (asset.scope_id ? "（该授权资产已不在列表中）" : "（未限定）")],
+      // 「所属范围」整行已删除：授权范围不再作为筛选维度出现在这个页面，
+      // 而内部实体 ID 属于「前端不显示」的东西（方案第 4 节原则 2）——
+      // 因此这里既不给名称，也不给原始 ID，直接不展示这一行。
       ["置信度", asset.confidence || "—"],
     ].forEach(function (pair) {
       meta.appendChild(el("dt", null, pair[0]));
@@ -334,6 +306,35 @@
     url: "URL",
   };
 
+  /**
+   * 把一条 job 拼成下拉框里的可见文案。
+   *
+   * 主语是「网址 + 使用的工具」（例如 ``example.com subfinder``），多个目标 /
+   * 多个工具用逗号连起来 —— 选任务的人认的是「这次扫了什么」，不是内部 job id。
+   * 状态与创建时间是次要信息，缀在后面（``… · succeeded · 2026-…``）。
+   *
+   * 两条纪律：
+   *   1. ``value`` 始终是 ``job.id``（提交时要用），这里只改可见文案；
+   *   2. ``targets`` / ``tools`` 缺失或为空时**退回显示 job id**，
+   *      绝不产生一个空白选项（空白项比一串 ID 更难用）。
+   */
+  function jobOptionLabel(job) {
+    var targets = job.targets || [];
+    var tools = job.tools || [];
+    var fallback = job.id || "";
+    if (!targets.length && !tools.length) return fallback;
+
+    var text = targets.join(", ") + " " + tools.join(", ");
+    text = text.trim();
+    if (!text) return fallback;
+
+    var secondary = [];
+    if (job.status) secondary.push(job.status);
+    if (job.created_at) secondary.push(job.created_at);
+    if (secondary.length) text += " · " + secondary.join(" · ");
+    return text;
+  }
+
   function fillJobOptions(jobs) {
     var selects = ["diff-before", "diff-after"];
     selects.forEach(function (id) {
@@ -344,7 +345,7 @@
       jobs.forEach(function (job) {
         var option = document.createElement("option");
         option.value = job.id;
-        option.textContent = job.id + " · " + (job.status || "") + " · " + (job.created_at || "");
+        option.textContent = jobOptionLabel(job);
         select.appendChild(option);
       });
     });
@@ -455,8 +456,6 @@
     }
 
     var params = [];
-    var scopeId = filterValue("diff-scope");
-    if (scopeId) params.push("scope_id=" + encodeURIComponent(scopeId));
     var includeUnchanged = document.getElementById("diff-include-unchanged");
     if (includeUnchanged && !includeUnchanged.checked) params.push("include_unchanged=0");
     var query = params.length ? "?" + params.join("&") : "";

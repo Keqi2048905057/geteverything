@@ -1,4 +1,4 @@
-"""实机验收探针（非 pytest）：按方案第 11 节走一遍公网授权测试链路。
+"""实机验收探针（非 pytest）：走一遍测试阶段的扫描链路。
 
 用 Python 直接发请求，避免 PowerShell 客户端把中文请求体编码坏掉
 （那会把「服务端是否正常」和「终端编码是否正确」两件事混在一起）。
@@ -11,6 +11,19 @@
 
 **Token 一律从环境变量读，脚本里不写死任何凭据** —— 这是能入库的前提。
 只使用 RFC 6761 保留域 example.test，不碰任何真实外部目标。
+
+## 覆盖的口径（测试阶段）
+
+```text
+目标预检     POST /api/public-jobs/check   —— 只判格式，不判授权
+开放模式     GEF_OPEN_SCAN_MODE=true       —— 不挂 scope 也能创建任务
+工具闸门     未接入的 nuclei 400 / 已接入的 nmap 202
+Scope 白名单 显式给 scope 时越界仍然 403（授权业务取消了，Scope 校验没有）
+演练         mode=mock 创建任务（不联网）
+```
+
+第 6 步（Scope 越界 → 403）是这份探针里**最重要**的一条：它证明
+「取消的是**必须授权**这件事，不是 Scope 本身」。
 """
 
 import json
@@ -65,84 +78,101 @@ def show(step: str, status: int, payload: dict):
 
 
 def main() -> int:
-    # 1. 创建项目（含中文，验证 UTF-8 编码链路真的能往返）
+    # 0. 模式开关：先确认这台机器确实开着开放模式，否则后面全是 400，
+    #    而「为什么全是 400」会淹没真正要验收的那几件事。
+    status, body = call("GET", "/health")
+    show("健康检查（含模式开关）", status, body)
+    modes = body.get("modes") or {}
+    if not modes.get("open_scan_enabled"):
+        print(
+            f"\n开放扫描模式未开启（{modes.get('open_scan_env', 'GEF_OPEN_SCAN_MODE')}）："
+            "本探针要求这一项为 true。请在 .env 中设置后重启 Web 服务。",
+            file=sys.stderr,
+        )
+        return 1
+
+    # 1. 目标预检：只判格式，不判授权（项目 / 范围都不存在也照样给结论）
     status, body = call(
         "POST",
-        "/api/projects",
-        {
-            "name": "授权测试项目（验收探针）",
-            "authorization_note": "本脚本自建的自检用项目，仅打保留域 example.test",
-            "owner": "验收探针",
-        },
+        "/api/public-jobs/check",
+        {"targets": ["www.example.test", "not a host", "https://a.example.test:8443/x"]},
     )
-    show("创建授权项目", status, body)
-    if status != 201:
-        return 1
-    project_id = body["project"]["id"]
-    assert body["project"]["name"] == "授权测试项目（验收探针）", "中文项目名没有正确往返"
+    show("目标预检（1 个非法 / 2 个合法）", status, body)
+    assert status == 200
+    assert [item["valid"] for item in body["checks"]] == [True, False, True]
+    assert body["checks"][0]["normalized"] == "www.example.test"
+    assert body["checks"][2]["normalized"] == "a.example.test"
+    # 预检不得再给授权结论 —— 这几个键出现就说明有人把授权闸门加回来了。
+    for gone in ("eligible_scope_ids", "blocker", "matches"):
+        assert gone not in body["checks"][0], f"预检又返回了授权结论: {gone}"
 
-    # 2. 创建 active_scan 的 Scope
+    # 2. 未接入的工具 → 400（必须在创建任务之前被拒）
     status, body = call(
+        "POST",
+        "/api/public-jobs",
+        {"targets": ["www.example.test"], "strategy": "custom", "tools": ["nuclei"]},
+    )
+    show("未接入工具 nuclei（期望 400）", status, body)
+    assert status == 400 and body["error_code"] == "bad_request"
+    assert [item["tool_name"] for item in body["details"]["unavailable_tools"]] == ["nuclei"]
+
+    # 3. 未登记的工具 → 400（没人写元数据不等于不受限）
+    status, body = call(
+        "POST",
+        "/api/public-jobs",
+        {"targets": ["www.example.test"], "strategy": "custom", "tools": ["definitely-not-a-tool"]},
+    )
+    show("未登记工具（期望 400）", status, body)
+    assert status == 400 and body["error_code"] == "bad_request"
+
+    # 4. 演练：mock 模式创建任务（不联网），且**不挂任何 scope**
+    status, body = call(
+        "POST",
+        "/api/public-jobs",
+        {"targets": ["www.example.test"], "mode": "mock"},
+    )
+    show("不挂 scope 创建任务（mock 演练）", status, body)
+    assert status == 202 and body["mode"] == "mock", body
+    assert body["scope_id"] == "open", "开放模式应当使用内部开放执行上下文"
+    assert body["project_id"] is None and body["authorized_public"] is None
+    # 开放范围**从不落库**，因此授权清单里不该出现它。
+    status, scopes = call("GET", "/api/scopes")
+    assert all(item["id"] != "open" for item in scopes["scopes"]), "开放执行上下文被落库了"
+
+    # 5. 显式给了 scope：白名单照旧生效 —— 授权业务取消了，Scope 校验没有。
+    status, scope_body = call(
         "POST",
         "/api/scopes",
-        {"name": "保留域范围", "allowed_domains": ["www.example.test"], "active_scan": True},
+        {"name": "保留域范围（探针）", "allowed_domains": ["www.example.test"], "active_scan": True},
     )
-    show("创建授权 Scope", status, body)
-    scope_id = body["scope"]["id"]
+    show("创建授权 Scope", status, scope_body)
+    assert status == 201
+    scope_id = scope_body["scope"]["id"]
 
-    # 3. 关联到项目
-    status, body = call("POST", f"/api/projects/{project_id}/scopes", {"scope_id": scope_id})
-    show("关联 Scope 到项目", status, body)
-
-    # 4. 未授权目标 → 403
     status, body = call(
         "POST",
         "/api/public-jobs",
-        {"project_id": project_id, "scope_id": scope_id, "targets": ["evil.test"]},
+        {"scope_id": scope_id, "targets": ["evil.test"], "mode": "mock"},
     )
-    show("未授权目标（期望 403）", status, body)
-    assert status == 403 and body["error_code"] == "scope_violation"
+    show("显式 scope 下的越界目标（期望 403）", status, body)
+    assert status == 403 and body["error_code"] == "scope_violation", body
 
-    # 5. 被禁工具 → 400
+    # 6. 已接入的高风险工具现在可以提交（工具开放），仍然走 mock 以免真的发流量。
     status, body = call(
         "POST",
         "/api/public-jobs",
         {
-            "project_id": project_id,
             "scope_id": scope_id,
             "targets": ["www.example.test"],
             "strategy": "custom",
             "tools": ["nmap"],
-        },
-    )
-    show("禁止工具 nmap（期望 400）", status, body)
-    assert status == 400 and body["error_code"] == "bad_request"
-
-    # 6. 项目外的 Scope → 400
-    status, other = call(
-        "POST", "/api/scopes", {"name": "别的范围", "allowed_domains": ["other.example.test"]}
-    )
-    status, body = call(
-        "POST",
-        "/api/public-jobs",
-        {"project_id": project_id, "scope_id": other["scope"]["id"], "targets": ["other.example.test"]},
-    )
-    show("未关联到项目的 Scope（期望 400）", status, body)
-    assert status == 400 and body["details"]["field"] == "scope_id"
-
-    # 7. 演练：mock 模式创建任务（不联网）
-    status, body = call(
-        "POST",
-        "/api/public-jobs",
-        {
-            "project_id": project_id,
-            "scope_id": scope_id,
-            "targets": ["www.example.test"],
             "mode": "mock",
         },
     )
-    show("创建公网任务（mock 演练）", status, body)
-    assert status == 202 and body["mode"] == "mock"
+    show("已接入的高风险工具 nmap（期望 202）", status, body)
+    assert status == 202, body
+    assert body["strategy"] == "custom"
+
     print("\n验收链路（不含真实外网请求）全部通过。")
     return 0
 

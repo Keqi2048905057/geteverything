@@ -66,9 +66,10 @@ LIGHT_STEP_DELAY_ENV = "GEF_PACE_LIGHT_STEP_DELAY_SEC"
 #: * ``threads``      —— subfinder ``-t`` / httpx ``-threads``（并发）；
 #: * ``rate_limit``   —— subfinder ``-rl`` / httpx ``-rl``（每秒请求上限）。
 #:
-#: 只列**允许公网**的轻量工具；高风险工具压根进不了公网白名单
-#: （见 ``core.tool_registry.assert_tools_internet_allowed``），
-#: 因此这里不需要、也不应该为它们定义预算。
+#: 只列**已接入的轻量工具**；高风险工具（nmap / dirsearch 等）虽然现在可被
+#: 勾选（见 ``core.tool_registry.assert_tools_selectable``），但低频档
+#: 不为它们定义预算 —— 它们的节奏由使用者自己与工具默认值决定，
+#: 这里不假装知道「nmap 打别人的站该多快」。
 LIGHT_TOOL_BUDGET: dict[str, dict[str, int]] = {
     # subfinder 默认并发 50：低频档压到 5，并把每秒请求限到 3。
     "subfinder": {"threads": 5, "rate_limit": 3},
